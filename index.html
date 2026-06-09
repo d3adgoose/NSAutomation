@@ -1,1 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Submittal Automation</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Submittal Automation</h1>
+    <p>Organize PDFs, generate a table of contents, and build submittal packets automatically.</p>
+  </header>
 
+  <main>
+    <section class="card">
+      <h2>Project Info</h2>
+
+      <div class="grid">
+        <input id="projectNumber" placeholder="Project Number" />
+        <input id="projectName" placeholder="Project Name" />
+        <input id="revision" placeholder="Revision" />
+        <input id="customerName" placeholder="Customer Name" />
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Upload PDFs</h2>
+      <input type="file" id="pdfUpload" accept="application/pdf" multiple />
+    </section>
+
+    <section class="card">
+      <h2>PDF Library</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Order</th>
+            <th>File Name</th>
+            <th>Display Title</th>
+            <th>Document Type</th>
+            <th>Packet Section</th>
+            <th>Include</th>
+            <th>Notes</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pdfTableBody"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Packet Builder</h2>
+
+      <label>
+        <input type="checkbox" id="autoTOC" checked />
+        Auto-generate Table of Contents
+      </label>
+
+      <div class="button-row">
+        <button onclick="buildPacket()">Build PDF Packet</button>
+        <button onclick="exportCSV()">Export CSV</button>
+        <button onclick="clearLibrary()">Clear Library</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
