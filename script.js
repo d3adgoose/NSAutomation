@@ -11,7 +11,6 @@ const sectionOrder = {
   "Appendix": 6
 };
 
-// For dropdown options
 const documentTypes = [
   "Cover Page",
   "Table of Contents",
@@ -27,7 +26,6 @@ const documentTypes = [
   "Other"
 ];
 
-// For dropdown options
 const packetSections = [
   "Cover Page",
   "Table of Contents",
@@ -37,9 +35,8 @@ const packetSections = [
   "Appendix"
 ];
 
-// Persistent library database (metadata only entries)
 let libraryDB = [];
-const LIB_DB_KEY = 'submittalLibraryDB';
+const LIB_DB_KEY = "submittalLibraryDB";
 
 function loadLibraryDB() {
   try {
@@ -48,6 +45,7 @@ function loadLibraryDB() {
   } catch (e) {
     libraryDB = [];
   }
+
   sortLibraryDB();
   renderLibraryDB();
 }
@@ -57,54 +55,68 @@ function saveLibraryDB() {
 }
 
 function sortLibraryDB() {
-  // sort by documentType then displayTitle (alphabetical)
   libraryDB.sort((a, b) => {
     if (a.documentType === b.documentType) {
       return a.displayTitle.localeCompare(b.displayTitle);
     }
+
     return a.documentType.localeCompare(b.documentType);
   });
 }
 
 function renderLibraryDB() {
-  const tbody = document.getElementById('libraryDBBody');
+  const tbody = document.getElementById("libraryDBBody");
   if (!tbody) return;
-  tbody.innerHTML = '';
 
-  // Apply search filter if present
-  const searchEl = document.getElementById('librarySearch');
-  const search = searchEl && searchEl.value ? searchEl.value.trim().toLowerCase() : '';
+  tbody.innerHTML = "";
+
+  const searchEl = document.getElementById("librarySearch");
+  const search = searchEl && searchEl.value
+    ? searchEl.value.trim().toLowerCase()
+    : "";
 
   const list = search
     ? libraryDB.filter(item => {
-        const hay = [item.fileName, item.displayTitle, item.documentType, item.notes].join(' ').toLowerCase();
+        const hay = [
+          item.fileName,
+          item.displayTitle,
+          item.documentType,
+          item.notes
+        ].join(" ").toLowerCase();
+
         return hay.includes(search);
       })
     : libraryDB;
 
-  list.forEach((item, idx) => {
-    const row = document.createElement('tr');
-    const docOptions = documentTypes.map(opt => `<option value="${opt}" ${opt===item.documentType? 'selected' : ''}>${opt}</option>`).join('');
+  list.forEach(item => {
+    const row = document.createElement("tr");
+
+    const docOptions = documentTypes.map(opt => `
+      <option value="${opt}" ${opt === item.documentType ? "selected" : ""}>${opt}</option>
+    `).join("");
 
     row.innerHTML = `
-      <td>${item.uploadDate || ''}</td>
-      <td>${item.fileName || ''}</td>
-      <td><input value="${item.displayTitle || ''}" onchange="updateLibraryDBItem('${item.id}', 'displayTitle', this.value)" /></td>
+      <td>${item.uploadDate || ""}</td>
+      <td>${item.fileName || ""}</td>
+      <td><input value="${item.displayTitle || ""}" onchange="updateLibraryDBItem('${item.id}', 'displayTitle', this.value)" /></td>
       <td><select onchange="updateLibraryDBItem('${item.id}', 'documentType', this.value)">${docOptions}</select></td>
-      <td><input value="${item.notes || ''}" onchange="updateLibraryDBItem('${item.id}', 'notes', this.value)" /></td>
+      <td><input value="${item.notes || ""}" onchange="updateLibraryDBItem('${item.id}', 'notes', this.value)" /></td>
       <td><button onclick="removeLibraryDBEntry('${item.id}')">Remove</button></td>
     `;
+
     tbody.appendChild(row);
   });
 }
 
 function addLibraryEntryFromForm() {
-  const fileName = document.getElementById('libFileName').value.trim();
-  const displayTitle = document.getElementById('libDisplayTitle').value.trim();
-  const documentType = document.getElementById('libDocumentType').value;
-  const notes = document.getElementById('libNotes').value.trim();
+  const fileName = document.getElementById("libFileName").value.trim();
+  const displayTitle = document.getElementById("libDisplayTitle").value.trim();
+  const documentType = document.getElementById("libDocumentType").value;
+  const notes = document.getElementById("libNotes").value.trim();
 
-  if (!displayTitle && !fileName) return alert('Provide at least a file name or display title');
+  if (!displayTitle && !fileName) {
+    return alert("Provide at least a file name or display title");
+  }
 
   const entry = {
     id: crypto.randomUUID(),
@@ -117,21 +129,22 @@ function addLibraryEntryFromForm() {
 
   addLibraryEntry(entry);
 
-  // clear inputs
-  document.getElementById('libFileName').value = '';
-  document.getElementById('libDisplayTitle').value = '';
-  document.getElementById('libNotes').value = '';
+  document.getElementById("libFileName").value = "";
+  document.getElementById("libDisplayTitle").value = "";
+  document.getElementById("libNotes").value = "";
 }
 
-function addLibraryEntry(entry, options) {
-  options = options || {};
-  // avoid duplicates by fileName or displayTitle
-  const exists = libraryDB.find(x => (x.fileName && entry.fileName && x.fileName === entry.fileName) || x.displayTitle === entry.displayTitle);
+function addLibraryEntry(entry, options = {}) {
+  const exists = libraryDB.find(x =>
+    (x.fileName && entry.fileName && x.fileName === entry.fileName) ||
+    x.displayTitle === entry.displayTitle
+  );
+
   if (exists) {
-    // show duplicate warning and do not add
     if (!options.silent) {
       alert(`Duplicate entry for "${entry.displayTitle}" already exists. Press OK to dismiss.`);
     }
+
     return;
   }
 
@@ -151,26 +164,39 @@ function removeLibraryDBEntry(id) {
 function updateLibraryDBItem(id, field, value) {
   const item = libraryDB.find(x => x.id === id);
   if (!item) return;
+
   item[field] = value;
+
   saveLibraryDB();
   sortLibraryDB();
   renderLibraryDB();
 }
 
 function exportLibraryCSV() {
-  const headers = ["Date","File Name","Display Title","Document Type","Notes"];
-  const rows = libraryDB.map(i => [i.uploadDate, i.fileName, i.displayTitle, i.documentType, i.notes]);
-  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v||'').replaceAll('"','""')}"`).join(',')).join('\n');
-  downloadFile(csv, 'library-db.csv', 'text/csv');
+  const headers = ["Date", "File Name", "Display Title", "Document Type", "Notes"];
+
+  const rows = libraryDB.map(i => [
+    i.uploadDate,
+    i.fileName,
+    i.displayTitle,
+    i.documentType,
+    i.notes
+  ]);
+
+  const csv = [headers, ...rows]
+    .map(r => r.map(v => `"${String(v || "").replaceAll('"', '""')}"`).join(","))
+    .join("\n");
+
+  downloadFile(csv, "library-db.csv", "text/csv");
 }
 
 function clearLibraryDB() {
-  if (!confirm('Clear the library database? This cannot be undone.')) return;
+  if (!confirm("Clear the library database? This cannot be undone.")) return;
+
   libraryDB = [];
   saveLibraryDB();
   renderLibraryDB();
 }
-
 
 let tocTemplate = {
   fileName: "",
@@ -179,14 +205,15 @@ let tocTemplate = {
 
 document.getElementById("pdfUpload").addEventListener("change", handlePDFUpload);
 document.getElementById("tocTemplateUpload").addEventListener("change", handleTOCTemplateUpload);
-document.getElementById("tocTemplatePreview").addEventListener("input", (event) => {
+
+document.getElementById("tocTemplatePreview").addEventListener("input", event => {
   tocTemplate.text = event.target.value;
 });
 
 function handlePDFUpload(event) {
   const files = Array.from(event.target.files);
 
-  files.forEach((file) => {
+  files.forEach(file => {
     const cleanName = file.name.replace(/\.pdf$/i, "");
 
     pdfLibrary.push({
@@ -206,7 +233,6 @@ function handlePDFUpload(event) {
   renderTable();
 }
 
-// Heuristic to guess document type based on filename 
 function guessDocumentType(fileName) {
   const name = fileName.toLowerCase();
 
@@ -223,7 +249,6 @@ function guessDocumentType(fileName) {
   return "Datasheet";
 }
 
-// Heuristic to guess packet section based on document type 
 function guessPacketSection(fileName) {
   const type = guessDocumentType(fileName);
 
@@ -251,26 +276,26 @@ function handleTOCTemplateUpload(event) {
       })
       .catch(() => {
         tocTemplate.text = "";
-        document.getElementById("tocTemplatePreview").value = "Unable to read the DOCX file. Please try a .docx template.";
+        document.getElementById("tocTemplatePreview").value =
+          "Unable to read the DOCX file. Please try a .docx template.";
       });
   });
 }
 
 function clearTOCTemplate() {
   tocTemplate = { fileName: "", text: "" };
+
   document.getElementById("tocTemplateUpload").value = "";
   document.getElementById("templateFileName").textContent = "No template imported";
   document.getElementById("tocTemplatePreview").value = "";
 }
 
-// Sort library based on defined section order
 function sortLibraryBySection() {
   pdfLibrary.sort((a, b) => {
     return sectionOrder[a.packetSection] - sectionOrder[b.packetSection];
   });
 }
 
-// Render the library table 
 function renderTable() {
   const tbody = document.getElementById("pdfTableBody");
   tbody.innerHTML = "";
@@ -307,9 +332,10 @@ function makeDropdown(id, field, options, selected) {
   `;
 }
 
-// Update 
 function updateItem(id, field, value) {
   const item = pdfLibrary.find(x => x.id === id);
+  if (!item) return;
+
   item[field] = value;
 
   if (field === "documentType") {
@@ -325,6 +351,7 @@ function mapTypeToSection(type) {
   if (type === "Warranty") return "Warranty";
   if (type === "Shop Drawing" || type === "Drawing") return "Shop Drawings";
   if (type === "Appendix" || type === "Other") return "Appendix";
+
   return "Datasheets";
 }
 
@@ -355,60 +382,50 @@ async function buildPacket() {
   const shopDrawings = included.filter(x => x.packetSection === "Shop Drawings");
   const appendix = included.filter(x => x.packetSection === "Appendix");
 
-  const orderedFiles = [...coverPages];
+  const contentFiles = [
+    ...warranties,
+    ...datasheets,
+    ...shopDrawings,
+    ...appendix
+  ];
 
-  const autoTOCElement = document.getElementById("autoTOC");
-  if (autoTOCElement && autoTOCElement.checked) {
-    orderedFiles.push({ generatedTOC: true, templateText: tocTemplate.text });
+  // 1. Add cover page PDFs first
+  for (const item of coverPages) {
+    await appendPDF(finalPdf, item.file);
   }
 
-  orderedFiles.push(...warranties, ...datasheets, ...shopDrawings, ...appendix);
+  // 2. Always generate a TOC page after the cover page
+  const tocPage = finalPdf.addPage([612, 792]);
 
+  // 3. Add the rest of the PDFs and record their final start page numbers
   const tocItems = [];
-  let currentPage = 1;
 
-  for (const item of orderedFiles) {
-    if (item.generatedTOC) {
-      currentPage += 1;
-      continue;
-    }
+  for (const item of contentFiles) {
+    const startPage = finalPdf.getPageCount() + 1;
 
-    // Page count for TOC generation
-    const pageCount = await getPageCount(item.file);
     tocItems.push({
       title: item.displayTitle,
       section: item.packetSection,
-      startPage: currentPage
+      startPage
     });
 
-    currentPage += pageCount;
+    await appendPDF(finalPdf, item.file);
   }
 
-  for (const item of orderedFiles) {
-    if (item.generatedTOC) {
-      await addTOCPage(finalPdf, tocItems, item.templateText);
-    } else {
-      await appendPDF(finalPdf, item.file);
-    }
-  }
+  // 4. Draw the TOC onto the page after the cover
+  await drawTOCOnExistingPage(finalPdf, tocPage, tocItems, tocTemplate.text);
 
+  // 5. Add page numbers after the merge is complete
   await addPageNumbers(finalPdf);
 
   const pdfBytes = await finalPdf.save();
   downloadFile(pdfBytes, getOutputFileName(), "application/pdf");
 
-  // After packet generation, merge included items into the persistent library
   try {
     mergeSubmittalIntoLibrary(included);
   } catch (e) {
-    console.error('Error merging into library', e);
+    console.error("Error merging into library", e);
   }
-}
-
-async function getPageCount(file) {
-  const bytes = await file.arrayBuffer();
-  const pdf = await PDFDocument.load(bytes);
-  return pdf.getPageCount();
 }
 
 async function appendPDF(finalPdf, file) {
@@ -419,17 +436,15 @@ async function appendPDF(finalPdf, file) {
   copiedPages.forEach(page => finalPdf.addPage(page));
 }
 
-async function addTOCPage(pdfDoc, tocItems, templateText = "") {
-  const page = pdfDoc.addPage([612, 792]);
+async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") {
   const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
 
   const lines = templateText
     ? templateText.split(/\r?\n/)
-    : ["Table of Contents", ""]; 
+    : ["Table of Contents", ""];
 
   let y = 750;
-  const maxWidth = 520;
   const lineHeight = 18;
 
   lines.forEach((line, index) => {
@@ -442,6 +457,7 @@ async function addTOCPage(pdfDoc, tocItems, templateText = "") {
         size: 22,
         font: boldFont
       });
+
       y -= 34;
       return;
     }
@@ -457,6 +473,7 @@ async function addTOCPage(pdfDoc, tocItems, templateText = "") {
       size: 12,
       font
     });
+
     y -= lineHeight;
   });
 
@@ -466,7 +483,6 @@ async function addTOCPage(pdfDoc, tocItems, templateText = "") {
 
   const sections = ["Warranty", "Datasheets", "Shop Drawings", "Appendix"];
 
-  // Group TOC items by section and render
   sections.forEach((section, index) => {
     const items = tocItems.filter(item => item.section === section);
     if (items.length === 0) return;
@@ -550,35 +566,36 @@ function exportCSV() {
 }
 
 function mergeSubmittalIntoLibrary(items) {
-  // items: array of pdfLibrary entries (included ones)
   items.forEach(i => {
     const entry = {
       id: crypto.randomUUID(),
       uploadDate: new Date().toLocaleDateString(),
-      fileName: i.fileName || '',
-      displayTitle: i.displayTitle || (i.fileName || '').replace(/\.pdf$/i, ''),
-      documentType: i.documentType || 'Other',
-      notes: i.notes || ''
+      fileName: i.fileName || "",
+      displayTitle: i.displayTitle || (i.fileName || "").replace(/\.pdf$/i, ""),
+      documentType: i.documentType || "Other",
+      notes: i.notes || ""
     };
 
     addLibraryEntry(entry, { silent: true });
   });
 }
 
-// Wire up library UI on load
-window.addEventListener('load', () => {
+window.addEventListener("load", () => {
   loadLibraryDB();
-  const addBtn = document.getElementById('addLibraryEntryButton');
-  if (addBtn) addBtn.addEventListener('click', addLibraryEntryFromForm);
-  const exportBtn = document.getElementById('exportLibraryCSV');
-  if (exportBtn) exportBtn.addEventListener('click', exportLibraryCSV);
-  const clearBtn = document.getElementById('clearLibraryDB');
-  if (clearBtn) clearBtn.addEventListener('click', clearLibraryDB);
-  const searchEl = document.getElementById('librarySearch');
-  if (searchEl) searchEl.addEventListener('input', renderLibraryDB);
+
+  const addBtn = document.getElementById("addLibraryEntryButton");
+  if (addBtn) addBtn.addEventListener("click", addLibraryEntryFromForm);
+
+  const exportBtn = document.getElementById("exportLibraryCSV");
+  if (exportBtn) exportBtn.addEventListener("click", exportLibraryCSV);
+
+  const clearBtn = document.getElementById("clearLibraryDB");
+  if (clearBtn) clearBtn.addEventListener("click", clearLibraryDB);
+
+  const searchEl = document.getElementById("librarySearch");
+  if (searchEl) searchEl.addEventListener("input", renderLibraryDB);
 });
 
-// Generate output flename based on project info 
 function getOutputFileName() {
   const projectNumber = document.getElementById("projectNumber").value || "Project";
   const projectName = document.getElementById("projectName").value || "Submittal";
