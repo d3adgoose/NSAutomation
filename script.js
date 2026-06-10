@@ -11,6 +11,7 @@ const sectionOrder = {
   "Appendix": 6
 };
 
+// For dropdown options
 const documentTypes = [
   "Cover Page",
   "Table of Contents",
@@ -26,6 +27,7 @@ const documentTypes = [
   "Other"
 ];
 
+// For dropdown options
 const packetSections = [
   "Cover Page",
   "Table of Contents",
@@ -35,18 +37,28 @@ const packetSections = [
   "Appendix"
 ];
 
+let tocTemplate = {
+  fileName: "",
+  text: ""
+};
+
 document.getElementById("pdfUpload").addEventListener("change", handlePDFUpload);
+document.getElementById("tocTemplateUpload").addEventListener("change", handleTOCTemplateUpload);
+document.getElementById("tocTemplatePreview").addEventListener("input", (event) => {
+  tocTemplate.text = event.target.value;
+});
 
 function handlePDFUpload(event) {
   const files = Array.from(event.target.files);
 
   files.forEach((file) => {
-    const cleanName = file.name.replace(".pdf", "");
+    const cleanName = file.name.replace(/\.pdf$/i, "");
 
     pdfLibrary.push({
       id: crypto.randomUUID(),
       file,
       fileName: file.name,
+      uploadDate: new Date(file.lastModified || Date.now()).toLocaleDateString(),
       displayTitle: cleanName,
       documentType: guessDocumentType(file.name),
       packetSection: guessPacketSection(file.name),
@@ -59,10 +71,12 @@ function handlePDFUpload(event) {
   renderTable();
 }
 
+// Heuristic to guess document type based on filename 
 function guessDocumentType(fileName) {
   const name = fileName.toLowerCase();
 
   if (name.includes("cover")) return "Cover Page";
+  if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
   if (name.includes("warranty")) return "Warranty";
   if (name.includes("shop")) return "Shop Drawing";
   if (name.includes("drawing")) return "Drawing";
@@ -74,10 +88,12 @@ function guessDocumentType(fileName) {
   return "Datasheet";
 }
 
+// Heuristic to guess packet section based on document type 
 function guessPacketSection(fileName) {
   const type = guessDocumentType(fileName);
 
   if (type === "Cover Page") return "Cover Page";
+  if (type === "Table of Contents") return "Table of Contents";
   if (type === "Warranty") return "Warranty";
   if (type === "Shop Drawing" || type === "Drawing") return "Shop Drawings";
   if (type === "Appendix" || type === "Other") return "Appendix";
@@ -85,12 +101,41 @@ function guessPacketSection(fileName) {
   return "Datasheets";
 }
 
+function handleTOCTemplateUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  document.getElementById("templateFileName").textContent = file.name;
+
+  file.arrayBuffer().then(arrayBuffer => {
+    mammoth.extractRawText({ arrayBuffer })
+      .then(result => {
+        tocTemplate.fileName = file.name;
+        tocTemplate.text = result.value.trim();
+        document.getElementById("tocTemplatePreview").value = tocTemplate.text;
+      })
+      .catch(() => {
+        tocTemplate.text = "";
+        document.getElementById("tocTemplatePreview").value = "Unable to read the DOCX file. Please try a .docx template.";
+      });
+  });
+}
+
+function clearTOCTemplate() {
+  tocTemplate = { fileName: "", text: "" };
+  document.getElementById("tocTemplateUpload").value = "";
+  document.getElementById("templateFileName").textContent = "No template imported";
+  document.getElementById("tocTemplatePreview").value = "";
+}
+
+// Sort library based on defined section order
 function sortLibraryBySection() {
   pdfLibrary.sort((a, b) => {
     return sectionOrder[a.packetSection] - sectionOrder[b.packetSection];
   });
 }
 
+// Render the library table 
 function renderTable() {
   const tbody = document.getElementById("pdfTableBody");
   tbody.innerHTML = "";
@@ -99,7 +144,7 @@ function renderTable() {
     const row = document.createElement("tr");
 
     row.innerHTML = `
-      <td>${index + 1}</td>
+      <td>${item.uploadDate}</td>
       <td>${item.fileName}</td>
       <td><input value="${item.displayTitle}" onchange="updateItem('${item.id}', 'displayTitle', this.value)" /></td>
       <td>${makeDropdown(item.id, "documentType", documentTypes, item.documentType)}</td>
@@ -127,6 +172,7 @@ function makeDropdown(id, field, options, selected) {
   `;
 }
 
+// Update 
 function updateItem(id, field, value) {
   const item = pdfLibrary.find(x => x.id === id);
   item[field] = value;
@@ -174,14 +220,13 @@ async function buildPacket() {
   const shopDrawings = included.filter(x => x.packetSection === "Shop Drawings");
   const appendix = included.filter(x => x.packetSection === "Appendix");
 
-  const orderedFiles = [
-    ...coverPages,
-    { generatedTOC: true },
-    ...warranties,
-    ...datasheets,
-    ...shopDrawings,
-    ...appendix
-  ];
+  const orderedFiles = [...coverPages];
+
+  if (document.getElementById("autoTOC").checked) {
+    orderedFiles.push({ generatedTOC: true, templateText: tocTemplate.text });
+  }
+
+  orderedFiles.push(...warranties, ...datasheets, ...shopDrawings, ...appendix);
 
   const tocItems = [];
   let currentPage = 1;
@@ -192,6 +237,7 @@ async function buildPacket() {
       continue;
     }
 
+    // Page count for TOC generation
     const pageCount = await getPageCount(item.file);
     tocItems.push({
       title: item.displayTitle,
@@ -204,7 +250,7 @@ async function buildPacket() {
 
   for (const item of orderedFiles) {
     if (item.generatedTOC) {
-      await addTOCPage(finalPdf, tocItems);
+      await addTOCPage(finalPdf, tocItems, item.templateText);
     } else {
       await appendPDF(finalPdf, item.file);
     }
@@ -230,20 +276,52 @@ async function appendPDF(finalPdf, file) {
   copiedPages.forEach(page => finalPdf.addPage(page));
 }
 
-async function addTOCPage(pdfDoc, tocItems) {
+async function addTOCPage(pdfDoc, tocItems, templateText = "") {
   const page = pdfDoc.addPage([612, 792]);
   const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
 
-  page.drawText("Table of Contents", {
-    x: 190,
-    y: 735,
-    size: 24,
-    font: boldFont
+  const lines = templateText
+    ? templateText.split(/\r?\n/)
+    : ["Table of Contents", ""]; 
+
+  let y = 750;
+  const maxWidth = 520;
+  const lineHeight = 18;
+
+  lines.forEach((line, index) => {
+    const text = line.trim();
+
+    if (index === 0 && text) {
+      page.drawText(text, {
+        x: 60,
+        y,
+        size: 22,
+        font: boldFont
+      });
+      y -= 34;
+      return;
+    }
+
+    if (!text) {
+      y -= lineHeight;
+      return;
+    }
+
+    page.drawText(text, {
+      x: 60,
+      y,
+      size: 12,
+      font
+    });
+    y -= lineHeight;
   });
 
+  if (y < 140) {
+    y = 140;
+  }
+
   const sections = ["Warranty", "Datasheets", "Shop Drawings", "Appendix"];
-  let y = 685;
 
   sections.forEach((section, index) => {
     const items = tocItems.filter(item => item.section === section);
@@ -258,7 +336,7 @@ async function addTOCPage(pdfDoc, tocItems) {
       font: boldFont
     });
 
-    y -= 28;
+    y -= 24;
 
     items.forEach(item => {
       page.drawText(`• ${item.title}`, {
@@ -301,6 +379,7 @@ async function addPageNumbers(pdfDoc) {
 
 function exportCSV() {
   const headers = [
+    "Date",
     "File Name",
     "Display Title",
     "Document Type",
@@ -310,6 +389,7 @@ function exportCSV() {
   ];
 
   const rows = pdfLibrary.map(item => [
+    item.uploadDate,
     item.fileName,
     item.displayTitle,
     item.documentType,
@@ -325,6 +405,7 @@ function exportCSV() {
   downloadFile(csv, "submittal-library.csv", "text/csv");
 }
 
+// Generate output flename based on project info 
 function getOutputFileName() {
   const projectNumber = document.getElementById("projectNumber").value || "Project";
   const projectName = document.getElementById("projectName").value || "Submittal";

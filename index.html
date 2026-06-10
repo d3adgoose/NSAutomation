@@ -6,28 +6,41 @@
   <title>Submittal Automation</title>
   <link rel="stylesheet" href="style.css" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
 </head>
 <body>
   <header>
     <h1>Submittal Automation</h1>
-    <p>Organize PDFs, generate a table of contents, and build submittal packets automatically.</p>
+    <p>Organize PDFs, import a workplace TOC template, and keep your library up to date.</p>
   </header>
 
   <main>
     <section class="card">
-      <h2>Project Info</h2>
+      <h2>Table of Contents Template</h2>
+
+      <div class="grid">
+        <input type="file" id="tocTemplateUpload" accept=".docx" />
+      </div>
+      <div class="template-info">
+        <span id="templateFileName">No template imported</span>
+        <button id="clearTemplateButton" class="secondary" type="button" onclick="clearTOCTemplate()">Clear Template</button>
+      </div>
+      <textarea id="tocTemplatePreview" placeholder="Imported TOC template contents will appear here..." rows="6"></textarea>
+    </section>
+    <section class="card">
+      <h2>Upload PDFs</h2>
+      <input type="file" id="pdfUpload" accept="application/pdf" multiple />
+    </section>
+
+    <section class="card">
+      <h2>Submittal Info</h2>
 
       <div class="grid">
         <input id="projectNumber" placeholder="Project Number" />
         <input id="projectName" placeholder="Project Name" />
         <input id="revision" placeholder="Revision" />
-        <input id="customerName" placeholder="Customer Name" />
+        <input id="customerName" placeholder="Location Name" />
       </div>
-    </section>
-
-    <section class="card">
-      <h2>Upload PDFs</h2>
-      <input type="file" id="pdfUpload" accept="application/pdf" multiple />
     </section>
 
     <section class="card">
@@ -36,7 +49,7 @@
       <table>
         <thead>
           <tr>
-            <th>Order</th>
+            <th>Date</th>
             <th>File Name</th>
             <th>Display Title</th>
             <th>Document Type</th>
@@ -53,10 +66,10 @@
     <section class="card">
       <h2>Packet Builder</h2>
 
-      <label>
+      <!--<label>
         <input type="checkbox" id="autoTOC" checked />
         Auto-generate Table of Contents
-      </label>
+      </label>-->
 
       <div class="button-row">
         <button onclick="buildPacket()">Build PDF Packet</button>

@@ -28,8 +28,22 @@ main {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 12px;
+}
+
+.template-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+textarea {
+  min-height: 140px;
+  font-family: inherit;
 }
 
 input, select, textarea {
@@ -68,6 +82,14 @@ button {
 
 button:hover {
   background: #17476f;
+}
+
+button.secondary {
+  background: #6c7a8a;
+}
+
+button.secondary:hover {
+  background: #546276;
 }
 
 .button-row {
