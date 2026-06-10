@@ -597,8 +597,3 @@ function downloadFile(data, fileName, type) {
 
   URL.revokeObjectURL(link.href);
 }
-
-function clearLibrary() {
-  pdfLibrary = [];
-  renderTable();
-}
