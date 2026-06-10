@@ -37,6 +37,141 @@ const packetSections = [
   "Appendix"
 ];
 
+// Persistent library database (metadata only entries)
+let libraryDB = [];
+const LIB_DB_KEY = 'submittalLibraryDB';
+
+function loadLibraryDB() {
+  try {
+    const raw = localStorage.getItem(LIB_DB_KEY);
+    libraryDB = raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    libraryDB = [];
+  }
+  sortLibraryDB();
+  renderLibraryDB();
+}
+
+function saveLibraryDB() {
+  localStorage.setItem(LIB_DB_KEY, JSON.stringify(libraryDB));
+}
+
+function sortLibraryDB() {
+  // sort by documentType then displayTitle (alphabetical)
+  libraryDB.sort((a, b) => {
+    if (a.documentType === b.documentType) {
+      return a.displayTitle.localeCompare(b.displayTitle);
+    }
+    return a.documentType.localeCompare(b.documentType);
+  });
+}
+
+function renderLibraryDB() {
+  const tbody = document.getElementById('libraryDBBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  // Apply search filter if present
+  const searchEl = document.getElementById('librarySearch');
+  const search = searchEl && searchEl.value ? searchEl.value.trim().toLowerCase() : '';
+
+  const list = search
+    ? libraryDB.filter(item => {
+        const hay = [item.fileName, item.displayTitle, item.documentType, item.notes].join(' ').toLowerCase();
+        return hay.includes(search);
+      })
+    : libraryDB;
+
+  list.forEach((item, idx) => {
+    const row = document.createElement('tr');
+    const docOptions = documentTypes.map(opt => `<option value="${opt}" ${opt===item.documentType? 'selected' : ''}>${opt}</option>`).join('');
+
+    row.innerHTML = `
+      <td>${item.uploadDate || ''}</td>
+      <td>${item.fileName || ''}</td>
+      <td><input value="${item.displayTitle || ''}" onchange="updateLibraryDBItem('${item.id}', 'displayTitle', this.value)" /></td>
+      <td><select onchange="updateLibraryDBItem('${item.id}', 'documentType', this.value)">${docOptions}</select></td>
+      <td><input value="${item.notes || ''}" onchange="updateLibraryDBItem('${item.id}', 'notes', this.value)" /></td>
+      <td><button onclick="removeLibraryDBEntry('${item.id}')">Remove</button></td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+function addLibraryEntryFromForm() {
+  const fileName = document.getElementById('libFileName').value.trim();
+  const displayTitle = document.getElementById('libDisplayTitle').value.trim();
+  const documentType = document.getElementById('libDocumentType').value;
+  const notes = document.getElementById('libNotes').value.trim();
+
+  if (!displayTitle && !fileName) return alert('Provide at least a file name or display title');
+
+  const entry = {
+    id: crypto.randomUUID(),
+    uploadDate: new Date().toLocaleDateString(),
+    fileName,
+    displayTitle: displayTitle || fileName,
+    documentType,
+    notes
+  };
+
+  addLibraryEntry(entry);
+
+  // clear inputs
+  document.getElementById('libFileName').value = '';
+  document.getElementById('libDisplayTitle').value = '';
+  document.getElementById('libNotes').value = '';
+}
+
+function addLibraryEntry(entry, options) {
+  options = options || {};
+  // avoid duplicates by fileName or displayTitle
+  const exists = libraryDB.find(x => (x.fileName && entry.fileName && x.fileName === entry.fileName) || x.displayTitle === entry.displayTitle);
+  if (exists) {
+    // show duplicate warning and do not add
+    if (!options.silent) {
+      alert(`Duplicate entry for "${entry.displayTitle}" already exists. Press OK to dismiss.`);
+    }
+    return;
+  }
+
+  libraryDB.push(entry);
+
+  sortLibraryDB();
+  saveLibraryDB();
+  renderLibraryDB();
+}
+
+function removeLibraryDBEntry(id) {
+  libraryDB = libraryDB.filter(x => x.id !== id);
+  saveLibraryDB();
+  renderLibraryDB();
+}
+
+function updateLibraryDBItem(id, field, value) {
+  const item = libraryDB.find(x => x.id === id);
+  if (!item) return;
+  item[field] = value;
+  saveLibraryDB();
+  sortLibraryDB();
+  renderLibraryDB();
+}
+
+function exportLibraryCSV() {
+  const headers = ["Date","File Name","Display Title","Document Type","Notes"];
+  const rows = libraryDB.map(i => [i.uploadDate, i.fileName, i.displayTitle, i.documentType, i.notes]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v||'').replaceAll('"','""')}"`).join(',')).join('\n');
+  downloadFile(csv, 'library-db.csv', 'text/csv');
+}
+
+function clearLibraryDB() {
+  if (!confirm('Clear the library database? This cannot be undone.')) return;
+  libraryDB = [];
+  saveLibraryDB();
+  renderLibraryDB();
+}
+
+
 let tocTemplate = {
   fileName: "",
   text: ""
@@ -222,7 +357,8 @@ async function buildPacket() {
 
   const orderedFiles = [...coverPages];
 
-  if (document.getElementById("autoTOC").checked) {
+  const autoTOCElement = document.getElementById("autoTOC");
+  if (autoTOCElement && autoTOCElement.checked) {
     orderedFiles.push({ generatedTOC: true, templateText: tocTemplate.text });
   }
 
@@ -260,6 +396,13 @@ async function buildPacket() {
 
   const pdfBytes = await finalPdf.save();
   downloadFile(pdfBytes, getOutputFileName(), "application/pdf");
+
+  // After packet generation, merge included items into the persistent library
+  try {
+    mergeSubmittalIntoLibrary(included);
+  } catch (e) {
+    console.error('Error merging into library', e);
+  }
 }
 
 async function getPageCount(file) {
@@ -323,6 +466,7 @@ async function addTOCPage(pdfDoc, tocItems, templateText = "") {
 
   const sections = ["Warranty", "Datasheets", "Shop Drawings", "Appendix"];
 
+  // Group TOC items by section and render
   sections.forEach((section, index) => {
     const items = tocItems.filter(item => item.section === section);
     if (items.length === 0) return;
@@ -342,14 +486,14 @@ async function addTOCPage(pdfDoc, tocItems, templateText = "") {
       page.drawText(`• ${item.title}`, {
         x: 80,
         y,
-        size: 11,
+        size: 12,
         font
       });
 
       page.drawText(`${item.startPage}`, {
         x: 530,
         y,
-        size: 11,
+        size: 12,
         font
       });
 
@@ -370,7 +514,7 @@ async function addPageNumbers(pdfDoc) {
     page.drawText(`${index + 1}`, {
       x: width / 2,
       y: 25,
-      size: 10,
+      size: 11,
       font,
       color: rgb(0, 0, 0)
     });
@@ -404,6 +548,35 @@ function exportCSV() {
 
   downloadFile(csv, "submittal-library.csv", "text/csv");
 }
+
+function mergeSubmittalIntoLibrary(items) {
+  // items: array of pdfLibrary entries (included ones)
+  items.forEach(i => {
+    const entry = {
+      id: crypto.randomUUID(),
+      uploadDate: new Date().toLocaleDateString(),
+      fileName: i.fileName || '',
+      displayTitle: i.displayTitle || (i.fileName || '').replace(/\.pdf$/i, ''),
+      documentType: i.documentType || 'Other',
+      notes: i.notes || ''
+    };
+
+    addLibraryEntry(entry, { silent: true });
+  });
+}
+
+// Wire up library UI on load
+window.addEventListener('load', () => {
+  loadLibraryDB();
+  const addBtn = document.getElementById('addLibraryEntryButton');
+  if (addBtn) addBtn.addEventListener('click', addLibraryEntryFromForm);
+  const exportBtn = document.getElementById('exportLibraryCSV');
+  if (exportBtn) exportBtn.addEventListener('click', exportLibraryCSV);
+  const clearBtn = document.getElementById('clearLibraryDB');
+  if (clearBtn) clearBtn.addEventListener('click', clearLibraryDB);
+  const searchEl = document.getElementById('librarySearch');
+  if (searchEl) searchEl.addEventListener('input', renderLibraryDB);
+});
 
 // Generate output flename based on project info 
 function getOutputFileName() {
