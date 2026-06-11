@@ -42,7 +42,6 @@
       <div class="button-row">
         <button id="addLibraryEntryButton">Add to Library</button>
         <button id="exportLibraryCSV">Export Library CSV</button>
-        <button id="clearLibraryDB" class="secondary">Clear Library DB</button>
       </div>
 
       <div style="margin-top:12px; margin-bottom:12px;">
@@ -64,18 +63,6 @@
       </table>
     </section>
     <section class="card">
-      <h2>Table of Contents Template</h2>
-
-      <div class="grid">
-        <input type="file" id="tocTemplateUpload" accept=".docx" />
-      </div>
-      <div class="template-info">
-        <span id="templateFileName">No template imported</span>
-        <button id="clearTemplateButton" class="secondary" type="button" onclick="clearTOCTemplate()">Clear Template</button>
-      </div>
-      <textarea id="tocTemplatePreview" placeholder="Imported TOC template contents will appear here..." rows="6"></textarea>
-    </section>
-    <section class="card">
       <h2>Upload PDFs</h2>
       <input type="file" id="pdfUpload" accept="application/pdf" multiple />
     </section>
@@ -87,7 +74,7 @@
         <input id="projectNumber" placeholder="Project Number" />
         <input id="projectName" placeholder="Project Name" />
         <input id="revision" placeholder="Revision" />
-        <input id="customerName" placeholder="Location Name" />
+        <input id="customerName" placeholder="File Location" />
       </div>
     </section>
 

@@ -190,13 +190,6 @@ function exportLibraryCSV() {
   downloadFile(csv, "library-db.csv", "text/csv");
 }
 
-function clearLibraryDB() {
-  if (!confirm("Clear the library database? This cannot be undone.")) return;
-
-  libraryDB = [];
-  saveLibraryDB();
-  renderLibraryDB();
-}
 
 let tocTemplate = {
   fileName: "",
@@ -280,14 +273,6 @@ function handleTOCTemplateUpload(event) {
           "Unable to read the DOCX file. Please try a .docx template.";
       });
   });
-}
-
-function clearTOCTemplate() {
-  tocTemplate = { fileName: "", text: "" };
-
-  document.getElementById("tocTemplateUpload").value = "";
-  document.getElementById("templateFileName").textContent = "No template imported";
-  document.getElementById("tocTemplatePreview").value = "";
 }
 
 function sortLibraryBySection() {
@@ -444,7 +429,16 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") 
   const projectNumber = document.getElementById("projectNumber").value || "";
   const projectName = document.getElementById("projectName").value || "";
 
-  const { width } = page.getSize();
+  const { width, height } = page.getSize();
+
+  // Margins converted from inches to PDF points
+  const leftMargin = 0.8 * 72;     // 57.6
+  const topMargin = 0.44 * 72;     // 31.68
+  const rightMargin = 0.38 * 72;   // 27.36
+  const bottomMargin = 0.13 * 72;  // 9.36
+
+  const pageRight = width - rightMargin;
+  const startY = height - topMargin;
 
   function centerText(text, y, size, font) {
     const textWidth = font.widthOfTextAtSize(text, size);
@@ -477,41 +471,56 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") 
     });
   }
 
-  // Top left project info
+  function drawDottedLeader(startX, endX, y) {
+    let x = startX;
+    const dotGap = 4;
+
+    while (x < endX) {
+      page.drawText(".", {
+        x,
+        y,
+        size: 12,
+        font: times,
+        color: rgb(0, 0, 0)
+      });
+
+      x += dotGap;
+    }
+  }
+
   page.drawText(`NS Corp. Project No.: ${projectNumber}`, {
-    x: 72,
-    y: 720,
+    x: leftMargin,
+    y: startY,
     size: 12,
     font: times
   });
 
   page.drawText(`Project Name: ${projectName}`, {
-    x: 72,
-    y: 705,
+    x: leftMargin,
+    y: startY - 15,
     size: 12,
     font: times
   });
 
-  // No blank line gap after Project Name
-  centerText("Product Submittal", 685, 18, timesBold);
+  centerText("Product Submittal", startY - 35, 18, timesBold);
 
-  // One line gap after Product Submittal
   const tocText = "Table of Contents";
   const tocSize = 20;
   const tocWidth = timesBoldItalic.widthOfTextAtSize(tocText, tocSize);
   const tocX = (width - tocWidth) / 2;
 
-  drawUnderlinedText(tocText, tocX, 645, tocSize, timesBoldItalic);
+  drawUnderlinedText(tocText, tocX, startY - 75, tocSize, timesBoldItalic);
 
-  // Page No. header on right
+  const pageNoX = pageRight - 55;
+
   page.drawText("Page No.", {
-    x: 500,
-    y: 600,
+    x: pageNoX,
+    y: startY - 120,
     size: 12,
     font: times
   });
 
-  let y = 575;
+  let y = startY - 145;
 
   const sections = ["Warranty", "Datasheets", "Shop Drawings", "Appendix"];
 
@@ -519,10 +528,10 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") 
     const items = tocItems.filter(item => item.section === section);
     if (items.length === 0) return;
 
-    const roman = ["II", "III", "IV", "V"][index];
+    const roman = ["I","II", "III", "IV"][index];
 
     page.drawText(`${roman}. ${section}`, {
-      x: 72,
+      x: leftMargin,
       y,
       size: 12,
       font: timesBold
@@ -531,15 +540,32 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") 
     y -= 14;
 
     items.forEach(item => {
+      const bullet = "•";
+      const bulletX = leftMargin + 18;
+      const titleX = leftMargin + 32;
+      const pageNum = `${item.startPage}`;
+      const pageNumWidth = times.widthOfTextAtSize(pageNum, 12);
+      const pageNumX = pageRight - pageNumWidth;
+
+      page.drawText(bullet, {
+        x: bulletX,
+        y,
+        size: 14,
+        font: times
+      });
+
       page.drawText(item.title, {
-        x: 95,
+        x: titleX,
         y,
         size: 12,
         font: times
       });
 
-      page.drawText(`${item.startPage}`, {
-        x: 520,
+      const titleWidth = times.widthOfTextAtSize(item.title, 12);
+      drawDottedLeader(titleX + titleWidth + 6, pageNumX - 8, y);
+
+      page.drawText(pageNum, {
+        x: pageNumX,
         y,
         size: 12,
         font: times
@@ -557,18 +583,57 @@ async function addPageNumbers(pdfDoc) {
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
   pages.forEach((page, index) => {
-    const { width } = page.getSize();
+    const { width, height } = page.getSize();
 
-    page.drawText(`${index + 1}`, {
-      x: width / 2,
-      y: 25,
-      size: 11,
+    const pageNumber = `${index + 1}`;
+    const fontSize = 11;
+    const textWidth = font.widthOfTextAtSize(pageNumber, fontSize);
+
+    // CHANGE THIS
+    const edgeMargin = 10;
+
+    const rotation = page.getRotation().angle;
+
+    let x;
+    let y;
+    let rotate;
+
+    switch (rotation) {
+      case 90:
+        x = width - edgeMargin;
+        y = (height / 2) - (textWidth / 2);
+        rotate = PDFLib.degrees(90);
+        break;
+
+      case 180:
+        x = (width / 2) + (textWidth / 2);
+        y = height - edgeMargin;
+        rotate = PDFLib.degrees(180);
+        break;
+
+      case 270:
+        x = edgeMargin;
+        y = (height / 2) + (textWidth / 2);
+        rotate = PDFLib.degrees(270);
+        break;
+
+      default:
+        x = (width - textWidth) / 2;
+        y = edgeMargin;
+        rotate = PDFLib.degrees(0);
+        break;
+    }
+
+    page.drawText(pageNumber, {
+      x,
+      y,
+      size: fontSize,
       font,
+      rotate,
       color: rgb(0, 0, 0)
     });
   });
 }
-
 function exportCSV() {
   const headers = [
     "Date",
@@ -621,8 +686,6 @@ window.addEventListener("load", () => {
   const exportBtn = document.getElementById("exportLibraryCSV");
   if (exportBtn) exportBtn.addEventListener("click", exportLibraryCSV);
 
-  const clearBtn = document.getElementById("clearLibraryDB");
-  if (clearBtn) clearBtn.addEventListener("click", clearLibraryDB);
 
   const searchEl = document.getElementById("librarySearch");
   if (searchEl) searchEl.addEventListener("input", renderLibraryDB);
