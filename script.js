@@ -196,12 +196,22 @@ let tocTemplate = {
   text: ""
 };
 
-document.getElementById("pdfUpload").addEventListener("change", handlePDFUpload);
-document.getElementById("tocTemplateUpload").addEventListener("change", handleTOCTemplateUpload);
+const pdfUpload = document.getElementById("pdfUpload");
+if (pdfUpload) {
+  pdfUpload.addEventListener("change", handlePDFUpload);
+}
 
-document.getElementById("tocTemplatePreview").addEventListener("input", event => {
-  tocTemplate.text = event.target.value;
-});
+const tocUpload = document.getElementById("tocTemplateUpload");
+if (tocUpload) {
+  tocUpload.addEventListener("change", handleTOCTemplateUpload);
+}
+
+const tocPreview = document.getElementById("tocTemplatePreview");
+if (tocPreview) {
+  tocPreview.addEventListener("input", event => {
+    tocTemplate.text = event.target.value;
+  });
+}
 
 function handlePDFUpload(event) {
   const files = Array.from(event.target.files);
@@ -282,28 +292,29 @@ function sortLibraryBySection() {
 }
 
 function renderTable() {
-  const tbody = document.getElementById("pdfTableBody");
-  tbody.innerHTML = "";
+  const container = document.getElementById("uploadedPdfList");
+  if (!container) return;
 
-  pdfLibrary.forEach((item, index) => {
-    const row = document.createElement("tr");
+  container.innerHTML = "";
+
+  pdfLibrary.forEach(item => {
+    const row = document.createElement("div");
+
+    row.className = "uploaded-pdf-row";
 
     row.innerHTML = `
-      <td>${item.uploadDate}</td>
-      <td>${item.fileName}</td>
-      <td><input value="${item.displayTitle}" onchange="updateItem('${item.id}', 'displayTitle', this.value)" /></td>
-      <td>${makeDropdown(item.id, "documentType", documentTypes, item.documentType)}</td>
-      <td>${makeDropdown(item.id, "packetSection", packetSections, item.packetSection)}</td>
-      <td><input type="checkbox" ${item.include ? "checked" : ""} onchange="updateItem('${item.id}', 'include', this.checked)" /></td>
-      <td><input value="${item.notes}" onchange="updateItem('${item.id}', 'notes', this.value)" /></td>
-      <td>
-        <button onclick="moveItem(${index}, -1)">↑</button>
-        <button onclick="moveItem(${index}, 1)">↓</button>
-        <button onclick="removeItem('${item.id}')">Remove</button>
-      </td>
+      <div class="uploaded-pdf-name">
+        ${item.fileName}
+      </div>
+
+      <button
+        class="remove-pdf-btn"
+        onclick="removeItem('${item.id}')">
+        Remove
+      </button>
     `;
 
-    tbody.appendChild(row);
+    container.appendChild(row);
   });
 }
 
@@ -356,7 +367,40 @@ function removeItem(id) {
   renderTable();
 }
 
+function clearUploadedPDFs() {
+  if (!confirm("Clear all uploaded PDFs from the packet builder?")) return;
+
+  pdfLibrary = [];
+
+  const pdfUpload = document.getElementById("pdfUpload");
+  if (pdfUpload) {
+    pdfUpload.value = "";
+  }
+
+  const modal = document.getElementById("datasheetOrderModal");
+  if (modal) {
+    modal.classList.add("hidden");
+  }
+
+  pendingBuild = false;
+
+  renderTable();
+}
+
+let pendingBuild = false;
+
 async function buildPacket() {
+  const includedDatasheets = pdfLibrary.filter(item =>
+    item.include && item.packetSection === "Datasheets"
+  );
+
+  if (includedDatasheets.length > 1 && !pendingBuild) {
+    openDatasheetOrderModal(includedDatasheets);
+    return;
+  }
+
+  pendingBuild = false;
+
   const finalPdf = await PDFDocument.create();
 
   const included = pdfLibrary.filter(item => item.include);
@@ -374,15 +418,12 @@ async function buildPacket() {
     ...appendix
   ];
 
-  // 1. Add cover page PDFs first
   for (const item of coverPages) {
     await appendPDF(finalPdf, item.file);
   }
 
-  // 2. Always generate a TOC page after the cover page
   const tocPage = finalPdf.addPage([612, 792]);
 
-  // 3. Add the rest of the PDFs and record their final start page numbers
   const tocItems = [];
 
   for (const item of contentFiles) {
@@ -397,10 +438,7 @@ async function buildPacket() {
     await appendPDF(finalPdf, item.file);
   }
 
-  // 4. Draw the TOC onto the page after the cover
   await drawTOCOnExistingPage(finalPdf, tocPage, tocItems, tocTemplate.text);
-
-  // 5. Add page numbers after the merge is complete
   await addPageNumbers(finalPdf);
 
   const pdfBytes = await finalPdf.save();
@@ -411,6 +449,64 @@ async function buildPacket() {
   } catch (e) {
     console.error("Error merging into library", e);
   }
+}
+
+function openDatasheetOrderModal(datasheets) {
+  const modal = document.getElementById("datasheetOrderModal");
+  const list = document.getElementById("datasheetOrderList");
+
+  list.innerHTML = "";
+
+  datasheets.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "order-row";
+
+    row.innerHTML = `
+      <select data-id="${item.id}">
+        ${datasheets.map((_, i) => `
+          <option value="${i + 1}" ${i === index ? "selected" : ""}>${i + 1}</option>
+        `).join("")}
+      </select>
+
+      <span>${item.displayTitle}</span>
+    `;
+
+    list.appendChild(row);
+  });
+
+  modal.classList.remove("hidden");
+}
+
+function closeDatasheetOrderModal() {
+  document.getElementById("datasheetOrderModal").classList.add("hidden");
+}
+
+function confirmDatasheetOrder() {
+  const selects = Array.from(document.querySelectorAll("#datasheetOrderList select"));
+
+  const orderMap = {};
+
+  selects.forEach(select => {
+    orderMap[select.dataset.id] = Number(select.value);
+  });
+
+  pdfLibrary.sort((a, b) => {
+    if (a.packetSection !== b.packetSection) {
+      return sectionOrder[a.packetSection] - sectionOrder[b.packetSection];
+    }
+
+    if (a.packetSection === "Datasheets" && b.packetSection === "Datasheets") {
+      return (orderMap[a.id] || 999) - (orderMap[b.id] || 999);
+    }
+
+    return 0;
+  });
+
+  renderTable();
+  closeDatasheetOrderModal();
+
+  pendingBuild = true;
+  buildPacket();
 }
 
 async function appendPDF(finalPdf, file) {
@@ -432,7 +528,7 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") 
   const { width, height } = page.getSize();
 
   // Margins converted from inches to PDF points
-  const leftMargin = 0.8 * 72;     // 57.6
+  const leftMargin = 0.7 * 72;     // 50.4
   const topMargin = 0.44 * 72;     // 31.68
   const rightMargin = 0.38 * 72;   // 27.36
   const bottomMargin = 0.13 * 72;  // 9.36

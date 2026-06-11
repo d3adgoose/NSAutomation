@@ -84,16 +84,64 @@ button:hover {
   background: #17476f;
 }
 
-button.secondary {
-  background: #6c7a8a;
-}
-
-button.secondary:hover {
-  background: #546276;
-}
-
 .button-row {
   display: flex;
   gap: 12px;
   margin-top: 16px;
+}
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-content {
+  background: white;
+  padding: 24px;
+  width: 600px;
+  max-width: 90%;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+}
+
+.order-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.uploaded-pdf-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center; /* vertically centers */
+  padding: 10px 14px;
+  margin-top: 8px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.uploaded-pdf-name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remove-pdf-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
 }

@@ -11,7 +11,7 @@
 <body>
   <header>
     <h1>Submittal Automation</h1>
-    <p>Organize PDFs, import a workplace TOC template, and keep your library up to date.</p>
+    <p>Organize PDFs and keep your library up to date.</p>
   </header>
 
   <main>
@@ -62,9 +62,16 @@
         <tbody id="libraryDBBody"></tbody>
       </table>
     </section>
+
     <section class="card">
       <h2>Upload PDFs</h2>
-      <input type="file" id="pdfUpload" accept="application/pdf" multiple />
+
+      <div class="button-row">
+        <input type="file" id="pdfUpload" accept="application/pdf" multiple />
+        <button onclick="clearUploadedPDFs()">Clear PDFs</button>
+      </div>
+
+      <div id="uploadedPdfList"></div>
     </section>
 
     <section class="card">
@@ -87,6 +94,20 @@
       </div>
     </section>
   </main>
+
+  <div id="datasheetOrderModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Organize Datasheets</h2>
+      <p>Choose the order each datasheet should appear in.</p>
+
+      <div id="datasheetOrderList"></div>
+
+      <div class="button-row">
+        <button onclick="confirmDatasheetOrder()">Continue Building PDF</button>
+        <button class="secondary" onclick="closeDatasheetOrderModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <script src="script.js"></script>
 </body>
