@@ -1,114 +1,40 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Submittal Automation</title>
-  <link rel="stylesheet" href="style.css" />
-  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
-  <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+  <meta charset="UTF-8">
+  <title>Home</title>
+
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>Submittal Automation</h1>
-    <p>Organize PDFs and keep your library up to date.</p>
-  </header>
 
-  <main>
-    <section class="card">
-      <h2>Database</h2>
+<div class="hamburger-container">
+  <button id="hamburgerBtn" class="hamburger">
+    ☰
+  </button>
 
-      <div class="grid">
-        <input id="libFileName" placeholder="File Name" />
-        <input id="libDisplayTitle" placeholder="File Location" />
-        <select id="libDocumentType">
-          <option value="Cover Page">Cover Page</option>
-          <option value="Table of Contents">Table of Contents</option>
-          <option value="Warranty">Warranty</option>
-          <option value="Datasheet">Datasheet</option>
-          <option value="Shop Drawing">Shop Drawing</option>
-          <option value="Drawing">Drawing</option>
-          <option value="Manual">Manual</option>
-          <option value="Certification">Certification</option>
-          <option value="Spec Sheet">Spec Sheet</option>
-          <option value="Test Report">Test Report</option>
-          <option value="Appendix">Appendix</option>
-          <option value="Other">Other</option>
-        </select>
-      </div>
+  <nav id="sideMenu" class="side-menu">
+    <a href="index">Home</a>
+    <a href="database.html">Database</a>
+    <a href="submittal.html">Submittal</a>
+  </nav>
+</div>
 
-      <textarea id="libNotes" placeholder="Notes (optional)" rows="3"></textarea>
+<header>
+  <h1>Engineering Internal Tool</h1>
+</header>
 
-      <div class="button-row">
-        <button id="addLibraryEntryButton">Add to Library</button>
-        <button id="exportLibraryCSV">Export Library CSV</button>
-      </div>
+<main>
+  <section class="card">
+    <h2>Welcome</h2>
 
-      <div style="margin-top:12px; margin-bottom:12px;">
-        <input id="librarySearch" placeholder="Search library (file, title, type, notes)" style="width:100%; padding:8px; box-sizing:border-box;" />
-      </div>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>File Name</th>
-            <th>File Location</th>
-            <th>Document Type</th>
-            <th>Notes</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="libraryDBBody"></tbody>
-      </table>
-    </section>
-
-    <section class="card">
-      <h2>Upload PDFs</h2>
-
-      <div class="button-row">
-        <input type="file" id="pdfUpload" accept="application/pdf" multiple />
-        <button onclick="clearUploadedPDFs()">Clear PDFs</button>
-      </div>
-
-      <div id="uploadedPdfList"></div>
-    </section>
-
-    <section class="card">
-      <h2>Submittal Info</h2>
-
-      <div class="grid">
-        <input id="projectNumber" placeholder="Project Number" />
-        <input id="projectName" placeholder="Project Name" />
-        <input id="revision" placeholder="Revision" />
-        <input id="customerName" placeholder="File Location" />
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Packet Builder</h2>
-
-      <div class="button-row">
-        <button onclick="buildPacket()">Build PDF Packet</button>
-        <button onclick="exportCSV()">Export CSV</button>
-      </div>
-    </section>
-  </main>
-
-  <div id="datasheetOrderModal" class="modal hidden">
-    <div class="modal-content">
-      <h2>Organize Datasheets</h2>
-      <p>Choose the order each datasheet should appear in.</p>
-
-      <div id="datasheetOrderList"></div>
-
-      <div class="button-row">
-        <button onclick="confirmDatasheetOrder()">Continue Building PDF</button>
-        <button class="secondary" onclick="closeDatasheetOrderModal()">Cancel</button>
-      </div>
+    <p>
+      This application helps maintain a datasheet database
+      and generate PDF submittal packets.
+    </p>
     </div>
-  </div>
+  </section>
+<script src="navigation.js"></script>
 
-  <script src="script.js"></script>
 </body>
 </html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Submittal Automation</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+</head>
+<body>
+    <div class="hamburger-container">
+        <button id="hamburgerBtn" class="hamburger">
+            ☰
+        </button>
+
+        <nav id="sideMenu" class="side-menu">
+            <a href="index.html">Home</a>
+            <a href="database.html">Database</a>
+            <a href="submittal.html">Submittal</a>
+        </nav>
+        </div>
+  <header>
+    <h1>Submittal Automation</h1>
+    <p>Generate submittal packets automatically.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Upload PDFs</h2>
+
+      <div class="button-row">
+        <input type="file" id="pdfUpload" accept="application/pdf" multiple />
+        <button onclick="clearUploadedPDFs()">Clear PDFs</button>
+      </div>
+
+      <div id="uploadedPdfList"></div>
+    </section>
+
+    <section class="card">
+      <h2>Submittal Info</h2>
+
+      <div class="grid">
+        <input id="projectNumber" placeholder="Project Number" />
+        <input id="projectName" placeholder="Project Name" />
+        <input id="revision" placeholder="Revision" />
+        <input id="customerName" placeholder="File Location" />
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Packet Builder</h2>
+
+      <div class="button-row">
+        <button onclick="buildPacket()">Build PDF Packet</button>
+        <button onclick="exportCSV()">Export CSV</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="datasheetOrderModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Organize Datasheets</h2>
+      <p>Choose the order each datasheet should appear in.</p>
+
+      <div id="datasheetOrderList"></div>
+
+      <div class="button-row">
+        <button onclick="confirmDatasheetOrder()">Continue Building PDF</button>
+        <button class="secondary" onclick="closeDatasheetOrderModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="submittal.js"></script>
+  <script src="common.js"></script>
+  <script src="database.js"></script>
+  <script src="navigation.js"></script>
+</body>
+</html>
