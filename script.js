@@ -437,49 +437,81 @@ async function appendPDF(finalPdf, file) {
 }
 
 async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") {
-  const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+  const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+  const timesBoldItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
 
-  const lines = templateText
-    ? templateText.split(/\r?\n/)
-    : ["Table of Contents", ""];
+  const projectNumber = document.getElementById("projectNumber").value || "";
+  const projectName = document.getElementById("projectName").value || "";
 
-  let y = 750;
-  const lineHeight = 18;
+  const { width } = page.getSize();
 
-  lines.forEach((line, index) => {
-    const text = line.trim();
-
-    if (index === 0 && text) {
-      page.drawText(text, {
-        x: 60,
-        y,
-        size: 22,
-        font: boldFont
-      });
-
-      y -= 34;
-      return;
-    }
-
-    if (!text) {
-      y -= lineHeight;
-      return;
-    }
+  function centerText(text, y, size, font) {
+    const textWidth = font.widthOfTextAtSize(text, size);
 
     page.drawText(text, {
-      x: 60,
+      x: (width - textWidth) / 2,
       y,
-      size: 12,
-      font
+      size,
+      font,
+      color: rgb(0, 0, 0)
+    });
+  }
+
+  function drawUnderlinedText(text, x, y, size, font) {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      font,
+      color: rgb(0, 0, 0)
     });
 
-    y -= lineHeight;
+    const textWidth = font.widthOfTextAtSize(text, size);
+
+    page.drawLine({
+      start: { x, y: y - 2 },
+      end: { x: x + textWidth, y: y - 2 },
+      thickness: 0.75,
+      color: rgb(0, 0, 0)
+    });
+  }
+
+  // Top left project info
+  page.drawText(`NS Corp. Project No.: ${projectNumber}`, {
+    x: 72,
+    y: 720,
+    size: 12,
+    font: times
   });
 
-  if (y < 140) {
-    y = 140;
-  }
+  page.drawText(`Project Name: ${projectName}`, {
+    x: 72,
+    y: 705,
+    size: 12,
+    font: times
+  });
+
+  // No blank line gap after Project Name
+  centerText("Product Submittal", 685, 18, timesBold);
+
+  // One line gap after Product Submittal
+  const tocText = "Table of Contents";
+  const tocSize = 20;
+  const tocWidth = timesBoldItalic.widthOfTextAtSize(tocText, tocSize);
+  const tocX = (width - tocWidth) / 2;
+
+  drawUnderlinedText(tocText, tocX, 645, tocSize, timesBoldItalic);
+
+  // Page No. header on right
+  page.drawText("Page No.", {
+    x: 500,
+    y: 600,
+    size: 12,
+    font: times
+  });
+
+  let y = 575;
 
   const sections = ["Warranty", "Datasheets", "Shop Drawings", "Appendix"];
 
@@ -487,36 +519,36 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems, templateText = "") 
     const items = tocItems.filter(item => item.section === section);
     if (items.length === 0) return;
 
-    const roman = ["I", "II", "III", "IV"][index];
+    const roman = ["II", "III", "IV", "V"][index];
 
     page.drawText(`${roman}. ${section}`, {
-      x: 60,
+      x: 72,
       y,
-      size: 16,
-      font: boldFont
-    });
-
-    y -= 24;
-
-    items.forEach(item => {
-      page.drawText(`• ${item.title}`, {
-        x: 80,
-        y,
-        size: 12,
-        font
-      });
-
-      page.drawText(`${item.startPage}`, {
-        x: 530,
-        y,
-        size: 12,
-        font
-      });
-
-      y -= 20;
+      size: 12,
+      font: timesBold
     });
 
     y -= 14;
+
+    items.forEach(item => {
+      page.drawText(item.title, {
+        x: 95,
+        y,
+        size: 12,
+        font: times
+      });
+
+      page.drawText(`${item.startPage}`, {
+        x: 520,
+        y,
+        size: 12,
+        font: times
+      });
+
+      y -= 12;
+    });
+
+    y -= 4;
   });
 }
 
