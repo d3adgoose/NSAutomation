@@ -466,6 +466,9 @@ async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
   const pages = pdfDoc.getPages();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
+  const revision = document.getElementById("revision")?.value || "0";
+  const dateMade = new Date().toLocaleDateString();
+
   let printedPageNumber = 1;
 
   pages.forEach((page, index) => {
@@ -476,46 +479,79 @@ async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
     const pageNumber = `${printedPageNumber}`;
     printedPageNumber++;
 
-    const fontSize = 11;
-    const textWidth = font.widthOfTextAtSize(pageNumber, fontSize);
+    const pageFontSize = 11;
+    const revFontSize = 9;
 
-    const edgeMargin = 5;
+    const bottomMargin = 3; // lower on page
+    const sideSafeMargin = 30; // keeps revision from clipping right edge
+
     const rotation = page.getRotation().angle;
 
-    let x;
-    let y;
+    const pageNumWidth = font.widthOfTextAtSize(pageNumber, pageFontSize);
+    const revisionText = `Rev. ${revision} , ${dateMade}`;
+    const revisionWidth = font.widthOfTextAtSize(revisionText, revFontSize);
+
+    let pageX;
+    let pageY;
+    let revX;
+    let revY;
     let rotate;
 
     switch (rotation) {
       case 90:
-        x = width - edgeMargin;
-        y = (height / 2) - (textWidth / 2);
+        pageX = width - bottomMargin;
+        pageY = (height / 2) - (pageNumWidth / 2);
+
+        revX = width - bottomMargin;
+        revY = height - revisionWidth - sideSafeMargin;
+
         rotate = PDFLib.degrees(90);
         break;
 
       case 180:
-        x = (width / 2) + (textWidth / 2);
-        y = height - edgeMargin;
+        pageX = (width / 2) + (pageNumWidth / 2);
+        pageY = height - bottomMargin;
+
+        revX = sideSafeMargin;
+        revY = height - bottomMargin;
+
         rotate = PDFLib.degrees(180);
         break;
 
       case 270:
-        x = edgeMargin;
-        y = (height / 2) + (textWidth / 2);
+        pageX = bottomMargin;
+        pageY = (height / 2) + (pageNumWidth / 2);
+
+        revX = bottomMargin;
+        revY = revisionWidth + sideSafeMargin;
+
         rotate = PDFLib.degrees(270);
         break;
 
       default:
-        x = (width - textWidth) / 2;
-        y = edgeMargin;
+        pageX = (width - pageNumWidth) / 2;
+        pageY = bottomMargin;
+
+        revX = width - revisionWidth - sideSafeMargin;
+        revY = bottomMargin;
+
         rotate = PDFLib.degrees(0);
         break;
     }
 
     page.drawText(pageNumber, {
-      x,
-      y,
-      size: fontSize,
+      x: pageX,
+      y: pageY,
+      size: pageFontSize,
+      font,
+      rotate,
+      color: rgb(0, 0, 0)
+    });
+
+    page.drawText(revisionText, {
+      x: revX,
+      y: revY,
+      size: revFontSize,
       font,
       rotate,
       color: rgb(0, 0, 0)
