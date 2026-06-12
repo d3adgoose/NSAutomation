@@ -32,15 +32,30 @@ function handlePDFUpload(event) {
 
 function guessDocumentType(fileName) {
   const name = fileName.toLowerCase();
-
+  if (name.includes("revision") || name.includes("remarks")) return "Revision Remarks";
   if (name.includes("cover")) return "Cover Page";
   if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
   if (name.includes("warranty")) return "Warranty";
-  if (name.includes("shop") || name.includes ("drawing")) return "Shop Drawings";
+  if (name.includes("control") || name.includes("panel")) return "Control Panel Components";
+  
+  // Handles:
+  // - Shop Drawing
+  // - Shop Drawings
+  // - Drawing
+  // - Drawings
+  if (
+    name.includes("shop drawing") ||
+    name.includes("shop drawings") ||
+    name.includes("shop") ||
+    name.includes("drawing") ||
+    name.includes("drawings")
+  ) {
+    return "Shop Drawing";
+  }
+
   if (name.includes("manual")) return "Manual";
   if (name.includes("cert")) return "Certification";
   if (name.includes("spec")) return "Spec Sheet";
-  if (name.includes("control") && name.includes("panel")) return "Control Panel Components";
   if (name.includes("test")) return "Test Report";
 
   return "Datasheet";
@@ -49,6 +64,7 @@ function guessDocumentType(fileName) {
 function guessPacketSection(fileName) {
   const type = guessDocumentType(fileName);
 
+  if (type === "Revision Remarks") return "Revision Remarks";
   if (type === "Cover Page") return "Cover Page";
   if (type === "Table of Contents") return "Table of Contents";
   if (type === "Warranty") return "Warranty";
@@ -136,9 +152,11 @@ async function buildPacket() {
   pendingBuild = false;
 
   const finalPdf = await PDFDocument.create();
+  const noNumberPageIndexes = [];
 
   const included = pdfLibrary.filter(item => item.include);
 
+  const revisionRemarks = included.filter(x => x.packetSection === "Revision Remarks");
   const coverPages = included.filter(x => x.packetSection === "Cover Page");
   const warranties = included.filter(x => x.packetSection === "Warranty");
 
@@ -161,6 +179,13 @@ async function buildPacket() {
     ...shopDrawings
   ];
 
+  // Revision Remarks comes FIRST, but is not numbered or in TOC
+  for (const item of revisionRemarks) {
+    const addedIndexes = await appendPDF(finalPdf, item.file);
+    noNumberPageIndexes.push(...addedIndexes);
+  }
+
+  // Cover Page comes after Revision Remarks
   for (const item of coverPages) {
     await appendPDF(finalPdf, item.file);
   }
@@ -170,7 +195,7 @@ async function buildPacket() {
   const tocItems = [];
 
   for (const item of contentFiles) {
-    const startPage = finalPdf.getPageCount() + 1;
+    const startPage = finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
 
     tocItems.push({
       title: item.displayTitle,
@@ -182,7 +207,7 @@ async function buildPacket() {
   }
 
   await drawTOCOnExistingPage(finalPdf, tocPage, tocItems);
-  await addPageNumbers(finalPdf);
+  await addPageNumbers(finalPdf, noNumberPageIndexes);
 
   const pdfBytes = await finalPdf.save();
   downloadFile(pdfBytes, getOutputFileName(), "application/pdf");
@@ -252,11 +277,22 @@ function confirmDatasheetOrder() {
 }
 
 async function appendPDF(finalPdf, file) {
+  const startIndex = finalPdf.getPageCount();
+
   const bytes = await file.arrayBuffer();
   const sourcePdf = await PDFDocument.load(bytes);
   const copiedPages = await finalPdf.copyPages(sourcePdf, sourcePdf.getPageIndices());
 
   copiedPages.forEach(page => finalPdf.addPage(page));
+
+  const endIndex = finalPdf.getPageCount() - 1;
+
+  const addedIndexes = [];
+  for (let i = startIndex; i <= endIndex; i++) {
+    addedIndexes.push(i);
+  }
+
+  return addedIndexes;
 }
 
 async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
@@ -426,14 +462,20 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
   });
 }
 
-async function addPageNumbers(pdfDoc) {
+async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
   const pages = pdfDoc.getPages();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
+  let printedPageNumber = 1;
+
   pages.forEach((page, index) => {
+    if (skipPageIndexes.includes(index)) return;
+
     const { width, height } = page.getSize();
 
-    const pageNumber = `${index + 1}`;
+    const pageNumber = `${printedPageNumber}`;
+    printedPageNumber++;
+
     const fontSize = 11;
     const textWidth = font.widthOfTextAtSize(pageNumber, fontSize);
 

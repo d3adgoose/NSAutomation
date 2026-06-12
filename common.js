@@ -3,6 +3,7 @@ const StandardFonts = window.PDFLib ? window.PDFLib.StandardFonts : null;
 const rgb = window.PDFLib ? window.PDFLib.rgb : null;
 
 const documentTypes = [
+  "Revision Remarks",
   "Cover Page",
   "Table of Contents",
   "Warranty",
@@ -18,6 +19,7 @@ const documentTypes = [
 ];
 
 const packetSections = [
+  "Revision Remarks",
   "Cover Page",
   "Table of Contents",
   "Warranty",
@@ -28,13 +30,14 @@ const packetSections = [
 ];
 
 const sectionOrder = {
-  "Cover Page": 1,
-  "Table of Contents": 2,
-  "Warranty": 3,
-  "Datasheets": 4,
-  "Control Panel Components": 5,
-  "Shop Drawings": 6,
-  "Appendix": 7
+  "Revision Remarks": 1,
+  "Cover Page": 2,
+  "Table of Contents": 3,
+  "Warranty": 4,
+  "Datasheets": 5,
+  "Control Panel Components": 6,
+  "Shop Drawings": 7,
+  "Appendix": 8
 };
 
 function downloadFile(data, fileName, type) {
