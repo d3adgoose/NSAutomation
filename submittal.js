@@ -36,7 +36,7 @@ function guessDocumentType(fileName) {
   if (name.includes("cover")) return "Cover Page";
   if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
   if (name.includes("warranty")) return "Warranty";
-  if (name.includes("shop") || name.includes ("drawing")) return "Shop Drawing";
+  if (name.includes("shop") || name.includes ("drawing")) return "Shop Drawings";
   if (name.includes("manual")) return "Manual";
   if (name.includes("cert")) return "Certification";
   if (name.includes("spec")) return "Spec Sheet";

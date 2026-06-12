@@ -5,21 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Database</title>
   <link rel="stylesheet" href="style.css" />
-  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
-  <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
 </head>
 <body>
-    <div class="hamburger-container">
-        <button id="hamburgerBtn" class="hamburger">
-            ☰
-        </button>
+  <div class="hamburger-container">
+    <button id="hamburgerBtn" class="hamburger">☰</button>
 
-        <nav id="sideMenu" class="side-menu">
-            <a href="index.html">Home</a>
-            <a href="database.html">Database</a>
-            <a href="submittal.html">Submittal</a>
-        </nav>
-        </div>
+    <nav id="sideMenu" class="side-menu">
+      <a href="index.html">Home</a>
+      <a href="database.html">Database</a>
+      <a href="submittal.html">Submittal</a>
+    </nav>
+  </div>
+
   <header>
     <h1>Database</h1>
     <p>Organize PDFs and keep your library up to date.</p>
@@ -32,6 +29,7 @@
       <div class="grid">
         <input id="libFileName" placeholder="File Name" />
         <input id="libDisplayTitle" placeholder="File Location" />
+
         <select id="libDocumentType">
           <option value="Cover Page">Cover Page</option>
           <option value="Table of Contents">Table of Contents</option>
@@ -56,25 +54,33 @@
       </div>
 
       <div style="margin-top:12px; margin-bottom:12px;">
-        <input id="librarySearch" placeholder="Search library (file, title, type, notes)" style="width:100%; padding:8px; box-sizing:border-box;" />
+        <input
+          id="librarySearch"
+          placeholder="Search library (file, title, type, notes)"
+          style="width:100%; padding:8px; box-sizing:border-box;"
+        />
       </div>
 
       <table>
         <thead>
           <tr>
+            <th>Actions</th>
             <th>Date</th>
             <th>File Name</th>
             <th>File Location</th>
             <th>Document Type</th>
             <th>Notes</th>
-            <th>Actions</th>
+            <th>PDF Attachment</th>
           </tr>
         </thead>
         <tbody id="libraryDBBody"></tbody>
       </table>
     </section>
-  <script src="database.js"></script>
+  </main>
+
   <script src="common.js"></script>
+  <script src="pdfStorage.js"></script>
+  <script src="database.js"></script>
   <script src="navigation.js"></script>
 </body>
 </html>

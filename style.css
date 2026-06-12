@@ -192,3 +192,17 @@ button:hover {
 .side-menu a:hover {
   background: rgba(255,255,255,0.1);
 }
+
+.attach-pdf-btn {
+  display: inline-block;
+  background: #0b2d4d;
+  color: white;
+  padding: 10px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.attach-pdf-btn:hover {
+  background: #17476f;
+}

@@ -55,16 +55,64 @@ function renderLibraryDB() {
     const row = document.createElement("tr");
 
     const docOptions = documentTypes.map(opt => `
-      <option value="${opt}" ${opt === item.documentType ? "selected" : ""}>${opt}</option>
+      <option value="${opt}" ${opt === item.documentType ? "selected" : ""}>
+        ${opt}
+      </option>
     `).join("");
 
     row.innerHTML = `
+      <td>
+        <button
+          class="delete-btn"
+          onclick="removeLibraryDBEntry('${item.id}')">
+          Remove
+        </button>
+      </td>
+
       <td>${item.uploadDate || ""}</td>
+
       <td>${item.fileName || ""}</td>
-      <td><input value="${item.displayTitle || ""}" onchange="updateLibraryDBItem('${item.id}', 'displayTitle', this.value)" /></td>
-      <td><select onchange="updateLibraryDBItem('${item.id}', 'documentType', this.value)">${docOptions}</select></td>
-      <td><input value="${item.notes || ""}" onchange="updateLibraryDBItem('${item.id}', 'notes', this.value)" /></td>
-      <td><button onclick="removeLibraryDBEntry('${item.id}')">Remove</button></td>
+
+      <td>
+        <input
+          value="${item.displayTitle || ""}"
+          onchange="updateLibraryDBItem('${item.id}', 'displayTitle', this.value)"
+        />
+      </td>
+
+      <td>
+        <select onchange="updateLibraryDBItem('${item.id}', 'documentType', this.value)">
+          ${docOptions}
+        </select>
+      </td>
+
+      <td>
+        <input
+          value="${item.notes || ""}"
+          onchange="updateLibraryDBItem('${item.id}', 'notes', this.value)"
+        />
+      </td>
+
+      <td>
+        ${
+          item.attachmentId
+            ? `
+              <button onclick="downloadSavedPDF('${item.attachmentId}')">Download</button>
+              <button onclick="removeAttachmentFromLibraryItem('${item.id}')">Remove PDF</button>
+            `
+            : `
+              <label class="attach-pdf-btn">
+                Attach PDF
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  style="display:none;"
+                  onchange="attachPDFToLibraryItem('${item.id}', this.files[0])"
+                />
+              </label>
+            `
+        }
+      </td>
     `;
 
     tbody.appendChild(row);
@@ -85,7 +133,7 @@ function addLibraryEntryFromForm() {
     id: crypto.randomUUID(),
     uploadDate: new Date().toLocaleDateString(),
     fileName,
-    displayTitle: displayTitle || fileName,
+    displayTitle,
     documentType,
     notes
   };
@@ -100,12 +148,16 @@ function addLibraryEntryFromForm() {
 function addLibraryEntry(entry, options = {}) {
   const exists = libraryDB.find(x =>
     (x.fileName && entry.fileName && x.fileName === entry.fileName) ||
-    x.displayTitle === entry.displayTitle
+    (
+      entry.displayTitle &&
+      x.displayTitle &&
+      x.displayTitle === entry.displayTitle
+    )
   );
 
   if (exists) {
     if (!options.silent) {
-      alert(`Duplicate entry for "${entry.displayTitle}" already exists.`);
+      alert(`Duplicate entry for "${entry.fileName || entry.displayTitle}" already exists.`);
     }
 
     return;
@@ -133,8 +185,44 @@ function updateLibraryDBItem(id, field, value) {
   renderLibraryDB();
 }
 
+async function attachPDFToLibraryItem(id, file) {
+  if (!file) return;
+
+  const item = libraryDB.find(x => x.id === id);
+  if (!item) return;
+
+  const attachmentId = crypto.randomUUID();
+
+  await savePDFToIndexedDB(attachmentId, file);
+
+  item.attachmentId = attachmentId;
+  item.attachmentFileName = file.name;
+
+  saveLibraryDB();
+  renderLibraryDB();
+}
+
+async function removeAttachmentFromLibraryItem(id) {
+  const item = libraryDB.find(x => x.id === id);
+  if (!item || !item.attachmentId) return;
+
+  await deleteSavedPDF(item.attachmentId, false);
+
+  item.attachmentId = null;
+  item.attachmentFileName = "";
+
+  saveLibraryDB();
+  renderLibraryDB();
+}
+
 function exportLibraryCSV() {
-  const headers = ["Date", "File Name", "Display Title", "Document Type", "Notes"];
+  const headers = [
+    "Date",
+    "File Name",
+    "File Location",
+    "Document Type",
+    "Notes"
+  ];
 
   const rows = libraryDB.map(i => [
     i.uploadDate,
@@ -149,6 +237,22 @@ function exportLibraryCSV() {
     .join("\n");
 
   downloadFile(csv, "library-db.csv", "text/csv");
+}
+
+function mergeSubmittalIntoLibrary(items) {
+  items.forEach(i => {
+    const entry = {
+      id: crypto.randomUUID(),
+      uploadDate: new Date().toLocaleDateString(),
+      fileName: i.fileName || "",
+      displayTitle: "",
+      documentType: i.documentType || "Other",
+      notes: "",
+      attachmentId: null
+    };
+
+    addLibraryEntry(entry, { silent: true });
+  });
 }
 
 window.addEventListener("load", () => {

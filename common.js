@@ -1,4 +1,6 @@
-const { PDFDocument, StandardFonts, rgb } = PDFLib;
+const PDFDocument = window.PDFLib ? window.PDFLib.PDFDocument : null;
+const StandardFonts = window.PDFLib ? window.PDFLib.StandardFonts : null;
+const rgb = window.PDFLib ? window.PDFLib.rgb : null;
 
 const documentTypes = [
   "Cover Page",
@@ -20,6 +22,7 @@ const packetSections = [
   "Table of Contents",
   "Warranty",
   "Datasheets",
+  "Control Panel Components",
   "Shop Drawings",
   "Appendix"
 ];
@@ -30,7 +33,8 @@ const sectionOrder = {
   "Warranty": 3,
   "Datasheets": 4,
   "Control Panel Components": 5,
-  "Shop Drawings": 6
+  "Shop Drawings": 6,
+  "Appendix": 7
 };
 
 function downloadFile(data, fileName, type) {
