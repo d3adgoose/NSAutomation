@@ -22,7 +22,8 @@ function handlePDFUpload(event) {
       packetSection: guessPacketSection(file.name),
       include: true,
       notes: "",
-      datasheetOrder: null
+      datasheetOrder: null,
+      tocEntries: []
     });
   });
 
@@ -99,16 +100,39 @@ function renderUploadedPdfList() {
     const row = document.createElement("div");
     row.className = "uploaded-pdf-row";
 
+    const subsectionButton = item.packetSection === "Datasheets"
+      ? `
+        <button onclick="openSubsectionModal('${item.id}')">
+          Subsections
+        </button>
+      `
+      : "";
+
+    const subsectionCount = item.packetSection === "Datasheets"
+      ? `
+        <div class="subsection-count">
+          ${(item.tocEntries || []).length} subsection(s)
+        </div>
+      `
+      : "";
+
     row.innerHTML = `
-      <div class="uploaded-pdf-name">
-        ${item.fileName}
+      <div>
+        <div class="uploaded-pdf-name">
+          ${item.fileName}
+        </div>
+        ${subsectionCount}
       </div>
 
-      <button
-        class="remove-pdf-btn"
-        onclick="removeUploadedPDF('${item.id}')">
-        Remove
-      </button>
+      <div class="button-row">
+        ${subsectionButton}
+
+        <button
+          class="remove-pdf-btn"
+          onclick="removeUploadedPDF('${item.id}')">
+          Remove
+        </button>
+      </div>
     `;
 
     container.appendChild(row);
@@ -204,14 +228,29 @@ async function buildPacket() {
       tocLevel: 0
     });
 
-    const detectedSubsections =
-      await detectTOCSubsections(
-        item.file,
-        item.packetSection,
-        startPage
-      );
+    if (item.packetSection === "Datasheets") {
+      const manualSubsections = (item.tocEntries || [])
+        .sort((a, b) => a.sourcePage - b.sourcePage)
+        .map(entry => ({
+          title: entry.title,
+          section: item.packetSection,
+          startPage: startPage + entry.sourcePage - 1,
+          tocLevel: entry.tocLevel || 1
+        }));
 
-    tocItems.push(...detectedSubsections);
+      tocItems.push(...manualSubsections);
+    } else {
+      const detectedSubsections =
+        await detectTOCSubsections(
+          item.file,
+          item.packetSection,
+          startPage
+        );
+
+      tocItems.push(...detectedSubsections);
+    }
+
+
     await appendPDF(finalPdf, item.file);
   }
 
@@ -288,6 +327,177 @@ function confirmDatasheetOrder() {
 
   pendingBuild = true;
   buildPacket();
+}
+
+async function openSubsectionModal(id) {
+  const item = pdfLibrary.find(x => x.id === id);
+  if (!item) return;
+
+  const modal = document.getElementById("subsectionModal");
+  const title = document.getElementById("subsectionModalTitle");
+  const activeId = document.getElementById("activeSubsectionPdfId");
+  const previewList = document.getElementById("subsectionPagePreviewList");
+
+  if (!modal || !title || !activeId || !previewList) return;
+
+  title.textContent = `Datasheet Subsections: ${item.displayTitle}`;
+  activeId.value = item.id;
+
+  document.getElementById("subsectionPageNumber").value = "";
+  document.getElementById("subsectionTitle").value = "";
+
+  previewList.innerHTML = "Loading page previews...";
+
+  renderCurrentSubsectionList();
+
+  modal.classList.remove("hidden");
+
+  await renderPDFPagePreviews(item);
+}
+
+function closeSubsectionModal() {
+  const modal = document.getElementById("subsectionModal");
+  if (modal) modal.classList.add("hidden");
+
+  renderUploadedPdfList();
+}
+
+async function renderPDFPagePreviews(item) {
+  const previewList = document.getElementById("subsectionPagePreviewList");
+  if (!previewList) return;
+
+  previewList.innerHTML = "";
+
+  const bytes = await item.file.arrayBuffer();
+
+  const pdf = await pdfjsLib.getDocument({
+    data: bytes
+  }).promise;
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+
+    const viewport = page.getViewport({ scale: 0.45 });
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "pdf-page-preview";
+    wrapper.dataset.pageNumber = pageNumber;
+
+    const label = document.createElement("div");
+    label.className = "page-preview-label";
+    label.textContent = `Page ${pageNumber}`;
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    wrapper.appendChild(label);
+    wrapper.appendChild(canvas);
+    previewList.appendChild(wrapper);
+
+    wrapper.addEventListener("click", () => {
+      document.querySelectorAll(".pdf-page-preview").forEach(el => {
+        el.classList.remove("selected");
+      });
+
+      wrapper.classList.add("selected");
+      document.getElementById("subsectionPageNumber").value = pageNumber;
+    });
+
+    await page.render({
+      canvasContext: context,
+      viewport
+    }).promise;
+  }
+}
+
+function addSubsectionEntry() {
+  const activeId = document.getElementById("activeSubsectionPdfId").value;
+  const pageNumber = Number(document.getElementById("subsectionPageNumber").value);
+  const title = document.getElementById("subsectionTitle").value.trim();
+
+  const item = pdfLibrary.find(x => x.id === activeId);
+  if (!item) return;
+
+  if (!pageNumber || pageNumber < 1) {
+    alert("Select a page for the subsection.");
+    return;
+  }
+
+  if (!title) {
+    alert("Enter a subsection name.");
+    return;
+  }
+
+  if (!item.tocEntries) {
+    item.tocEntries = [];
+  }
+
+  item.tocEntries.push({
+    id: crypto.randomUUID(),
+    title,
+    sourcePage: pageNumber,
+    tocLevel: 1
+  });
+
+  item.tocEntries.sort((a, b) => a.sourcePage - b.sourcePage);
+
+  document.getElementById("subsectionPageNumber").value = "";
+  document.getElementById("subsectionTitle").value = "";
+
+  document.querySelectorAll(".pdf-page-preview").forEach(el => {
+    el.classList.remove("selected");
+  });
+
+  renderCurrentSubsectionList();
+}
+
+function removeSubsectionEntry(entryId) {
+  const activeId = document.getElementById("activeSubsectionPdfId").value;
+  const item = pdfLibrary.find(x => x.id === activeId);
+  if (!item) return;
+
+  item.tocEntries = (item.tocEntries || []).filter(entry => entry.id !== entryId);
+
+  renderCurrentSubsectionList();
+}
+
+function renderCurrentSubsectionList() {
+  const activeId = document.getElementById("activeSubsectionPdfId").value;
+  const list = document.getElementById("currentSubsectionList");
+
+  if (!list) return;
+
+  const item = pdfLibrary.find(x => x.id === activeId);
+
+  if (!item || !item.tocEntries || item.tocEntries.length === 0) {
+    list.innerHTML = "<p>No subsections added yet.</p>";
+    return;
+  }
+
+  list.innerHTML = "";
+
+  item.tocEntries
+    .sort((a, b) => a.sourcePage - b.sourcePage)
+    .forEach(entry => {
+      const row = document.createElement("div");
+      row.className = "subsection-entry-row";
+
+      row.innerHTML = `
+        <div class="subsection-entry-info">
+          <strong>Page ${entry.sourcePage}</strong><br>
+          ${entry.title}
+        </div>
+
+        <button onclick="removeSubsectionEntry('${entry.id}')">
+          Remove
+        </button>
+      `;
+
+      list.appendChild(row);
+    });
 }
 
 async function appendPDF(finalPdf, file) {
@@ -441,8 +651,8 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
       const level = item.tocLevel || 0;
       const levelSettings = {
         0: { bullet: "•", bulletX: leftMargin + 18, titleX: leftMargin + 32 },
-        1: { bullet: "*", bulletX: leftMargin + 48, titleX: leftMargin + 62 },
-        2: { bullet: "▪", bulletX: leftMargin + 78, titleX: leftMargin + 92 }
+        1: { bullet: "-", bulletX: leftMargin + 48, titleX: leftMargin + 62 },
+        2: { bullet: "*", bulletX: leftMargin + 78, titleX: leftMargin + 92 }
       };
 
       const settings = levelSettings[level] || levelSettings[0];

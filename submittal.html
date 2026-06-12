@@ -76,6 +76,37 @@
     </div>
   </div>
 
+  <div id="subsectionModal" class="modal hidden">
+  <div class="modal-content large-modal">
+    <h2 id="subsectionModalTitle">Datasheet Subsections</h2>
+    <p>Preview the datasheet pages, select a page, and name the subsection.</p>
+
+    <div class="subsection-layout">
+      <div class="subsection-preview-panel">
+        <div id="subsectionPagePreviewList"></div>
+      </div>
+
+      <div class="subsection-form-panel">
+        <input type="hidden" id="activeSubsectionPdfId" />
+
+        <label>Selected Page</label>
+        <input id="subsectionPageNumber" type="number" min="1" placeholder="Click a page preview" />
+
+        <label>Subsection Name</label>
+        <input id="subsectionTitle" placeholder="Example: 5HP TEFC Motor" />
+
+        <div class="button-row">
+          <button onclick="addSubsectionEntry()">Add Subsection</button>
+          <button class="secondary" onclick="closeSubsectionModal()">Done</button>
+        </div>
+
+        <h3>Current Subsections</h3>
+        <div id="currentSubsectionList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
   <script src="common.js"></script>
   <script src="pdfStorage.js"></script>
   <script src="database.js"></script>

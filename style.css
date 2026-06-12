@@ -206,3 +206,80 @@ button:hover {
 .attach-pdf-btn:hover {
   background: #17476f;
 }
+
+.large-modal {
+  width: 1000px;
+  max-width: 95%;
+  max-height: 90vh;
+  overflow: hidden;
+}
+
+.subsection-layout {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 20px;
+}
+
+.subsection-preview-panel {
+  max-height: 65vh;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  padding: 12px;
+  background: #f9f9f9;
+}
+
+.subsection-form-panel {
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+.pdf-page-preview {
+  border: 2px solid transparent;
+  background: white;
+  padding: 8px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pdf-page-preview:hover {
+  border-color: #17476f;
+}
+
+.pdf-page-preview.selected {
+  border-color: #0b2d4d;
+  background: #e8eef4;
+}
+
+.pdf-page-preview canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.page-preview-label {
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.subsection-entry-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #ccc;
+  padding: 8px;
+  margin-top: 8px;
+  border-radius: 6px;
+  background: white;
+}
+
+.subsection-entry-info {
+  font-size: 14px;
+}
+
+.subsection-count {
+  font-size: 12px;
+  color: #555;
+  margin-top: 4px;
+}
