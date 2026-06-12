@@ -479,7 +479,7 @@ async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
     const fontSize = 11;
     const textWidth = font.widthOfTextAtSize(pageNumber, fontSize);
 
-    const edgeMargin = 10;
+    const edgeMargin = 5;
     const rotation = page.getRotation().angle;
 
     let x;
