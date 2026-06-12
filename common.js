@@ -29,8 +29,8 @@ const sectionOrder = {
   "Table of Contents": 2,
   "Warranty": 3,
   "Datasheets": 4,
-  "Shop Drawings": 5,
-  "Appendix": 6
+  "Control Panel Components": 5,
+  "Shop Drawings": 6
 };
 
 function downloadFile(data, fileName, type) {

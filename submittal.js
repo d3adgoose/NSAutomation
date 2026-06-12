@@ -36,11 +36,11 @@ function guessDocumentType(fileName) {
   if (name.includes("cover")) return "Cover Page";
   if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
   if (name.includes("warranty")) return "Warranty";
-  if (name.includes("shop")) return "Shop Drawing";
-  if (name.includes("drawing")) return "Drawing";
+  if (name.includes("shop") || name.includes ("drawing")) return "Shop Drawing";
   if (name.includes("manual")) return "Manual";
   if (name.includes("cert")) return "Certification";
   if (name.includes("spec")) return "Spec Sheet";
+  if (name.includes("control") && name.includes("panel")) return "Control Panel Components";
   if (name.includes("test")) return "Test Report";
 
   return "Datasheet";
@@ -52,6 +52,7 @@ function guessPacketSection(fileName) {
   if (type === "Cover Page") return "Cover Page";
   if (type === "Table of Contents") return "Table of Contents";
   if (type === "Warranty") return "Warranty";
+  if (type === "Control Panel Components") return "Control Panel Components";
   if (type === "Shop Drawing" || type === "Drawing") return "Shop Drawings";
   if (type === "Appendix" || type === "Other") return "Appendix";
 
@@ -144,15 +145,14 @@ async function buildPacket() {
   const datasheets = included
     .filter(x => x.packetSection === "Datasheets")
     .sort((a, b) => (a.datasheetOrder ?? 999) - (b.datasheetOrder ?? 999));
-
+  const controlPanelComponents = included.filter(x => x.packetSection === "Control Panel Components");
   const shopDrawings = included.filter(x => x.packetSection === "Shop Drawings");
-  const appendix = included.filter(x => x.packetSection === "Appendix");
 
   const contentFiles = [
     ...warranties,
     ...datasheets,
+    ...controlPanelComponents,
     ...shopDrawings,
-    ...appendix
   ];
 
   for (const item of coverPages) {
@@ -352,13 +352,25 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
 
   let y = startY - 145;
 
-  const sections = ["Warranty", "Datasheets", "Shop Drawings", "Appendix"];
+  const sectionDefinitions = [
+    "Warranty",
+    "Datasheets",
+    "Control Panel Components",
+    "Shop Drawings",
+    "Appendix"
+  ];
 
-  sections.forEach((section, index) => {
+  const romans = ["I", "II", "III", "IV", "V", "VI", "VII"];
+
+  let sectionNumber = 0;
+
+  sectionDefinitions.forEach(section => {
     const items = tocItems.filter(item => item.section === section);
+
     if (items.length === 0) return;
 
-    const roman = ["I", "II", "III", "IV"][index];
+    const roman = romans[sectionNumber];
+    sectionNumber++;
 
     page.drawText(`${roman}. ${section}`, {
       x: leftMargin,
