@@ -1,14 +1,17 @@
 const TOC_DETECTION_RULES = {
   Warranty: [
-  {
+    {
     title: "Manufacturer's Limited Warranty",
     patterns: [
-      "manufacturer's limited warranty",
-      "manufacturers limited warranty",
-      "manufacturer limited warranty",
-      "standard manufacturer's limited warranty"
+        "manufacturer’s limited warranty",
+        "manufacturer's limited warranty",
+        "manufacturers limited warranty",
+        "manufacturer limited warranty",
+        "limited warranty-transit",
+        "warranty-transit",
+        "expressed warranty"
     ]
-  },
+    },
   {
     title: "Warranty Procedures",
     patterns: [
@@ -42,7 +45,10 @@ async function detectTOCSubsections(file, section, baseStartPage) {
       const pageText = textContent.items
         .map(item => item.str)
         .join(" ")
-        .toLowerCase();
+        .toLowerCase()
+        .replace(/[’‘]/g, "'")
+        .replace(/[“”]/g, '"')
+        .replace(/\s+/g, " ");
 
       console.log("TOC detection page:", pageNumber, pageText);
 
