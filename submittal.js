@@ -200,17 +200,31 @@ async function buildPacket() {
     tocItems.push({
       title: item.displayTitle,
       section: item.packetSection,
-      startPage
+      startPage,
+      tocLevel: 0
     });
 
+    const detectedSubsections =
+      await detectTOCSubsections(
+        item.file,
+        item.packetSection,
+        startPage
+      );
+
+    tocItems.push(...detectedSubsections);
     await appendPDF(finalPdf, item.file);
   }
 
   await drawTOCOnExistingPage(finalPdf, tocPage, tocItems);
   await addPageNumbers(finalPdf, noNumberPageIndexes);
 
+  console.log("About to save PDF...");
+
   const pdfBytes = await finalPdf.save();
+
+  console.log("PDF saved. About to download...");
   downloadFile(pdfBytes, getOutputFileName(), "application/pdf");
+  console.log("Download function ran.");
 
   if (typeof mergeSubmittalIntoLibrary === "function") {
     try {
@@ -424,9 +438,18 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
     y -= 14;
 
     items.forEach(item => {
-      const bullet = "•";
-      const bulletX = leftMargin + 18;
-      const titleX = leftMargin + 32;
+      const level = item.tocLevel || 0;
+      const levelSettings = {
+        0: { bullet: "•", bulletX: leftMargin + 18, titleX: leftMargin + 32 },
+        1: { bullet: "*", bulletX: leftMargin + 48, titleX: leftMargin + 62 },
+        2: { bullet: "▪", bulletX: leftMargin + 78, titleX: leftMargin + 92 }
+      };
+
+      const settings = levelSettings[level] || levelSettings[0];
+
+      const bullet = settings.bullet;
+      const bulletX = settings.bulletX;
+      const titleX = settings.titleX;
       const pageNum = `${item.startPage}`;
       const pageNumWidth = times.widthOfTextAtSize(pageNum, 12);
       const pageNumX = pageRight - pageNumWidth;

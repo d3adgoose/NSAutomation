@@ -42,11 +42,17 @@ const sectionOrder = {
 
 function downloadFile(data, fileName, type) {
   const blob = new Blob([data], { type });
+  const url = URL.createObjectURL(blob);
+
   const link = document.createElement("a");
-
-  link.href = URL.createObjectURL(blob);
+  link.href = url;
   link.download = fileName;
-  link.click();
 
-  URL.revokeObjectURL(link.href);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 1000);
 }
