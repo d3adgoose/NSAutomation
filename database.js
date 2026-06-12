@@ -239,8 +239,15 @@ function exportLibraryCSV() {
   downloadFile(csv, "library-db.csv", "text/csv");
 }
 
-function mergeSubmittalIntoLibrary(items) {
-  items.forEach(i => {
+async function mergeSubmittalIntoLibrary(items) {
+  for (const i of items) {
+    let attachmentId = null;
+
+    if (i.file && typeof savePDFToIndexedDB === "function") {
+      attachmentId = crypto.randomUUID();
+      await savePDFToIndexedDB(attachmentId, i.file);
+    }
+
     const entry = {
       id: crypto.randomUUID(),
       uploadDate: new Date().toLocaleDateString(),
@@ -248,11 +255,12 @@ function mergeSubmittalIntoLibrary(items) {
       displayTitle: "",
       documentType: i.documentType || "Other",
       notes: "",
-      attachmentId: null
+      attachmentId,
+      attachmentFileName: i.fileName || ""
     };
 
     addLibraryEntry(entry, { silent: true });
-  });
+  }
 }
 
 window.addEventListener("load", () => {

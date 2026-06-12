@@ -145,14 +145,20 @@ async function buildPacket() {
   const datasheets = included
     .filter(x => x.packetSection === "Datasheets")
     .sort((a, b) => (a.datasheetOrder ?? 999) - (b.datasheetOrder ?? 999));
-  const controlPanelComponents = included.filter(x => x.packetSection === "Control Panel Components");
-  const shopDrawings = included.filter(x => x.packetSection === "Shop Drawings");
+
+  const controlPanelComponents = included.filter(
+    x => x.packetSection === "Control Panel Components"
+  );
+
+  const shopDrawings = included.filter(
+    x => x.packetSection === "Shop Drawings"
+  );
 
   const contentFiles = [
     ...warranties,
     ...datasheets,
     ...controlPanelComponents,
-    ...shopDrawings,
+    ...shopDrawings
   ];
 
   for (const item of coverPages) {
@@ -183,7 +189,7 @@ async function buildPacket() {
 
   if (typeof mergeSubmittalIntoLibrary === "function") {
     try {
-      mergeSubmittalIntoLibrary(included);
+      await mergeSubmittalIntoLibrary(included);
     } catch (e) {
       console.error("Error merging into library", e);
     }
