@@ -288,6 +288,7 @@ async function buildPacket() {
       title: item.displayTitle,
       section: item.packetSection,
       startPage,
+      targetPageIndex: finalPdf.getPageCount(),
       tocLevel: 0
     });
 
@@ -301,6 +302,7 @@ async function buildPacket() {
           title: entry.title,
           section: item.packetSection,
           startPage: startPage + entry.sourcePage - 1,
+          targetPageIndex: finalPdf.getPageCount() + entry.sourcePage - 1,
           tocLevel: entry.tocLevel || 1
         }));
 
@@ -585,6 +587,25 @@ async function appendPDF(finalPdf, file) {
   return addedIndexes;
 }
 
+function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPageIndex) {
+  const targetPage = pdfDoc.getPage(targetPageIndex);
+
+  const annotation = pdfDoc.context.obj({
+    Type: "Annot",
+    Subtype: "Link",
+    Rect: [x, y, x + width, y + height],
+    Border: [0, 0, 0],
+    A: {
+      Type: "Action",
+      S: "GoTo",
+      D: [targetPage.ref, "XYZ", null, null, null]
+    }
+  });
+
+  const annotationRef = pdfDoc.context.register(annotation);
+  sourcePage.node.addAnnot(annotationRef);
+}
+
 async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
   const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
@@ -754,6 +775,18 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
 
       const titleWidth = times.widthOfTextAtSize(item.title, 12);
       drawDottedLeader(titleX + titleWidth + 6, pageNumX - 8, y);
+
+      if (item.targetPageIndex !== undefined) {
+        addInternalPageLink(
+          pdfDoc,
+          page,
+          titleX,
+          y - 2,
+          titleWidth,
+          14,
+          item.targetPageIndex
+        );
+      }
 
       page.drawText(pageNum, {
         x: pageNumX,
