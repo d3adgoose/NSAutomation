@@ -330,7 +330,12 @@ async function buildPacket() {
   const pdfBytes = await finalPdf.save();
 
   console.log("PDF saved. About to download...");
-  downloadFile(pdfBytes, getOutputFileName(), "application/pdf");
+  const outputName =
+    typeof getOMOutputFileName === "function"
+      ? getOMOutputFileName()
+      : getOutputFileName();
+
+  downloadFile(pdfBytes, outputName, "application/pdf");
   console.log("Download function ran.");
 
   if (typeof mergeSubmittalIntoLibrary === "function") {
@@ -693,25 +698,51 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
     font: times
   });
 
-  centerText("Product Submittal", startY - 50, 18, timesBold);
+  const isOM =
+    typeof isOMPacket === "function" &&
+    isOMPacket();
+
+  const packetTitle =
+    typeof getPacketTitle === "function"
+      ? getPacketTitle()
+      : "Product Submittal";
+
+  const packetSubtitle =
+    typeof getPacketSubtitle === "function"
+      ? getPacketSubtitle()
+      : "";
+
+  if (isOM) {
+    centerText(packetTitle, startY - 50, 18, timesBoldItalic);
+    centerText(packetSubtitle, startY - 72, 18, timesBoldItalic);
+  } else {
+    centerText(packetTitle, startY - 50, 18, timesBold);
+  }
 
   const tocText = "Table of Contents";
   const tocSize = 20;
   const tocWidth = timesBoldItalic.widthOfTextAtSize(tocText, tocSize);
   const tocX = (width - tocWidth) / 2;
-
-  drawUnderlinedText(tocText, tocX, startY - 90, tocSize, timesBoldItalic);
-
   const pageNoX = pageRight - 55;
+
+  const tocHeaderY = isOM ? startY - 115 : startY - 90;
+  const pageNoY = isOM ? startY - 155 : startY - 130;
+  let y = isOM ? startY - 185 : startY - 160;
+
+  drawUnderlinedText(
+    tocText,
+    tocX,
+    tocHeaderY,
+    tocSize,
+    timesBoldItalic
+  );
 
   page.drawText("Page No.", {
     x: pageNoX,
-    y: startY - 130,
+    y: pageNoY,
     size: 12,
     font: times
   });
-
-  let y = startY - 160;
 
   const sectionDefinitions = [
     "Warranty",
