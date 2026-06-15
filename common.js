@@ -7,7 +7,13 @@ const documentTypes = [
   "Cover Page",
   "Table of Contents",
   "Warranty",
+  "Safety Procedure",
+  "Maintenance",
+  "Sequence of Operations",
+  "Parts List",
   "Datasheet",
+  "Control Panel Components",
+  "Electrical Schematic",
   "Shop Drawing",
   "Drawing",
   "Manual",
@@ -23,9 +29,15 @@ const packetSections = [
   "Cover Page",
   "Table of Contents",
   "Warranty",
+  "Safety Procedures",
+  "Maintenance",
+  "Sequence of Operations",
+  "Parts List",
   "Datasheets",
   "Control Panel Components",
+  "Electrical Schematics",
   "Shop Drawings",
+  "Manuals",
   "Appendix"
 ];
 
@@ -34,10 +46,16 @@ const sectionOrder = {
   "Cover Page": 2,
   "Table of Contents": 3,
   "Warranty": 4,
-  "Datasheets": 5,
-  "Control Panel Components": 6,
-  "Shop Drawings": 7,
-  "Appendix": 8
+  "Safety Procedures": 5,
+  "Maintenance": 6,
+  "Sequence of Operations": 7,
+  "Parts List": 8,
+  "Datasheets": 9,
+  "Control Panel Components": 10,
+  "Electrical Schematics": 11,
+  "Shop Drawings": 12,
+  "Manuals": 13,
+  "Appendix": 14
 };
 
 function downloadFile(data, fileName, type) {

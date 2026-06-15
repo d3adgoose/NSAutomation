@@ -65,6 +65,11 @@ function guessDocumentType(fileName) {
   if (name.includes("cover")) return "Cover Page";
   if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
   if (name.includes("warranty")) return "Warranty";
+  if (name.includes("safety")) return "Safety Procedures";
+  if (name.includes("maintenance")) return "Maintenance";
+  if (name.includes("sequence of operations") || name.includes("sequence of operation") || name.includes("operations sequence")) return "Sequence of Operations";
+  if (name.includes("parts list") || name.includes("part list")|| name.includes("parts") || name.includes("part")) return "Parts List";
+  if (name.includes("electrical schematic") || name.includes("electrical schematics") || name.includes("electrical diagram") || name.includes("schematic") || name.includes("diagram")) return "Electrical Schematics";
   if (name.includes("control") || name.includes("panel")) return "Control Panel Components";
   
   // Handles:
@@ -97,6 +102,11 @@ function guessPacketSection(fileName) {
   if (type === "Cover Page") return "Cover Page";
   if (type === "Table of Contents") return "Table of Contents";
   if (type === "Warranty") return "Warranty";
+  if (type === "Safety Procedures") return "Safety Procedures";
+  if (type === "Maintenance") return "Maintenance";
+  if (type === "Sequence of Operations") return "Sequence of Operations";
+  if (type === "Parts List") return "Parts List";
+  if (type === "Electrical Schematics") return "Electrical Schematics";
   if (type === "Control Panel Components") return "Control Panel Components";
   if (type === "Shop Drawing" || type === "Drawing") return "Shop Drawings";
   if (type === "Appendix" || type === "Other") return "Appendix";
@@ -259,12 +269,27 @@ async function buildPacket() {
     x => x.packetSection === "Shop Drawings"
   );
 
-  const contentFiles = [
-    ...warranties,
-    ...datasheets,
-    ...controlPanelComponents,
-    ...shopDrawings
-  ];
+  let contentFiles;
+
+  if (
+    typeof isOMPacket === "function" &&
+    isOMPacket()
+  ) {
+    contentFiles = [];
+
+    OM_SECTION_ORDER.forEach(section => {
+      contentFiles.push(
+        ...included.filter(x => x.packetSection === section)
+      );
+    });
+  } else {
+    contentFiles = [
+      ...warranties,
+      ...datasheets,
+      ...controlPanelComponents,
+      ...shopDrawings
+    ];
+  }
 
   // Revision Remarks comes FIRST, but is not numbered or in TOC
   for (const item of revisionRemarks) {
@@ -744,13 +769,24 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
     font: times
   });
 
-  const sectionDefinitions = [
-    "Warranty",
-    "Datasheets",
-    "Control Panel Components",
-    "Shop Drawings",
-    "Appendix"
-  ];
+  const sectionDefinitions = isOM
+    ? [
+        "Warranty",
+        "Safety Procedures",
+        "Maintenance",
+        "Sequence of Operations",
+        "Parts List",
+        "Datasheets",
+        "Electrical Schematics",
+        "Shop Drawings"
+      ]
+    : [
+        "Warranty",
+        "Datasheets",
+        "Control Panel Components",
+        "Shop Drawings",
+        "Appendix"
+      ];
 
   const romans = ["I", "II", "III", "IV", "V", "VI", "VII"];
 
