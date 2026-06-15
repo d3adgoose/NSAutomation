@@ -20,10 +20,10 @@ function saveLibraryDB() {
 function sortLibraryDB() {
   libraryDB.sort((a, b) => {
     if (a.documentType === b.documentType) {
-      return a.displayTitle.localeCompare(b.displayTitle);
+      return (a.displayTitle || "").localeCompare(a.displayTitle || "");
     }
 
-    return a.documentType.localeCompare(b.documentType);
+    return (a.documentType || "").localeCompare(b.documentType || "");
   });
 }
 
@@ -71,7 +71,12 @@ function renderLibraryDB() {
 
       <td>${item.uploadDate || ""}</td>
 
-      <td>${item.fileName || ""}</td>
+      <td>
+        <input
+          value="${item.fileName || ""}"
+          onchange="updateLibraryDBItem('${item.id}', 'fileName', this.value)"
+        />
+      </td>
 
       <td>
         <input
@@ -97,8 +102,25 @@ function renderLibraryDB() {
         ${
           item.attachmentId
             ? `
-              <button onclick="downloadSavedPDF('${item.attachmentId}')">Download</button>
-              <button onclick="removeAttachmentFromLibraryItem('${item.id}')">Remove PDF</button>
+              <div class="table-action-buttons">
+                <button onclick="renameLibraryFile('${item.id}')">
+                  Rename File
+                </button>
+
+                <button onclick="downloadSavedPDF('${item.attachmentId}', '${item.attachmentFileName || item.fileName || "download.pdf"}')">
+                  Download
+                </button>
+
+                <button
+                  class="delete-btn"
+                  onclick="removeAttachmentFromLibraryItem('${item.id}')">
+                  Remove PDF
+                </button>
+              </div>
+
+              <div class="attachment-name">
+                ${item.attachmentFileName || ""}
+              </div>
             `
             : `
               <label class="attach-pdf-btn">
@@ -135,7 +157,9 @@ function addLibraryEntryFromForm() {
     fileName,
     displayTitle,
     documentType,
-    notes
+    notes,
+    attachmentId: null,
+    attachmentFileName: ""
   };
 
   addLibraryEntry(entry);
@@ -185,6 +209,34 @@ function updateLibraryDBItem(id, field, value) {
   renderLibraryDB();
 }
 
+function renameLibraryFile(id) {
+  const item = libraryDB.find(x => x.id === id);
+  if (!item) return;
+
+  const currentName = item.attachmentFileName || item.fileName || "";
+
+  const newName = prompt("Enter the new PDF file name:", currentName);
+  if (newName === null) return;
+
+  let cleanName = newName.trim();
+
+  if (!cleanName) {
+    alert("File name cannot be blank.");
+    return;
+  }
+
+  if (!cleanName.toLowerCase().endsWith(".pdf")) {
+    cleanName += ".pdf";
+  }
+
+  item.attachmentFileName = cleanName;
+  item.fileName = cleanName;
+
+  saveLibraryDB();
+  sortLibraryDB();
+  renderLibraryDB();
+}
+
 async function attachPDFToLibraryItem(id, file) {
   if (!file) return;
 
@@ -197,6 +249,10 @@ async function attachPDFToLibraryItem(id, file) {
 
   item.attachmentId = attachmentId;
   item.attachmentFileName = file.name;
+
+  if (!item.fileName) {
+    item.fileName = file.name;
+  }
 
   saveLibraryDB();
   renderLibraryDB();
@@ -252,7 +308,7 @@ async function mergeSubmittalIntoLibrary(items) {
       id: crypto.randomUUID(),
       uploadDate: new Date().toLocaleDateString(),
       fileName: i.fileName || "",
-      displayTitle: "",
+      displayTitle: i.displayTitle || "",
       documentType: i.documentType || "Other",
       notes: "",
       attachmentId,

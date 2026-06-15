@@ -49,7 +49,7 @@ async function getPDFFromIndexedDB(id) {
   });
 }
 
-async function downloadSavedPDF(id) {
+async function downloadSavedPDF(id, customFileName = "") {
   const record = await getPDFFromIndexedDB(id);
 
   if (!record || !record.file) {
@@ -57,7 +57,9 @@ async function downloadSavedPDF(id) {
     return;
   }
 
-  downloadFile(record.file, record.fileName, "application/pdf");
+  const fileNameToUse = customFileName || record.fileName || "download.pdf";
+
+  downloadFile(record.file, fileNameToUse, "application/pdf");
 }
 
 async function deleteSavedPDF(id, refresh = true) {

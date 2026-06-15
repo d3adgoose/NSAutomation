@@ -309,3 +309,33 @@ button:hover {
   justify-content: flex-start;
   margin-bottom: 15px;
 }
+
+.table-action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.table-action-buttons button {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.table-action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.table-action-buttons button {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.attachment-name {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #555;
+}
