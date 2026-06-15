@@ -27,12 +27,27 @@ const OM_SECTION_ORDER = [
   "Shop Drawings"
 ];
 
+const OM_SECTION_LABELS = {
+  "Warranty": "Warranty",
+  "Safety Procedures": "Safety Procedures",
+  "Maintenance": "Maintenance",
+  "Sequence of Operations": "Sequence of Operations",
+  "Parts List": "Parts List",
+  "Datasheets": "Equipment Data",
+  "Electrical Schematics": "Electrical Schematics",
+  "Shop Drawings": "Shop Drawings"
+};
+
 function isOMPacket() {
   return true;
 }
 
 function getPacketTitle() {
   return "Operation & Maintenance Manual";
+}
+
+function getSectionLabel(section) {
+  return OM_SECTION_LABELS[section] || section;
 }
 
 function getPacketSubtitle() {

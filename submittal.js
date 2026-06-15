@@ -1,5 +1,6 @@
 let pdfLibrary = [];
 let pendingBuild = false;
+let customSectionLabels = {};
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -126,6 +127,44 @@ function sortLibraryBySection() {
 
     return 0;
   });
+}
+function renameTOCSections() {
+  const isOM =
+    typeof isOMPacket === "function" &&
+    isOMPacket();
+
+  const sections = isOM
+    ? OM_SECTION_ORDER
+    : [
+        "Warranty",
+        "Datasheets",
+        "Control Panel Components",
+        "Shop Drawings",
+        "Appendix"
+      ];
+
+  sections.forEach(section => {
+    const currentName = customSectionLabels[section] || section;
+
+    const newName = prompt(
+      `Rename TOC section "${section}" to:`,
+      currentName
+    );
+
+    if (newName === null) return;
+
+    const cleanName = newName.trim();
+
+    if (cleanName) {
+      customSectionLabels[section] = cleanName;
+    }
+  });
+
+  alert("Section names updated for this packet.");
+}
+
+function getSectionLabel(section) {
+  return customSectionLabels[section] || section;
 }
 
 function renamePdfTitle(id) {
@@ -802,7 +841,9 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
     const roman = romans[sectionNumber];
     sectionNumber++;
 
-    page.drawText(`${roman}. ${section}`, {
+    const sectionLabel = getSectionLabel(section);
+
+    page.drawText(`${roman}. ${sectionLabel}`, {
       x: leftMargin,
       y,
       size: 12,
