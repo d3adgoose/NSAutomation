@@ -6,8 +6,36 @@ if (pdfUpload) {
   pdfUpload.addEventListener("change", handlePDFUpload);
 }
 
+document.addEventListener("DOMContentLoaded", () => {
+  const dropZone = document.getElementById("dropZone");
+
+  if (!dropZone) return;
+
+  dropZone.addEventListener("dragover", e => {
+    e.preventDefault();
+    dropZone.classList.add("dragover");
+  });
+
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("dragover");
+  });
+
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+
+    handleDroppedFiles(e.dataTransfer.files);
+  });
+});
+
+
 function handlePDFUpload(event) {
-  const files = Array.from(event.target.files);
+  handleDroppedFiles(event.target.files);
+}
+
+function handleDroppedFiles(fileList) {
+  const files = Array.from(fileList)
+    .filter(file => file.type === "application/pdf");
 
   files.forEach(file => {
     const cleanName = file.name.replace(/\.pdf$/i, "");
@@ -90,6 +118,28 @@ function sortLibraryBySection() {
   });
 }
 
+function renamePdfTitle(id) {
+  const item = pdfLibrary.find(x => x.id === id);
+  if (!item) return;
+
+  const newTitle = prompt(
+    "Enter the name you want shown in the Table of Contents:",
+    item.displayTitle
+  );
+
+  if (newTitle === null) return;
+
+  const cleanTitle = newTitle.trim();
+
+  if (!cleanTitle) {
+    alert("The TOC name cannot be blank.");
+    return;
+  }
+
+  item.displayTitle = cleanTitle;
+  renderUploadedPdfList();
+}
+
 function renderUploadedPdfList() {
   const container = document.getElementById("uploadedPdfList");
   if (!container) return;
@@ -100,7 +150,11 @@ function renderUploadedPdfList() {
     const row = document.createElement("div");
     row.className = "uploaded-pdf-row";
 
-    const subsectionButton = item.packetSection === "Datasheets"
+    const canHaveSubsections =
+      item.packetSection === "Datasheets" ||
+      item.packetSection === "Control Panel Components";
+
+    const subsectionButton = canHaveSubsections
       ? `
         <button onclick="openSubsectionModal('${item.id}')">
           Subsections
@@ -108,7 +162,7 @@ function renderUploadedPdfList() {
       `
       : "";
 
-    const subsectionCount = item.packetSection === "Datasheets"
+    const subsectionCount = canHaveSubsections
       ? `
         <div class="subsection-count">
           ${(item.tocEntries || []).length} subsection(s)
@@ -121,10 +175,19 @@ function renderUploadedPdfList() {
         <div class="uploaded-pdf-name">
           ${item.fileName}
         </div>
+
+        <div class="uploaded-pdf-title">
+          TOC Name: ${item.displayTitle}
+        </div>
+
         ${subsectionCount}
       </div>
 
       <div class="button-row">
+        <button onclick="renamePdfTitle('${item.id}')">
+          Rename
+        </button>
+
         ${subsectionButton}
 
         <button
@@ -228,7 +291,10 @@ async function buildPacket() {
       tocLevel: 0
     });
 
-    if (item.packetSection === "Datasheets") {
+    if (
+      item.packetSection === "Datasheets" ||
+      item.packetSection === "Control Panel Components"
+    ) {
       const manualSubsections = (item.tocEntries || [])
         .sort((a, b) => a.sourcePage - b.sourcePage)
         .map(entry => ({
@@ -526,6 +592,7 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
 
   const projectNumber = document.getElementById("projectNumber").value || "";
   const projectName = document.getElementById("projectName").value || "";
+  const projectAddress = document.getElementById("projectAddress").value || "";
 
   const { width, height } = page.getSize();
 
@@ -598,25 +665,32 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
     font: times
   });
 
-  centerText("Product Submittal", startY - 35, 18, timesBold);
+  page.drawText(`Project Address: ${projectAddress}`, {
+    x: leftMargin,
+    y: startY - 30,
+    size: 12,
+    font: times
+  });
+
+  centerText("Product Submittal", startY - 50, 18, timesBold);
 
   const tocText = "Table of Contents";
   const tocSize = 20;
   const tocWidth = timesBoldItalic.widthOfTextAtSize(tocText, tocSize);
   const tocX = (width - tocWidth) / 2;
 
-  drawUnderlinedText(tocText, tocX, startY - 75, tocSize, timesBoldItalic);
+  drawUnderlinedText(tocText, tocX, startY - 90, tocSize, timesBoldItalic);
 
   const pageNoX = pageRight - 55;
 
   page.drawText("Page No.", {
     x: pageNoX,
-    y: startY - 120,
+    y: startY - 130,
     size: 12,
     font: times
   });
 
-  let y = startY - 145;
+  let y = startY - 160;
 
   const sectionDefinitions = [
     "Warranty",

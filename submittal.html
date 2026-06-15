@@ -34,9 +34,21 @@
     <section class="card">
       <h2>Upload PDFs</h2>
 
-      <div class="button-row">
-        <input type="file" id="pdfUpload" accept="application/pdf" multiple />
-        <button onclick="clearUploadedPDFs()">Clear PDFs</button>
+      <div class="button-row upload-toolbar">
+        <input
+          type="file"
+          id="pdfUpload"
+          accept="application/pdf"
+          multiple
+        />
+
+        <button onclick="clearUploadedPDFs()">
+          Clear PDFs
+        </button>
+      </div>
+
+      <div id="dropZone" class="drop-zone">
+        <p><strong>Drag & Drop PDFs Here</strong></p>
       </div>
 
       <div id="uploadedPdfList"></div>
@@ -48,6 +60,7 @@
       <div class="grid">
         <input id="projectNumber" placeholder="Project Number" />
         <input id="projectName" placeholder="Project Name" />
+        <input id="projectAddress" placeholder="Project Address" />
         <input id="revision" placeholder="Revision" />
       </div>
     </section>
