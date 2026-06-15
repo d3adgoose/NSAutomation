@@ -162,7 +162,8 @@ function renderUploadedPdfList() {
 
     const canHaveSubsections =
       item.packetSection === "Datasheets" ||
-      item.packetSection === "Control Panel Components";
+      item.packetSection === "Control Panel Components" ||
+      item.packetSection === "Electrical Schematics";
 
     const subsectionButton = canHaveSubsections
       ? `
@@ -319,7 +320,8 @@ async function buildPacket() {
 
     if (
       item.packetSection === "Datasheets" ||
-      item.packetSection === "Control Panel Components"
+      item.packetSection === "Control Panel Components" ||
+      item.packetSection === "Electrical Schematics"
     ) {
       const manualSubsections = (item.tocEntries || [])
         .sort((a, b) => a.sourcePage - b.sourcePage)
