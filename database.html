@@ -25,6 +25,17 @@
   </header>
 
   <main>
+    <section class="card" id="loginCard">
+      <h2>Database Login</h2>
+      <p>Log in to save PDFs to the shared company library. If not logged in, the database can save locally only.</p>
+
+      <div class="button-row">
+        <input id="loginEmail" placeholder="Work email" />
+        <button onclick="sendLoginLink()">Send Login Link</button>
+      </div>
+
+      <p id="loginStatus">Checking login status...</p>
+    </section>
     <section class="card">
       <h2>Database</h2>
 

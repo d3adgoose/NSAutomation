@@ -1,5 +1,47 @@
 let libraryDB = [];
 let pendingLibraryPdf = null;
+let currentUser = null;
+let useRemoteDatabase = false;
+
+async function checkDatabaseLogin() {
+  const { data } = await supabaseClient.auth.getUser();
+
+  currentUser = data.user || null;
+  useRemoteDatabase = !!currentUser;
+
+  const status = document.getElementById("loginStatus");
+
+  if (status) {
+    status.textContent = useRemoteDatabase
+      ? `Logged in as ${currentUser.email}`
+      : "Not logged in. Saving locally only.";
+  }
+}
+
+async function sendLoginLink() {
+  const email = document.getElementById("loginEmail").value.trim();
+
+  if (!email) {
+    alert("Enter your work email.");
+    return;
+  }
+
+  const { error } = await supabaseClient.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: false
+    }
+  });
+
+  if (error) {
+    console.error(error);
+    alert("Could not send login link.");
+    return;
+  }
+
+  document.getElementById("loginStatus").textContent =
+    "Login link sent. Check your email.";
+}
 
 const DOCUMENTS_TABLE = "documents";
 const DOCUMENTS_BUCKET = "document-library";
@@ -665,7 +707,8 @@ async function addLibraryEntryFromForm() {
   await loadLibraryDB();
 }
 
-window.addEventListener("load", () => {
+window.addEventListener("load", async () => {
+  await checkDatabaseLogin();
   loadLibraryDB();
   setupLibraryDropZone();
 
