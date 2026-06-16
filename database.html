@@ -21,21 +21,44 @@
 
   <header>
     <h1>Database</h1>
-    <p>Organize PDFs and keep your library up to date.</p>
+    <p>Log in to access the shared company PDF library, or save files locally.</p>
+    <div class="header-actions">
+      <button
+        id="loginButton"
+        class="login-btn"
+        onclick="openLoginModal()">
+        Login
+      </button>
+
+      <button
+        id="logoutButton"
+        class="secondary hidden"
+        onclick="logoutUser()">
+        Logout
+      </button>
+    </div>
   </header>
 
   <main>
-    <section class="card" id="loginCard">
-      <h2>Database Login</h2>
-      <p>Log in to save PDFs to the shared company library. If not logged in, the database can save locally only.</p>
+    <div id="loginModal" class="modal hidden">
+    <div class="modal-content login-modal-content">
+      <h2>Login</h2>
+      <p>Log in to save and access the shared company PDF library.</p>
+
+      <label>Email</label>
+      <input id="loginEmail" placeholder="Work email" />
+
+      <label>Password</label>
+      <input id="loginPassword" type="password" placeholder="Password" />
+
+      <p id="loginStatus">Not logged in. Saving locally only.</p>
 
       <div class="button-row">
-        <input id="loginEmail" placeholder="Work email" />
-        <button onclick="sendLoginLink()">Send Login Link</button>
+        <button onclick="sendLoginLink()">Log In</button>
+        <button class="secondary" onclick="closeLoginModal()">Close</button>
       </div>
-
-      <p id="loginStatus">Checking login status...</p>
-    </section>
+    </div>
+  </div>
     <section class="card">
       <h2>Database</h2>
 

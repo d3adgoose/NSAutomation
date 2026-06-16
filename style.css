@@ -285,7 +285,7 @@ button:hover {
 }
 
 .drop-zone {
-  border: 3px dashed #0078d4;
+  border: 3px dashed  #17476f;
   border-radius: 8px;
   padding: 30px;
   text-align: center;
@@ -296,7 +296,7 @@ button:hover {
 
 .drop-zone.dragover {
   background: #e6f2ff;
-  border-color: #005ea6;
+  border-color:  #17476f;;
 }
 
 .upload-instructions {
@@ -344,4 +344,40 @@ button:hover {
   margin: 10px 0 18px;
   font-size: 14px;
   color: #555;
+}
+
+.login-modal-content {
+  max-width: 420px;
+}
+
+.login-modal-content label {
+  display: block;
+  margin-top: 12px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.header-actions {
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.login-btn {
+  background: #17476f;
+  color: white;
+  border: none;
+  padding: 10px 18px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-btn:hover {
+  opacity: 0.9;
+}
+
+.hidden {
+  display: none !important;
 }

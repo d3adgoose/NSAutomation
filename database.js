@@ -3,6 +3,16 @@ let pendingLibraryPdf = null;
 let currentUser = null;
 let useRemoteDatabase = false;
 
+function openLoginModal() {
+  const modal = document.getElementById("loginModal");
+  if (modal) modal.classList.remove("hidden");
+}
+
+function closeLoginModal() {
+  const modal = document.getElementById("loginModal");
+  if (modal) modal.classList.add("hidden");
+}
+
 async function checkDatabaseLogin() {
   const { data } = await supabaseClient.auth.getUser();
 
@@ -16,31 +26,79 @@ async function checkDatabaseLogin() {
       ? `Logged in as ${currentUser.email}`
       : "Not logged in. Saving locally only.";
   }
+
+  const loginBtn = document.getElementById("loginButton");
+  const logoutBtn = document.getElementById("logoutButton");
+
+  if (useRemoteDatabase) {
+    if (loginBtn) {
+      loginBtn.textContent = currentUser.email;
+    }
+
+    if (logoutBtn) {
+      logoutBtn.classList.remove("hidden");
+    }
+  } else {
+    if (loginBtn) {
+      loginBtn.textContent = "Login";
+    }
+
+    if (logoutBtn) {
+      logoutBtn.classList.add("hidden");
+    }
+  }
+
+  if (!useRemoteDatabase) {
+    openLoginModal();
+  }
+}
+
+async function logoutUser() {
+  await supabaseClient.auth.signOut();
+
+  currentUser = null;
+  useRemoteDatabase = false;
+
+  const loginBtn = document.getElementById("loginButton");
+  const logoutBtn = document.getElementById("logoutButton");
+
+  if (loginBtn) {
+    loginBtn.textContent = "Login";
+  }
+
+  if (logoutBtn) {
+    logoutBtn.classList.add("hidden");
+  }
+
+  document.getElementById("loginStatus").textContent =
+    "Not logged in. Saving locally only.";
+
+  location.reload();
 }
 
 async function sendLoginLink() {
   const email = document.getElementById("loginEmail").value.trim();
+  const password = document.getElementById("loginPassword").value.trim();
 
-  if (!email) {
-    alert("Enter your work email.");
+  if (!email || !password) {
+    alert("Enter your email and password.");
     return;
   }
 
-  const { error } = await supabaseClient.auth.signInWithOtp({
+  const { error } = await supabaseClient.auth.signInWithPassword({
     email,
-    options: {
-      shouldCreateUser: false
-    }
+    password
   });
 
   if (error) {
-    console.error(error);
-    alert("Could not send login link.");
+    console.error("LOGIN ERROR:", error);
+    alert(error.message || "Could not log in.");
     return;
   }
 
-  document.getElementById("loginStatus").textContent =
-    "Login link sent. Check your email.";
+  await checkDatabaseLogin();
+  closeLoginModal();
+  await loadLibraryDB();
 }
 
 const DOCUMENTS_TABLE = "documents";
