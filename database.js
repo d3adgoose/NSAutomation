@@ -1,5 +1,6 @@
 let libraryDB = [];
 let pendingLibraryPdf = null;
+let selectedLibraryPDFIds = new Set();
 let currentUser = null;
 let useRemoteDatabase = false;
 
@@ -253,6 +254,14 @@ function renderLibraryDB() {
 
     row.innerHTML = `
       <td>
+        <input
+          type="checkbox"
+          ${selectedLibraryPDFIds.has(item.id) ? "checked" : ""}
+          onchange="toggleLibraryPDFSelection('${item.id}', this.checked)"
+        />
+      </td>
+
+      <td>
         <button
           class="delete-btn"
           onclick="removeLibraryDBEntry('${item.id}')">
@@ -298,6 +307,10 @@ function renderLibraryDB() {
                   Rename File
                 </button>
 
+                <button onclick="previewLibraryPDF('${item.id}')">
+                  Preview
+                </button>
+
                 <button onclick="downloadLibraryPDF('${item.id}')">
                   Download
                 </button>
@@ -317,11 +330,11 @@ function renderLibraryDB() {
               <label class="attach-pdf-btn">
                 Attach PDF
                 <input
-                  type="file"
-                  accept="application/pdf"
-                  style="display:none;"
-                  onchange="attachPDFToLibraryItem('${item.id}', this.files[0])"
-                />
+                type="file"
+                accept="application/pdf"
+                style="display:none;"
+                onchange="attachPDFToLibraryItem('${item.id}', this.files[0]); this.value='';"
+              />
               </label>
             `
         }
@@ -610,25 +623,24 @@ async function downloadLibraryPDF(id) {
 
 async function removeAttachmentFromLibraryItem(id) {
   const item = libraryDB.find(x => x.id === id);
-  if (!item || !item.storagePath) return;
+  if (!item) return;
 
   if (!confirm("Remove the attached PDF?")) return;
 
-  const { error: storageError } = await supabaseClient.storage
-    .from(DOCUMENTS_BUCKET)
-    .remove([item.storagePath]);
+  if (item.storagePath) {
+    const { error: storageError } = await supabaseClient.storage
+      .from(DOCUMENTS_BUCKET)
+      .remove([item.storagePath]);
 
-  if (storageError) {
-    console.error("Error removing PDF:", storageError);
-    alert("Could not remove PDF from storage.");
-    return;
+    if (storageError) {
+      console.warn("Storage file may already be missing:", storageError);
+    }
   }
 
   const { error: updateError } = await supabaseClient
     .from(DOCUMENTS_TABLE)
     .update({
-      storage_path: "",
-      //updated_at: new Date().toISOString()
+      storage_path: ""
     })
     .eq("id", id);
 
@@ -637,6 +649,8 @@ async function removeAttachmentFromLibraryItem(id) {
     alert("PDF removed, but database did not update.");
     return;
   }
+
+  item.storagePath = "";
 
   await loadLibraryDB();
 }
@@ -763,6 +777,295 @@ async function addLibraryEntryFromForm() {
 
   clearLibraryUpload();
   await loadLibraryDB();
+}
+
+function toggleLibraryPDFSelection(id, checked) {
+  if (checked) {
+    selectedLibraryPDFIds.add(id);
+  } else {
+    selectedLibraryPDFIds.delete(id);
+  }
+}
+
+async function getLibraryPDFBlob(item) {
+  if (!item || !item.storagePath) {
+    throw new Error("PDF attachment not found.");
+  }
+
+  const { data, error } = await supabaseClient.storage
+    .from(DOCUMENTS_BUCKET)
+    .download(item.storagePath);
+
+  if (error || !data) {
+    console.error("PDF download failed:", error);
+    throw new Error("Could not download PDF from storage.");
+  }
+
+  return data;
+}
+
+let activePreviewLibraryItem = null;
+
+async function previewLibraryPDF(id) {
+  try {
+    const item = libraryDB.find(x => x.id === id);
+
+    if (!item || !item.storagePath) {
+      alert("No PDF attached to preview.");
+      return;
+    }
+
+    activePreviewLibraryItem = item;
+
+    document.getElementById("libraryPreviewTitle").textContent =
+      item.fileName || "PDF Preview";
+
+    const modal = document.getElementById("libraryPreviewModal");
+    const list = document.getElementById("libraryPreviewPageList");
+
+    list.innerHTML = "Loading preview...";
+    modal.classList.remove("hidden");
+
+    const blob = await getLibraryPDFBlob(item);
+    const bytes = await blob.arrayBuffer();
+
+    const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+
+    list.innerHTML = "";
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 0.35 });
+
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({
+        canvasContext: context,
+        viewport
+      }).promise;
+
+      const pageCard = document.createElement("div");
+      pageCard.className = "page-preview-card";
+
+      pageCard.innerHTML = `
+        <div class="page-preview-label">Page ${pageNumber}</div>
+      `;
+
+      pageCard.appendChild(canvas);
+      list.appendChild(pageCard);
+    }
+  } catch (error) {
+    console.error("Preview failed:", error);
+    alert("Could not preview PDF.");
+  }
+}
+
+function closeLibraryPreviewModal() {
+  document.getElementById("libraryPreviewModal").classList.add("hidden");
+  activePreviewLibraryItem = null;
+}
+
+function closeLibraryMergeOrderModal() {
+  document
+    .getElementById("libraryMergeOrderModal")
+    .classList.add("hidden");
+}
+
+async function downloadPreviewedLibraryPDF() {
+  if (!activePreviewLibraryItem) {
+    alert("No PDF selected.");
+    return;
+  }
+
+  await downloadLibraryPDF(activePreviewLibraryItem.id);
+}
+async function mergeSelectedLibraryPDFs() {
+  const selectedItems = Array.from(selectedLibraryPDFIds)
+    .map(id => libraryDB.find(item => item.id === id))
+    .filter(item => item && item.storagePath);
+
+  if (selectedItems.length === 0) {
+    alert("Select at least one PDF with an attachment.");
+    return;
+  }
+
+  let fileName = document.getElementById("mergedLibraryFileName").value.trim();
+
+  if (!fileName) {
+    fileName = prompt("Enter a name for the merged PDF:", "Merged Library PDFs.pdf");
+  }
+
+  if (!fileName) return;
+
+  if (!fileName.toLowerCase().endsWith(".pdf")) {
+    fileName += ".pdf";
+  }
+
+  const mergedPdf = await PDFLib.PDFDocument.create();
+
+  for (const item of selectedItems) {
+    const blob = await getLibraryPDFBlob(item);
+    const bytes = await blob.arrayBuffer();
+
+    const sourcePdf = await PDFLib.PDFDocument.load(bytes);
+    const copiedPages = await mergedPdf.copyPages(
+      sourcePdf,
+      sourcePdf.getPageIndices()
+    );
+
+    copiedPages.forEach(page => mergedPdf.addPage(page));
+  }
+
+  const mergedBytes = await mergedPdf.save();
+
+  downloadFile(
+    mergedBytes,
+    fileName,
+    "application/pdf"
+  );
+}
+
+function openLibraryMergeOrderModal() {
+  const selectedItems = Array.from(selectedLibraryPDFIds)
+    .map(id => libraryDB.find(item => item.id === id))
+    .filter(item => item && item.storagePath);
+
+  if (selectedItems.length === 0) {
+    alert("Select at least one PDF with an attachment.");
+    return;
+  }
+
+  const list = document.getElementById("libraryMergeOrderList");
+  list.innerHTML = "";
+
+  selectedItems.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "datasheet-order-row";
+
+    const options = selectedItems.map((_, i) => `
+      <option value="${i + 1}" ${i === index ? "selected" : ""}>
+        ${i + 1}
+      </option>
+    `).join("");
+
+    row.innerHTML = `
+      <label>${item.fileName || item.displayTitle || "PDF"}</label>
+
+      <select data-id="${item.id}">
+        ${options}
+      </select>
+    `;
+
+    list.appendChild(row);
+  });
+
+  document.getElementById("libraryMergeOrderModal").classList.remove("hidden");
+}
+
+async function confirmLibraryMergeOrder() {
+  const selects = Array.from(
+    document.querySelectorAll("#libraryMergeOrderList select")
+  );
+
+  const orderedItems = selects
+    .map(select => ({
+      id: select.dataset.id,
+      order: Number(select.value) || 999
+    }))
+    .sort((a, b) => a.order - b.order)
+    .map(x => libraryDB.find(item => item.id === x.id))
+    .filter(item => item && item.storagePath);
+
+  if (orderedItems.length === 0) {
+    alert("No PDFs selected.");
+    return;
+  }
+
+  let fileName = document.getElementById("mergeOrderedFileName").value.trim();
+
+  if (!fileName) {
+    fileName = "Merged Library PDFs.pdf";
+  }
+
+  if (!fileName.toLowerCase().endsWith(".pdf")) {
+    fileName += ".pdf";
+  }
+
+  const mergedPdf = await PDFLib.PDFDocument.create();
+
+  for (const item of orderedItems) {
+    const blob = await getLibraryPDFBlob(item);
+    const bytes = await blob.arrayBuffer();
+
+    const sourcePdf = await PDFLib.PDFDocument.load(bytes);
+    const copiedPages = await mergedPdf.copyPages(
+      sourcePdf,
+      sourcePdf.getPageIndices()
+    );
+
+    copiedPages.forEach(page => mergedPdf.addPage(page));
+  }
+
+  const mergedBytes = await mergedPdf.save();
+
+  downloadFile(mergedBytes, fileName, "application/pdf");
+
+  closeLibraryMergeOrderModal();
+}
+
+async function confirmLibraryMergeOrder() {
+  const inputs = Array.from(
+    document.querySelectorAll("#libraryMergeOrderList input")
+  );
+
+  const orderedItems = inputs
+    .map(input => ({
+      id: input.dataset.id,
+      order: Number(input.value) || 999
+    }))
+    .sort((a, b) => a.order - b.order)
+    .map(x => libraryDB.find(item => item.id === x.id))
+    .filter(item => item && item.storagePath);
+
+  if (orderedItems.length === 0) {
+    alert("No PDFs selected.");
+    return;
+  }
+
+  let fileName = document.getElementById("mergeOrderedFileName").value.trim();
+
+  if (!fileName) {
+    fileName = "Merged Library PDFs.pdf";
+  }
+
+  if (!fileName.toLowerCase().endsWith(".pdf")) {
+    fileName += ".pdf";
+  }
+
+  const mergedPdf = await PDFLib.PDFDocument.create();
+
+  for (const item of orderedItems) {
+    const blob = await getLibraryPDFBlob(item);
+    const bytes = await blob.arrayBuffer();
+
+    const sourcePdf = await PDFLib.PDFDocument.load(bytes);
+    const copiedPages = await mergedPdf.copyPages(
+      sourcePdf,
+      sourcePdf.getPageIndices()
+    );
+
+    copiedPages.forEach(page => mergedPdf.addPage(page));
+  }
+
+  const mergedBytes = await mergedPdf.save();
+
+  downloadFile(mergedBytes, fileName, "application/pdf");
+
+  closeLibraryMergeOrderModal();
 }
 
 window.addEventListener("load", async () => {

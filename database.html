@@ -87,6 +87,7 @@
         <input id="libDisplayTitle" placeholder="File Location" />
 
         <select id="libDocumentType">
+          <option value="Datasheet">Datasheet</option>
           <option value="Revision Remarks">Revision Remarks</option>
           <option value="Cover Page">Cover Page</option>
           <option value="Table of Contents">Table of Contents</option>
@@ -95,7 +96,6 @@
           <option value="Maintenance">Maintenance</option>
           <option value="Sequence of Operations">Sequence of Operations</option>
           <option value="Parts List">Parts List</option>
-          <option value="Datasheet">Datasheet</option>
           <option value="Control Panel Components">Control Panel Components</option>
           <option value="Electrical Schematics">Electrical Schematics</option>
           <option value="Shop Drawing">Shop Drawing</option>
@@ -112,8 +112,7 @@
       <textarea
         id="libNotes"
         placeholder="Notes (optional)"
-        rows="3">
-      </textarea>
+        rows="3"></textarea>
 
       <div class="button-row">
         <button id="addLibraryEntryButton">Add to Library</button>
@@ -123,6 +122,10 @@
 
     <section class="card">
       <h2>Library</h2>
+      <div class="button-row">
+        <input id="mergedLibraryFileName" placeholder="Merged PDF name" />
+        <button onclick="openLibraryMergeOrderModal()">Merge</button>
+      </div>
 
       <div style="margin-top:12px; margin-bottom:12px;">
         <input
@@ -135,6 +138,7 @@
       <table>
         <thead>
           <tr>
+            <th>Select</th>
             <th>Actions</th>
             <th>Date</th>
             <th>File Name</th>
@@ -150,6 +154,46 @@
     </section>
   </main>
 
+  <div id="libraryPreviewModal" class="modal hidden">
+    <div class="modal-content large-modal">
+      <h2 id="libraryPreviewTitle">PDF Preview</h2>
+
+      <div class="preview-modal-actions">
+        <button onclick="downloadPreviewedLibraryPDF()">Download PDF</button>
+        <button class="secondary" onclick="closeLibraryPreviewModal()">Close</button>
+      </div>
+
+      <div class="subsection-layout">
+        <div class="subsection-preview-panel">
+          <div id="libraryPreviewPageList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="libraryMergeOrderModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Organize Merge Order</h2>
+      <p>Choose which PDF should go first, second, third, etc.</p>
+
+      <input id="mergeOrderedFileName" placeholder="Merged PDF name" />
+
+      <div id="libraryMergeOrderList"></div>
+
+      <div class="button-row">
+        <button onclick="confirmLibraryMergeOrder()">Merge PDFs</button>
+        <button class="secondary" onclick="closeLibraryMergeOrderModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  </script>
   <script src="common.js"></script>
   <script src="pdfStorage.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
