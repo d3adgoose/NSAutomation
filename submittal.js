@@ -276,6 +276,135 @@ function clearUploadedPDFs() {
   pendingBuild = false;
   renderUploadedPdfList();
 }
+async function drawGeneratedCoverPage(pdfDoc) {
+  const page = pdfDoc.addPage([612, 792]);
+
+  const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+  const projectName = document.getElementById("projectName")?.value || "";
+  const projectLocation = document.getElementById("projectLocation")?.value || "";
+  const washType = document.getElementById("washType")?.value || "Car Wash";
+  const systemName = document.getElementById("systemName")?.value || "";
+  const revision = document.getElementById("revision")?.value || "0";
+  const dateMade = new Date().toLocaleDateString();
+
+  const usableWidth = 425;
+  const logoX = 430;
+
+  try {
+    const res = await fetch("Files/CoverPage/NSCoverLogo.png");
+
+    if (!res.ok) {
+      throw new Error("Cover logo not found");
+    }
+
+    const logoBytes = await res.arrayBuffer();
+    const logoImage = await pdfDoc.embedPng(logoBytes);
+
+    page.drawImage(logoImage, {
+      x: logoX,
+      y: 0,
+      width: 182,
+      height: 792
+    });
+  } catch (err) {
+    console.warn("Unable to load cover page logo.", err);
+  }
+
+  function splitTextToFit(text, font, size, maxWidth) {
+    const words = String(text).split(" ");
+    const lines = [];
+    let currentLine = "";
+
+    words.forEach(word => {
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      const testWidth = font.widthOfTextAtSize(testLine, size);
+
+      if (testWidth <= maxWidth) {
+        currentLine = testLine;
+      } else {
+        if (currentLine) lines.push(currentLine);
+        currentLine = word;
+      }
+    });
+
+    if (currentLine) lines.push(currentLine);
+    return lines;
+  }
+
+  function centerWrappedText(text, startY, size, font, lineGap = 28) {
+    const lines = splitTextToFit(text, font, size, usableWidth - 40);
+    let y = startY;
+
+    lines.forEach(line => {
+      const textWidth = font.widthOfTextAtSize(line, size);
+
+      page.drawText(line, {
+        x: (usableWidth - textWidth) / 2,
+        y,
+        size,
+        font,
+        color: rgb(0, 0, 0)
+      });
+
+      y -= lineGap;
+    });
+
+    return y;
+  }
+
+  let y = 675;
+
+  y = centerWrappedText(projectName, y, 22, timesBold, 28);
+  y = centerWrappedText(washType, y - 8, 22, timesBold, 28);
+
+  if (projectLocation) {
+    centerWrappedText(projectLocation, y - 5, 18, times, 22);
+  }
+
+  centerWrappedText("Product Submittal", 465, 22, timesBold, 28);
+
+  centerWrappedText(systemName, 250, 20, timesBold, 24);
+  centerWrappedText("Vehicle Wash System", 220, 18, timesBold, 22);
+
+  page.drawText("By N/S Corporation", {
+    x: 25,
+    y: 120,
+    size: 18,
+    font: timesBold
+  });
+
+  page.drawText("28309 Avenue Crocker,", {
+    x: 25,
+    y: 98,
+    size: 12,
+    font: times
+  });
+
+  page.drawText("Valencia, CA 91355", {
+    x: 25,
+    y: 82,
+    size: 12,
+    font: times
+  });
+
+  page.drawText(`Revision: ${revision}`, {
+    x: 25,
+    y: 42,
+    size: 12,
+    font: times
+  });
+
+  page.drawText(dateMade, {
+    x: 25,
+    y: 25,
+    size: 12,
+    font: times
+  });
+
+  return page;
+}
 
 async function buildPacket() {
   const includedDatasheets = pdfLibrary.filter(item =>
@@ -295,7 +424,7 @@ async function buildPacket() {
   const included = pdfLibrary.filter(item => item.include);
 
   const revisionRemarks = included.filter(x => x.packetSection === "Revision Remarks");
-  const coverPages = included.filter(x => x.packetSection === "Cover Page");
+  //const coverPages = included.filter(x => x.packetSection === "Cover Page");
   const warranties = included.filter(x => x.packetSection === "Warranty");
 
   const datasheets = included
@@ -338,10 +467,8 @@ async function buildPacket() {
     noNumberPageIndexes.push(...addedIndexes);
   }
 
-  // Cover Page comes after Revision Remarks
-  for (const item of coverPages) {
-    await appendPDF(finalPdf, item.file);
-  }
+  // Generated Cover Page comes after Revision Remarks
+  await drawGeneratedCoverPage(finalPdf);
 
   const tocPage = finalPdf.addPage([612, 792]);
 
@@ -686,7 +813,8 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
 
   const projectNumber = document.getElementById("projectNumber").value || "";
   const projectName = document.getElementById("projectName").value || "";
-  const projectAddress = document.getElementById("projectAddress").value || "";
+  const projectAddress =
+  document.getElementById("projectLocation")?.value || "";
 
   const { width, height } = page.getSize();
 
