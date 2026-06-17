@@ -41,7 +41,8 @@
           <ol>
             <li>
               Upload PDFs using the <strong>Choose Files</strong> button or by
-              <strong>dragging and dropping</strong> files into the upload area.
+              <strong>dragging and dropping</strong> files into the upload area. Do not include a cover page or table of contents - these will be generated automatically. 
+              PDFs should be named according to the conventions outlined in the documentation.
             </li>
 
             <li>
@@ -50,17 +51,17 @@
             </li>
 
             <li>
-              Use <strong>Edit TOC Title</strong> to rename how a document appears
+              Use <strong>Edit TOC Sections</strong> to rename how a document appears
               in the Table of Contents.
             </li>
 
             <li>
-              Use <strong>Subsections</strong> to add individual items from
+              Use <strong>Subsections</strong> to add individual tabs from
               Datasheets, Control Panel Components, etc. into the TOC.
             </li>
 
             <li>
-              Enter the Project Number, Project Name, Project Address, and Revision.
+              Enter the Project Number, Project Name, Project Address, System Name, and Revision.
             </li>
 
             <li>
@@ -109,7 +110,19 @@
       <div class="grid">
         <input id="projectNumber" placeholder="Project Number" />
         <input id="projectName" placeholder="Project Name" />
-        <input id="projectAddress" placeholder="Project Address" />
+
+        <input
+          id="projectLocation"
+          placeholder="Project Address ex: Rancho Cucamonga, California"
+        />
+
+        <select id="washType">
+          <option value="Car Wash">Car Wash</option>
+          <option value="Transit Wash">Transit Wash</option>
+        </select>
+
+        <input id="systemName" placeholder="System Name ex: ECO5-SS-FLT" />
+
         <input id="revision" placeholder="Revision" />
       </div>
     </section>

@@ -363,7 +363,23 @@ async function drawGeneratedCoverPage(pdfDoc) {
     centerWrappedText(projectLocation, y - 5, 18, times, 22);
   }
 
-  centerWrappedText("Product Submittal", 465, 22, timesBold, 28);
+  const packetTitle =
+    typeof getPacketTitle === "function"
+      ? getPacketTitle()
+      : "Product Submittal";
+
+  const titleSize =
+    packetTitle === "Operation & Maintenance Manual"
+      ? 18
+      : 22;
+
+  centerWrappedText(
+    packetTitle,
+    465,
+    titleSize,
+    timesBold,
+    28
+  );
 
   centerWrappedText(systemName, 250, 20, timesBold, 24);
   centerWrappedText("Vehicle Wash System", 220, 18, timesBold, 22);
