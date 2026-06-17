@@ -23,8 +23,11 @@ const OM_SECTION_ORDER = [
   "Sequence of Operations",
   "Parts List",
   "Datasheets",
+  "Control Panel Components",
   "Electrical Schematics",
-  "Shop Drawings"
+  "Shop Drawings",
+  "Manuals",
+  "Appendix"
 ];
 
 const OM_SECTION_LABELS = {
@@ -34,8 +37,11 @@ const OM_SECTION_LABELS = {
   "Sequence of Operations": "Sequence of Operations",
   "Parts List": "Parts List",
   "Datasheets": "Equipment Data",
+  "Control Panel Components": "Control Panel Components",
   "Electrical Schematics": "Electrical Schematics",
-  "Shop Drawings": "Shop Drawings"
+  "Shop Drawings": "Shop Drawings",
+  "Manuals": "Manuals",
+  "Appendix": "Appendix"
 };
 
 function isOMPacket() {

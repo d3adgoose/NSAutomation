@@ -928,6 +928,31 @@ async function mergeSelectedLibraryPDFs() {
     "application/pdf"
   );
 }
+function getDragAfterElement(container, y) {
+  const draggableElements = [
+    ...container.querySelectorAll(".order-row:not(.dragging)")
+  ];
+
+  return draggableElements.reduce(
+    (closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+
+      if (offset < 0 && offset > closest.offset) {
+        return {
+          offset,
+          element: child
+        };
+      }
+
+      return closest;
+    },
+    {
+      offset: Number.NEGATIVE_INFINITY,
+      element: null
+    }
+  ).element;
+}
 
 function openLibraryMergeOrderModal() {
   const selectedItems = Array.from(selectedLibraryPDFIds)
@@ -942,42 +967,58 @@ function openLibraryMergeOrderModal() {
   const list = document.getElementById("libraryMergeOrderList");
   list.innerHTML = "";
 
-  selectedItems.forEach((item, index) => {
+  selectedItems.forEach(item => {
     const row = document.createElement("div");
-    row.className = "datasheet-order-row";
 
-    const options = selectedItems.map((_, i) => `
-      <option value="${i + 1}" ${i === index ? "selected" : ""}>
-        ${i + 1}
-      </option>
-    `).join("");
+    row.className = "order-row";
+    row.draggable = true;
+    row.dataset.id = item.id;
 
     row.innerHTML = `
-      <label>${item.fileName || item.displayTitle || "PDF"}</label>
-
-      <select data-id="${item.id}">
-        ${options}
-      </select>
+      <span class="drag-handle">☰</span>
+      <span>${item.fileName || item.displayTitle}</span>
     `;
+
+    row.addEventListener("dragstart", () => {
+      row.classList.add("dragging");
+    });
+
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+    });
 
     list.appendChild(row);
   });
 
-  document.getElementById("libraryMergeOrderModal").classList.remove("hidden");
+  list.ondragover = e => {
+    e.preventDefault();
+
+    const dragging = list.querySelector(".dragging");
+    const afterElement = getDragAfterElement(list, e.clientY);
+
+    if (!dragging) return;
+
+    if (afterElement == null) {
+      list.appendChild(dragging);
+    } else {
+      list.insertBefore(dragging, afterElement);
+    }
+  };
+
+  document
+    .getElementById("libraryMergeOrderModal")
+    .classList.remove("hidden");
 }
 
 async function confirmLibraryMergeOrder() {
-  const selects = Array.from(
-    document.querySelectorAll("#libraryMergeOrderList select")
+  const rows = Array.from(
+    document.querySelectorAll("#libraryMergeOrderList .order-row")
   );
 
-  const orderedItems = selects
-    .map(select => ({
-      id: select.dataset.id,
-      order: Number(select.value) || 999
-    }))
-    .sort((a, b) => a.order - b.order)
-    .map(x => libraryDB.find(item => item.id === x.id))
+  const orderedItems = rows
+    .map(row =>
+      libraryDB.find(item => item.id === row.dataset.id)
+    )
     .filter(item => item && item.storagePath);
 
   if (orderedItems.length === 0) {
@@ -985,7 +1026,8 @@ async function confirmLibraryMergeOrder() {
     return;
   }
 
-  let fileName = document.getElementById("mergeOrderedFileName").value.trim();
+  let fileName =
+    document.getElementById("mergeOrderedFileName").value.trim();
 
   if (!fileName) {
     fileName = "Merged Library PDFs.pdf";
@@ -1002,6 +1044,7 @@ async function confirmLibraryMergeOrder() {
     const bytes = await blob.arrayBuffer();
 
     const sourcePdf = await PDFLib.PDFDocument.load(bytes);
+
     const copiedPages = await mergedPdf.copyPages(
       sourcePdf,
       sourcePdf.getPageIndices()
@@ -1012,58 +1055,11 @@ async function confirmLibraryMergeOrder() {
 
   const mergedBytes = await mergedPdf.save();
 
-  downloadFile(mergedBytes, fileName, "application/pdf");
-
-  closeLibraryMergeOrderModal();
-}
-
-async function confirmLibraryMergeOrder() {
-  const inputs = Array.from(
-    document.querySelectorAll("#libraryMergeOrderList input")
+  downloadFile(
+    mergedBytes,
+    fileName,
+    "application/pdf"
   );
-
-  const orderedItems = inputs
-    .map(input => ({
-      id: input.dataset.id,
-      order: Number(input.value) || 999
-    }))
-    .sort((a, b) => a.order - b.order)
-    .map(x => libraryDB.find(item => item.id === x.id))
-    .filter(item => item && item.storagePath);
-
-  if (orderedItems.length === 0) {
-    alert("No PDFs selected.");
-    return;
-  }
-
-  let fileName = document.getElementById("mergeOrderedFileName").value.trim();
-
-  if (!fileName) {
-    fileName = "Merged Library PDFs.pdf";
-  }
-
-  if (!fileName.toLowerCase().endsWith(".pdf")) {
-    fileName += ".pdf";
-  }
-
-  const mergedPdf = await PDFLib.PDFDocument.create();
-
-  for (const item of orderedItems) {
-    const blob = await getLibraryPDFBlob(item);
-    const bytes = await blob.arrayBuffer();
-
-    const sourcePdf = await PDFLib.PDFDocument.load(bytes);
-    const copiedPages = await mergedPdf.copyPages(
-      sourcePdf,
-      sourcePdf.getPageIndices()
-    );
-
-    copiedPages.forEach(page => mergedPdf.addPage(page));
-  }
-
-  const mergedBytes = await mergedPdf.save();
-
-  downloadFile(mergedBytes, fileName, "application/pdf");
 
   closeLibraryMergeOrderModal();
 }

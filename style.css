@@ -415,3 +415,98 @@ button:hover {
   gap: 10px;
   margin-bottom: 16px;
 }
+
+.modal-content {
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+#datasheetOrderList {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.order-row {
+  cursor: grab;
+}
+
+.order-row.dragging {
+  opacity: 0.5;
+}
+
+#datasheetOrderList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.order-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #ffffff;
+  border: 1px solid #d9dde3;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.order-row:hover {
+  background: #f7f9fc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.12);
+}
+
+.order-row.dragging {
+  opacity: 0.65;
+  transform: scale(1.02);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.18);
+  cursor: grabbing;
+}
+
+.drag-handle {
+  font-size: 20px;
+  color: #6b7280;
+  cursor: grab;
+}
+
+.order-row::after {
+  content: "Drag to reorder";
+  margin-left: auto;
+  font-size: 12px;
+  color: #8a8f98;
+}
+
+#libraryMergeOrderModal .modal-content {
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+#mergeOrderedFileName {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 20px 0;
+  position: relative;
+  z-index: 1;
+}
+
+#libraryMergeOrderList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding-right: 8px;
+  position: relative;
+  z-index: 2;
+}
+
+#libraryMergeOrderList .order-row {
+  position: relative;
+  z-index: 3;
+}

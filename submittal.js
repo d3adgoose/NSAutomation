@@ -558,17 +558,22 @@ async function buildPacket() {
   const tocItems = [];
 
   let currentSection = null;
+  const sectionStartPages = {};
 
   for (const item of contentFiles) {
-  if (item.packetSection !== currentSection) {
-    currentSection = item.packetSection;
+    if (item.packetSection !== currentSection) {
+      currentSection = item.packetSection;
 
-    const sectionLabel = getSectionLabel(currentSection);
+      const sectionLabel = getSectionLabel(currentSection);
 
-    await drawSectionDividerPage(finalPdf, sectionLabel);
-  }
+      await drawSectionDividerPage(finalPdf, sectionLabel);
 
-  const startPage = finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+      sectionStartPages[currentSection] =
+        finalPdf.getPageCount() - noNumberPageIndexes.length;
+    }
+
+    const startPage =
+      finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
 
     tocItems.push({
       title: item.displayTitle,
@@ -610,7 +615,13 @@ async function buildPacket() {
     await appendPDF(finalPdf, item.file);
   }
 
-  await drawTOCOnExistingPage(finalPdf, tocPage, tocItems);
+  await drawTOCOnExistingPage(
+    finalPdf,
+    tocPage,
+    tocItems,
+    sectionStartPages,
+    noNumberPageIndexes
+  );
   await addPageNumbers(finalPdf, noNumberPageIndexes);
 
   console.log("About to save PDF...");
@@ -643,28 +654,72 @@ function openDatasheetOrderModal(datasheets) {
 
   list.innerHTML = "";
 
-  datasheets.forEach((item, index) => {
-    const currentOrder = item.datasheetOrder || index + 1;
+  datasheets
+    .sort((a, b) => (a.datasheetOrder ?? 999) - (b.datasheetOrder ?? 999))
+    .forEach(item => {
+      const row = document.createElement("div");
+      row.className = "order-row";
+      row.draggable = true;
+      row.dataset.id = item.id;
 
-    const row = document.createElement("div");
-    row.className = "order-row";
+      row.innerHTML = `
+        <span class="drag-handle">☰</span>
+        <span>${item.displayTitle}</span>
+      `;
 
-    row.innerHTML = `
-      <select data-id="${item.id}">
-        ${datasheets.map((_, i) => `
-          <option value="${i + 1}" ${i + 1 === currentOrder ? "selected" : ""}>
-            ${i + 1}
-          </option>
-        `).join("")}
-      </select>
+      row.addEventListener("dragstart", () => {
+        row.classList.add("dragging");
+      });
 
-      <span>${item.displayTitle}</span>
-    `;
+      row.addEventListener("dragend", () => {
+        row.classList.remove("dragging");
+      });
 
-    list.appendChild(row);
+      list.appendChild(row);
+    });
+
+  list.addEventListener("dragover", e => {
+    e.preventDefault();
+
+    const dragging = list.querySelector(".dragging");
+    const afterElement = getDragAfterElement(list, e.clientY);
+
+    if (!dragging) return;
+
+    if (afterElement == null) {
+      list.appendChild(dragging);
+    } else {
+      list.insertBefore(dragging, afterElement);
+    }
   });
 
   modal.classList.remove("hidden");
+}
+
+function getDragAfterElement(container, y) {
+  const draggableElements = [
+    ...container.querySelectorAll(".order-row:not(.dragging)")
+  ];
+
+  return draggableElements.reduce(
+    (closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+
+      if (offset < 0 && offset > closest.offset) {
+        return {
+          offset,
+          element: child
+        };
+      }
+
+      return closest;
+    },
+    {
+      offset: Number.NEGATIVE_INFINITY,
+      element: null
+    }
+  ).element;
 }
 
 function closeDatasheetOrderModal() {
@@ -673,12 +728,15 @@ function closeDatasheetOrderModal() {
 }
 
 function confirmDatasheetOrder() {
-  const selects = Array.from(document.querySelectorAll("#datasheetOrderList select"));
+  const rows = Array.from(
+    document.querySelectorAll("#datasheetOrderList .order-row")
+  );
 
-  selects.forEach(select => {
-    const item = pdfLibrary.find(x => x.id === select.dataset.id);
+  rows.forEach((row, index) => {
+    const item = pdfLibrary.find(x => x.id === row.dataset.id);
+
     if (item) {
-      item.datasheetOrder = Number(select.value);
+      item.datasheetOrder = index + 1;
     }
   });
 
@@ -899,17 +957,14 @@ function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPage
   sourcePage.node.addAnnot(annotationRef);
 }
 
-async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
+async function drawTOCOnExistingPage(pdfDoc, page, tocItems, sectionStartPages = {}, noNumberPageIndexes = []) {
   const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
   const timesBoldItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
 
-  const projectNumber = document.getElementById("projectNumber").value || "";
-  const projectName = document.getElementById("projectName").value || "";
-  const projectAddress =
-  document.getElementById("projectAddress")?.value || "";
-  const projectLocation =
-  document.getElementById("projectLocation")?.value || "";
+  const projectNumber = document.getElementById("projectNumber")?.value || "";
+  const projectName = document.getElementById("projectName")?.value || "";
+  const projectAddress = document.getElementById("projectAddress")?.value || "";
 
   const { width, height } = page.getSize();
 
@@ -1043,8 +1098,11 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
         "Sequence of Operations",
         "Parts List",
         "Datasheets",
+        "Control Panel Components",
         "Electrical Schematics",
-        "Shop Drawings"
+        "Shop Drawings",
+        "Manuals",
+        "Appendix"
       ]
     : [
         "Warranty",
@@ -1054,7 +1112,10 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
         "Appendix"
       ];
 
-  const romans = ["I", "II", "III", "IV", "V", "VI", "VII"];
+  const romans = [
+    "I", "II", "III", "IV", "V", "VI",
+    "VII", "VIII", "IX", "X", "XI", "XII"
+  ];
 
   let sectionNumber = 0;
 
@@ -1063,10 +1124,13 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
 
     if (items.length === 0) return;
 
-    const roman = romans[sectionNumber];
+    const roman = romans[sectionNumber] || `${sectionNumber + 1}`;
     sectionNumber++;
 
     const sectionLabel = getSectionLabel(section);
+    const sectionPageNum = `${sectionStartPages[section] || ""}`;
+    const sectionPageNumWidth = timesBold.widthOfTextAtSize(sectionPageNum, 12);
+    const sectionPageNumX = pageRight - sectionPageNumWidth;
 
     page.drawText(`${roman}. ${sectionLabel}`, {
       x: leftMargin,
@@ -1075,9 +1139,50 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
       font: timesBold
     });
 
+    if (sectionPageNum) {
+      page.drawText(sectionPageNum, {
+        x: sectionPageNumX,
+        y,
+        size: 12,
+        font: timesBold
+      });
+
+      const sectionTitleText = `${roman}. ${sectionLabel}`;
+      const sectionTitleWidth = timesBold.widthOfTextAtSize(sectionTitleText, 12);
+
+      addInternalPageLink(
+        pdfDoc,
+        page,
+        leftMargin,
+        y - 2,
+        sectionTitleWidth,
+        14,
+        sectionStartPages[section] + noNumberPageIndexes.length - 1
+      );
+
+      addInternalPageLink(
+        pdfDoc,
+        page,
+        sectionPageNumX,
+        y - 2,
+        sectionPageNumWidth,
+        14,
+        sectionStartPages[section] + noNumberPageIndexes.length - 1
+      );
+    }
+
     y -= 14;
 
-    items.forEach(item => {
+    const filteredItems = items.filter((item, index) => {
+      if (index !== 0) return true;
+
+      const itemTitle = item.title.trim().toLowerCase();
+      const sectionTitle = sectionLabel.trim().toLowerCase();
+
+      return itemTitle !== sectionTitle;
+    });
+
+    filteredItems.forEach(item => {
       const level = item.tocLevel || 0;
       const levelSettings = {
         0: { bullet: "•", bulletX: leftMargin + 18, titleX: leftMargin + 32 },
