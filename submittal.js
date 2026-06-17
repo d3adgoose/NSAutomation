@@ -422,6 +422,73 @@ async function drawGeneratedCoverPage(pdfDoc) {
   return page;
 }
 
+async function drawSectionDividerPage(pdfDoc, sectionTitle) {
+  const templateBytes = await fetch("Files/CoverPage/RomanCoverPage.pdf")
+    .then(res => res.arrayBuffer());
+
+  const templatePdf = await PDFDocument.load(templateBytes);
+  const [templatePage] = await pdfDoc.copyPages(templatePdf, [0]);
+
+  const page = pdfDoc.addPage(templatePage);
+
+  const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+  const { width, height } = page.getSize();
+
+  function splitTextToFit(text, font, size, maxWidth) {
+    const words = String(text).split(" ");
+    const lines = [];
+    let currentLine = "";
+
+    words.forEach(word => {
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      const testWidth = font.widthOfTextAtSize(testLine, size);
+
+      if (testWidth <= maxWidth) {
+        currentLine = testLine;
+      } else {
+        if (currentLine) lines.push(currentLine);
+        currentLine = word;
+      }
+    });
+
+    if (currentLine) lines.push(currentLine);
+    return lines;
+  }
+
+  function drawCenteredWrappedText(text) {
+    let size = 28;
+    let lines = splitTextToFit(text, timesBold, size, width - 100);
+
+    while (lines.length > 4 && size > 16) {
+      size -= 2;
+      lines = splitTextToFit(text, timesBold, size, width - 100);
+    }
+
+    const lineGap = size + 8;
+    const totalHeight = lines.length * lineGap;
+    let y = (height / 2) + (totalHeight / 2) - lineGap;
+
+    lines.forEach(line => {
+      const textWidth = timesBold.widthOfTextAtSize(line, size);
+
+      page.drawText(line, {
+        x: (width - textWidth) / 2,
+        y,
+        size,
+        font: timesBold,
+        color: rgb(0, 0, 0)
+      });
+
+      y -= lineGap;
+    });
+  }
+
+  drawCenteredWrappedText(sectionTitle);
+
+  return page;
+}
+
 async function buildPacket() {
   const includedDatasheets = pdfLibrary.filter(item =>
     item.include && item.packetSection === "Datasheets"
@@ -490,8 +557,18 @@ async function buildPacket() {
 
   const tocItems = [];
 
+  let currentSection = null;
+
   for (const item of contentFiles) {
-    const startPage = finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+  if (item.packetSection !== currentSection) {
+    currentSection = item.packetSection;
+
+    const sectionLabel = getSectionLabel(currentSection);
+
+    await drawSectionDividerPage(finalPdf, sectionLabel);
+  }
+
+  const startPage = finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
 
     tocItems.push({
       title: item.displayTitle,
@@ -830,6 +907,8 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
   const projectNumber = document.getElementById("projectNumber").value || "";
   const projectName = document.getElementById("projectName").value || "";
   const projectAddress =
+  document.getElementById("projectAddress")?.value || "";
+  const projectLocation =
   document.getElementById("projectLocation")?.value || "";
 
   const { width, height } = page.getSize();
