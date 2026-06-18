@@ -68,9 +68,14 @@ async function buildOMPacket() {
 }
 
 function getOMOutputFileName() {
-  const projectNumber = document.getElementById("projectNumber").value || "Project";
-  const projectName = document.getElementById("projectName").value || "OM Manual";
-  const revision = document.getElementById("revision").value || "1";
+  const projectNumber =
+    document.getElementById("projectNumber")?.value || "Project";
+
+  const projectName =
+    document.getElementById("projectName")?.value || "OM Manual";
+
+  const revision =
+    document.getElementById("revision")?.value || "1";
 
   return `${projectNumber} - ${projectName} - O&M Manual Rev ${revision}.pdf`;
 }

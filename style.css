@@ -510,3 +510,37 @@ button:hover {
   position: relative;
   z-index: 3;
 }
+
+.toc-format-options {
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid #d6dce5;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+
+.checkbox-row input {
+  margin-top: 3px;
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+.checkbox-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.checkbox-text small {
+  color: #5f6b7a;
+  font-size: 0.85rem;
+}

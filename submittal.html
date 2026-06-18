@@ -55,7 +55,7 @@
             </li>
 
             <li>
-              Use <strong>Subsections</strong> to add individual tabs from
+              Use <strong>Format TOC</strong> to add individual tabs from
               Datasheets or Control Panel Components into the TOC.
             </li>
 
@@ -75,7 +75,7 @@
             <li>Files are detected based on pdf naming conventions.</li>
             <li>Revision Remarks are not numbered and do not appear in the TOC.</li>
             <li>Datasheets can be reordered before generating the packet.</li>
-            <li>Subsections automatically appear beneath their parent document in the TOC.</li>
+            <li>Subsections for Warranty automatically appear beneath their parent document in the TOC.</li>
           </ul>
         </div>
       </details>
@@ -90,7 +90,7 @@
           accept="application/pdf"
           multiple
         />
-
+        <button onclick="renameTOCSections()">Rename Roman Numerals</button>
         <button onclick="clearUploadedPDFs()">
           Clear PDFs
         </button>
@@ -136,7 +136,6 @@
 
       <div class="button-row">
         <button onclick="buildPacket()">Build PDF Packet</button>
-        <button onclick="renameTOCSections()">Rename TOC Sections</button>
         <button onclick="exportCSV()">Export CSV</button>
       </div>
     </section>
@@ -157,35 +156,85 @@
   </div>
 
   <div id="subsectionModal" class="modal hidden">
-  <div class="modal-content large-modal">
-    <h2 id="subsectionModalTitle">Datasheet Subsections</h2>
-    <p>Preview the datasheet pages, select a page, and name the subsection.</p>
+    <div class="modal-content large-modal">
 
-    <div class="subsection-layout">
-      <div class="subsection-preview-panel">
-        <div id="subsectionPagePreviewList"></div>
-      </div>
+      <h2 id="subsectionModalTitle">Format TOC</h2>
 
-      <div class="subsection-form-panel">
-        <input type="hidden" id="activeSubsectionPdfId" />
+      <p>
+        Preview the PDF pages, select a page, name the TOC entry,
+        then choose how it should appear.
+      </p>
 
-        <label>Selected Page</label>
-        <input id="subsectionPageNumber" type="number" min="1" placeholder="Click a page preview" />
+      <div class="subsection-layout">
 
-        <label>Subsection Name</label>
-        <input id="subsectionTitle" placeholder="Example: 5HP TEFC Motor" />
-
-        <div class="button-row">
-          <button onclick="addSubsectionEntry()">Add Subsection</button>
-          <button class="secondary" onclick="closeSubsectionModal()">Done</button>
+        <div class="subsection-preview-panel">
+          <div id="subsectionPagePreviewList"></div>
         </div>
 
-        <h3>Current Subsections</h3>
-        <div id="currentSubsectionList"></div>
+        <div class="subsection-form-panel">
+
+          <input
+            type="hidden"
+            id="activeSubsectionPdfId"
+          />
+        <div class="toc-format-options">
+          <label class="checkbox-row">
+            <input type="checkbox" id="hideParentTOC" />
+
+            <span class="checkbox-text">
+              <strong>Hide PDF name in TOC</strong>
+              <small>
+                Leave unchecked to show the uploaded PDF name as the main TOC Section.
+                Check this when there is a fully merged PDF that should only show the custom sections you add.
+              </small>
+            </span>
+          </label>
+        </div>
+          <label>Selected Page</label>
+
+          <input
+            id="subsectionPageNumber"
+            type="number"
+            min="1"
+            placeholder="Click a page preview"
+          />
+
+          <label>TOC Name</label>
+
+          <input
+            id="subsectionTitle"
+            placeholder="Example: 5HP TEFC Motor"
+          />
+
+          <div class="button-row">
+
+            <button onclick="addTOCEntry('section')">
+              Add Section
+            </button>
+
+            <button onclick="addTOCEntry('subsection')">
+              Add Subsection
+            </button>
+
+            <button
+              class="secondary"
+              onclick="closeSubsectionModal()"
+            >
+              Done
+            </button>
+
+          </div>
+
+          <h3>Current TOC Entries</h3>
+
+          <div id="currentSubsectionList"></div>
+
+        </div>
+
       </div>
+
     </div>
   </div>
-</div>
 
   <script src="common.js"></script>
   <script src="pdfStorage.js"></script>
