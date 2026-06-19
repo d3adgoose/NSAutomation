@@ -1,8 +1,13 @@
 const PDF_DB_NAME = "SubmittalPDFStorage";
 const PDF_STORE_NAME = "pdfFiles";
+let pdfDatabasePromise = null;
 
 function openPDFDatabase() {
-  return new Promise((resolve, reject) => {
+  if (pdfDatabasePromise) {
+    return pdfDatabasePromise;
+  }
+
+  pdfDatabasePromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(PDF_DB_NAME, 1);
 
     request.onupgradeneeded = event => {
@@ -14,8 +19,13 @@ function openPDFDatabase() {
     };
 
     request.onsuccess = event => resolve(event.target.result);
-    request.onerror = event => reject(event.target.error);
+    request.onerror = event => {
+      pdfDatabasePromise = null;
+      reject(event.target.error);
+    };
   });
+
+  return pdfDatabasePromise;
 }
 
 async function savePDFToIndexedDB(id, file) {

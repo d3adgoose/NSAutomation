@@ -3,6 +3,7 @@ let pendingLibraryPdf = null;
 let selectedLibraryPDFIds = new Set();
 let currentUser = null;
 let useRemoteDatabase = false;
+const libraryPDFBlobCache = new Map();
 
 function openLoginModal() {
   const modal = document.getElementById("loginModal");
@@ -15,6 +16,11 @@ function closeLoginModal() {
 }
 
 async function checkDatabaseLogin() {
+  if (typeof supabaseClient === "undefined" || !supabaseClient) {
+    useRemoteDatabase = false;
+    return;
+  }
+
   const { data } = await supabaseClient.auth.getUser();
 
   currentUser = data.user || null;
@@ -55,6 +61,8 @@ async function checkDatabaseLogin() {
 }
 
 async function logoutUser() {
+  if (typeof supabaseClient === "undefined" || !supabaseClient) return;
+
   await supabaseClient.auth.signOut();
 
   currentUser = null;
@@ -78,6 +86,11 @@ async function logoutUser() {
 }
 
 async function sendLoginLink() {
+  if (typeof supabaseClient === "undefined" || !supabaseClient) {
+    alert("Remote login is only available on the Database page.");
+    return;
+  }
+
   const email = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value.trim();
 
@@ -106,47 +119,14 @@ const DOCUMENTS_TABLE = "documents";
 const DOCUMENTS_BUCKET = "document-library";
 
 function guessPacketSectionForLibrary(fileName = "") {
-  const name = String(fileName).toLowerCase();
-
-  if (name.includes("revision") || name.includes("remarks")) return "Revision Remarks";
-  if (name.includes("cover")) return "Cover Page";
-  if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
-  if (name.includes("warranty")) return "Warranty";
-  if (name.includes("safety")) return "Safety Procedures";
-  if (name.includes("maintenance")) return "Maintenance";
-  if (
-    name.includes("sequence of operations") ||
-    name.includes("sequence of operation") ||
-    name.includes("operations sequence")
-  ) return "Sequence of Operations";
-  if (
-    name.includes("parts list") ||
-    name.includes("part list") ||
-    name.includes("parts") ||
-    name.includes("part")
-  ) return "Parts List";
-  if (
-    name.includes("electrical schematic") ||
-    name.includes("electrical schematics") ||
-    name.includes("electrical diagram") ||
-    name.includes("schematic") ||
-    name.includes("diagram")
-  ) return "Electrical Schematics";
-  if (name.includes("control") || name.includes("panel")) return "Control Panel Components";
-  if (
-    name.includes("shop drawing") ||
-    name.includes("shop drawings") ||
-    name.includes("shop") ||
-    name.includes("drawing") ||
-    name.includes("drawings")
-  ) return "Shop Drawings";
-  if (name.includes("manual")) return "Manuals";
-  if (name.includes("appendix")) return "Appendix";
-
-  return "Datasheets";
+  return guessPacketSectionFromName(fileName);
 }
 
 async function loadLibraryDB() {
+  if (typeof supabaseClient === "undefined" || !supabaseClient) {
+    return;
+  }
+
   const { data, error } = await supabaseClient
     .from(DOCUMENTS_TABLE)
     .select("*")
@@ -430,6 +410,8 @@ function guessDocumentTypeForLibrary(fileName = "") {
 }
 
 async function addLibraryEntry(entry, options = {}) {
+  if (typeof supabaseClient === "undefined" || !supabaseClient) return;
+
   const { data: existing, error: checkError } = await supabaseClient
     .from(DOCUMENTS_TABLE)
     .select("id")
@@ -460,6 +442,7 @@ async function addLibraryEntry(entry, options = {}) {
     return;
   }
 
+  libraryPDFBlobCache.delete(id);
   await loadLibraryDB();
 }
 
@@ -593,6 +576,7 @@ async function attachPDFToLibraryItem(id, file) {
     return;
   }
 
+  libraryPDFBlobCache.delete(id);
   await loadLibraryDB();
 }
 
@@ -651,6 +635,7 @@ async function removeAttachmentFromLibraryItem(id) {
   }
 
   item.storagePath = "";
+  libraryPDFBlobCache.delete(id);
 
   await loadLibraryDB();
 }
@@ -727,8 +712,6 @@ async function addLibraryEntryFromForm() {
   const documentType = document.getElementById("libDocumentType").value;
   const notes = document.getElementById("libNotes").value.trim();
 
-  console.log("Pending PDF when adding:", pendingLibraryPdf);
-
   if (!displayTitle && !fileName && !pendingLibraryPdf) {
     return alert("Provide a file name, file location, or PDF.");
   }
@@ -759,16 +742,10 @@ async function addLibraryEntryFromForm() {
     return;
   }
 
-  console.log("Created library row:", data);
-
   if (pendingLibraryPdf) {
-    console.log("Uploading pending PDF:", pendingLibraryPdf.name);
-
     libraryDB.push(fromSupabaseDocument(data));
 
     await attachPDFToLibraryItem(data.id, pendingLibraryPdf);
-  } else {
-    console.warn("No pending PDF found when Add to Library was clicked.");
   }
 
   document.getElementById("libFileName").value = "";
@@ -792,6 +769,10 @@ async function getLibraryPDFBlob(item) {
     throw new Error("PDF attachment not found.");
   }
 
+  if (libraryPDFBlobCache.has(item.id)) {
+    return libraryPDFBlobCache.get(item.id);
+  }
+
   const { data, error } = await supabaseClient.storage
     .from(DOCUMENTS_BUCKET)
     .download(item.storagePath);
@@ -801,6 +782,7 @@ async function getLibraryPDFBlob(item) {
     throw new Error("Could not download PDF from storage.");
   }
 
+  libraryPDFBlobCache.set(item.id, data);
   return data;
 }
 
@@ -1065,8 +1047,10 @@ async function confirmLibraryMergeOrder() {
 }
 
 window.addEventListener("load", async () => {
+  if (!document.getElementById("libraryDBBody")) return;
+
   await checkDatabaseLogin();
-  loadLibraryDB();
+  await loadLibraryDB();
   setupLibraryDropZone();
 
   const addBtn = document.getElementById("addLibraryEntryButton");

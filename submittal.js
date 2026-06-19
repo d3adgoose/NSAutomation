@@ -1,6 +1,8 @@
 let pdfLibrary = [];
 let pendingBuild = false;
 let customSectionLabels = {};
+const sourcePDFBytesCache = new WeakMap();
+let romanCoverPageBytesPromise = null;
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -62,58 +64,11 @@ function handleDroppedFiles(fileList) {
 }
 
 function guessDocumentType(fileName) {
-  const name = fileName.toLowerCase();
-  if (name.includes("revision") || name.includes("remarks")) return "Revision Remarks";
-  if (name.includes("cover")) return "Cover Page";
-  if (name.includes("table of contents") || name.includes("toc")) return "Table of Contents";
-  if (name.includes("warranty")) return "Warranty";
-  if (name.includes("safety")) return "Safety Procedures";
-  if (name.includes("maintenance")) return "Maintenance";
-  if (name.includes("sequence of operations") || name.includes("sequence of operation") || name.includes("operations sequence")) return "Sequence of Operations";
-  if (name.includes("parts list") || name.includes("part list")|| name.includes("parts") || name.includes("part")) return "Parts List";
-  if (name.includes("electrical schematic") || name.includes("electrical schematics") || name.includes("electrical diagram") || name.includes("schematic") || name.includes("diagram")) return "Electrical Schematics";
-  if (name.includes("control") || name.includes("panel")) return "Control Panel Components";
-  
-  // Handles:
-  // - Shop Drawing
-  // - Shop Drawings
-  // - Drawing
-  // - Drawings
-  if (
-    name.includes("shop drawing") ||
-    name.includes("shop drawings") ||
-    name.includes("shop") ||
-    name.includes("drawing") ||
-    name.includes("drawings")
-  ) {
-    return "Shop Drawing";
-  }
-
-  if (name.includes("manual")) return "Manual";
-  if (name.includes("cert")) return "Certification";
-  if (name.includes("spec")) return "Spec Sheet";
-  if (name.includes("test")) return "Test Report";
-
-  return "Datasheet";
+  return guessDocumentTypeFromName(fileName);
 }
 
 function guessPacketSection(fileName) {
-  const type = guessDocumentType(fileName);
-
-  if (type === "Revision Remarks") return "Revision Remarks";
-  if (type === "Cover Page") return "Cover Page";
-  if (type === "Table of Contents") return "Table of Contents";
-  if (type === "Warranty") return "Warranty";
-  if (type === "Safety Procedures") return "Safety Procedures";
-  if (type === "Maintenance") return "Maintenance";
-  if (type === "Sequence of Operations") return "Sequence of Operations";
-  if (type === "Parts List") return "Parts List";
-  if (type === "Electrical Schematics") return "Electrical Schematics";
-  if (type === "Control Panel Components") return "Control Panel Components";
-  if (type === "Shop Drawing" || type === "Drawing") return "Shop Drawings";
-  if (type === "Appendix" || type === "Other") return "Appendix";
-
-  return "Datasheets";
+  return guessPacketSectionFromName(fileName);
 }
 
 function sortLibraryBySection() {
@@ -424,8 +379,12 @@ async function drawGeneratedCoverPage(pdfDoc) {
 }
 
 async function drawSectionDividerPage(pdfDoc, sectionTitle) {
-  const templateBytes = await fetch("Files/CoverPage/RomanCoverPage.pdf")
-    .then(res => res.arrayBuffer());
+  if (!romanCoverPageBytesPromise) {
+    romanCoverPageBytesPromise = fetch("Files/CoverPage/RomanCoverPage.pdf")
+      .then(res => res.arrayBuffer());
+  }
+
+  const templateBytes = await romanCoverPageBytesPromise;
 
   const templatePdf = await PDFDocument.load(templateBytes);
   const [templatePage] = await pdfDoc.copyPages(templatePdf, [0]);
@@ -631,20 +590,20 @@ async function buildPacket() {
   );
   await addPageNumbers(finalPdf, noNumberPageIndexes);
 
-  console.log("About to save PDF...");
-
   const pdfBytes = await finalPdf.save();
 
-  console.log("PDF saved. About to download...");
   const outputName =
     typeof getOMOutputFileName === "function"
       ? getOMOutputFileName()
       : getOutputFileName();
 
   downloadFile(pdfBytes, outputName, "application/pdf");
-  console.log("Download function ran.");
 
-  if (typeof mergeSubmittalIntoLibrary === "function") {
+  if (
+    typeof useRemoteDatabase !== "undefined" &&
+    useRemoteDatabase &&
+    typeof mergeSubmittalIntoLibrary === "function"
+  ) {
     try {
       await mergeSubmittalIntoLibrary(included);
     } catch (e) {
@@ -812,7 +771,7 @@ async function renderPDFPagePreviews(item) {
 
   previewList.innerHTML = "";
 
-  const bytes = await item.file.arrayBuffer();
+  const bytes = await getSourcePDFBytes(item.file);
 
   const pdf = await pdfjsLib.getDocument({
     data: bytes
@@ -969,7 +928,7 @@ function renderCurrentSubsectionList() {
 async function appendPDF(finalPdf, file) {
   const startIndex = finalPdf.getPageCount();
 
-  const bytes = await file.arrayBuffer();
+  const bytes = await getSourcePDFBytes(file);
   const sourcePdf = await PDFDocument.load(bytes);
   const copiedPages = await finalPdf.copyPages(sourcePdf, sourcePdf.getPageIndices());
 
@@ -983,6 +942,14 @@ async function appendPDF(finalPdf, file) {
   }
 
   return addedIndexes;
+}
+
+async function getSourcePDFBytes(file) {
+  if (!sourcePDFBytesCache.has(file)) {
+    sourcePDFBytesCache.set(file, file.arrayBuffer());
+  }
+
+  return sourcePDFBytesCache.get(file);
 }
 
 function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPageIndex) {

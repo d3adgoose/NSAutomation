@@ -57,14 +57,22 @@ const TOC_DETECTION_RULES = {
     }
   ]
 };
+const tocDetectionCache = new WeakMap();
 
 async function detectTOCSubsections(file, section, baseStartPage) {
   const rules = TOC_DETECTION_RULES[section];
 
-  console.log("Detecting section:", section, "Rules:", rules);
-
   if (!rules || rules.length === 0) {
     return [];
+  }
+
+  const cachedBySection = tocDetectionCache.get(file);
+  if (cachedBySection?.has(section)) {
+    return cachedBySection.get(section).map(item => ({
+      ...item,
+      startPage: baseStartPage + item.sourcePage - 1,
+      targetPageIndex: baseStartPage + item.sourcePage - 2
+    }));
   }
 
   const detectedItems = [];
@@ -78,7 +86,6 @@ async function detectTOCSubsections(file, section, baseStartPage) {
 
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       if (detectedItems.length === rules.length) {
-        console.log("All TOC subsections found. Stopping scan.");
         break;
       }
 
@@ -96,11 +103,8 @@ async function detectTOCSubsections(file, section, baseStartPage) {
       );
 
       if (!pageText && remainingRules.length > 0) {
-        console.log(`No selectable text on page ${pageNumber}. Running OCR...`);
         pageText = await OCRPdfPage(page);
       }
-
-      console.log("TOC detection page:", pageNumber, `"${pageText}"`);
 
       for (const rule of remainingRules) {
         const found = rule.patterns.some(pattern =>
@@ -111,18 +115,27 @@ async function detectTOCSubsections(file, section, baseStartPage) {
           detectedItems.push({
             title: rule.title,
             section,
+            sourcePage: pageNumber,
             startPage: baseStartPage + pageNumber - 1,
             targetPageIndex: baseStartPage + pageNumber - 2,
             tocLevel: 1
           });
-
-          console.log(`Detected "${rule.title}" on PDF page ${pageNumber}`);
         }
       }
     }
   } catch (error) {
     console.error("TOC subsection detection failed:", error);
   }
+
+  const normalizedItems = detectedItems.map(item => ({
+    title: item.title,
+    section: item.section,
+    sourcePage: item.sourcePage,
+    tocLevel: item.tocLevel
+  }));
+  const nextCache = cachedBySection || new Map();
+  nextCache.set(section, normalizedItems);
+  tocDetectionCache.set(file, nextCache);
 
   return detectedItems;
 }

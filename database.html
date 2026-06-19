@@ -9,7 +9,7 @@
 
 <body>
   <div class="hamburger-container">
-    <button id="hamburgerBtn" class="hamburger">☰</button>
+    <button id="hamburgerBtn" class="hamburger" aria-label="Open navigation" aria-expanded="false">☰</button>
 
     <nav id="sideMenu" class="side-menu">
       <a href="index.html">Home</a>
@@ -127,11 +127,10 @@
         <button onclick="openLibraryMergeOrderModal()">Merge</button>
       </div>
 
-      <div style="margin-top:12px; margin-bottom:12px;">
+      <div class="library-search-row">
         <input
           id="librarySearch"
           placeholder="Search library (file, title, type, notes)"
-          style="width:100%; padding:8px; box-sizing:border-box;"
         />
       </div>
 
@@ -190,7 +189,6 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>

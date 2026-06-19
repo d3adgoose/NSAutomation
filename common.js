@@ -58,6 +58,40 @@ const sectionOrder = {
   "Appendix": 14
 };
 
+const fileTypeRules = [
+  { documentType: "Revision Remarks", packetSection: "Revision Remarks", patterns: ["revision", "remarks"] },
+  { documentType: "Cover Page", packetSection: "Cover Page", patterns: ["cover"] },
+  { documentType: "Table of Contents", packetSection: "Table of Contents", patterns: ["table of contents", "toc"] },
+  { documentType: "Warranty", packetSection: "Warranty", patterns: ["warranty"] },
+  { documentType: "Safety Procedures", packetSection: "Safety Procedures", patterns: ["safety"] },
+  { documentType: "Maintenance", packetSection: "Maintenance", patterns: ["maintenance"] },
+  { documentType: "Sequence of Operations", packetSection: "Sequence of Operations", patterns: ["sequence of operations", "sequence of operation", "operations sequence"] },
+  { documentType: "Parts List", packetSection: "Parts List", patterns: ["parts list", "part list", "parts", "part"] },
+  { documentType: "Electrical Schematics", packetSection: "Electrical Schematics", patterns: ["electrical schematic", "electrical schematics", "electrical diagram", "schematic", "diagram"] },
+  { documentType: "Control Panel Components", packetSection: "Control Panel Components", patterns: ["control", "panel"] },
+  { documentType: "Shop Drawing", packetSection: "Shop Drawings", patterns: ["shop drawing", "shop drawings", "shop", "drawing", "drawings"] },
+  { documentType: "Manual", packetSection: "Manuals", patterns: ["manual"] },
+  { documentType: "Certification", packetSection: "Appendix", patterns: ["cert"] },
+  { documentType: "Spec Sheet", packetSection: "Datasheets", patterns: ["spec"] },
+  { documentType: "Test Report", packetSection: "Datasheets", patterns: ["test"] },
+  { documentType: "Appendix", packetSection: "Appendix", patterns: ["appendix"] }
+];
+
+function getMatchedFileRule(fileName = "") {
+  const name = String(fileName).toLowerCase();
+  return fileTypeRules.find(rule =>
+    rule.patterns.some(pattern => name.includes(pattern))
+  );
+}
+
+function guessDocumentTypeFromName(fileName = "") {
+  return getMatchedFileRule(fileName)?.documentType || "Datasheet";
+}
+
+function guessPacketSectionFromName(fileName = "") {
+  return getMatchedFileRule(fileName)?.packetSection || "Datasheets";
+}
+
 function downloadFile(data, fileName, type) {
   const blob = new Blob([data], { type });
   const url = URL.createObjectURL(blob);

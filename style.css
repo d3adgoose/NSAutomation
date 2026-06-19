@@ -22,7 +22,7 @@ main {
   background: white;
   padding: 24px;
   margin-bottom: 24px;
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 
@@ -86,6 +86,7 @@ button:hover {
 
 .button-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 16px;
 }
@@ -111,7 +112,9 @@ button:hover {
   padding: 24px;
   width: 600px;
   max-width: 90%;
-  border-radius: 10px;
+  max-height: 85vh;
+  overflow-y: auto;
+  border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.25);
 }
 
@@ -322,18 +325,6 @@ button:hover {
   white-space: nowrap;
 }
 
-.table-action-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.table-action-buttons button {
-  margin: 0;
-  white-space: nowrap;
-}
-
 .attachment-name {
   margin-top: 6px;
   font-size: 12px;
@@ -416,29 +407,13 @@ button:hover {
   margin-bottom: 16px;
 }
 
-.modal-content {
-  max-height: 85vh;
-  overflow-y: auto;
-}
-
-#datasheetOrderList {
-  max-height: 60vh;
-  overflow-y: auto;
-  padding-right: 8px;
-}
-
-.order-row {
-  cursor: grab;
-}
-
-.order-row.dragging {
-  opacity: 0.5;
-}
-
 #datasheetOrderList {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 8px;
 }
 
 .order-row {
@@ -448,7 +423,7 @@ button:hover {
   padding: 14px 16px;
   background: #ffffff;
   border: 1px solid #d9dde3;
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.08);
   cursor: grab;
   transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
@@ -515,8 +490,37 @@ button:hover {
   margin: 0 0 18px;
   padding: 14px 16px;
   border: 1px solid #d6dce5;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #f8fafc;
+}
+
+.library-search-row {
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 720px) {
+  header {
+    padding: 28px 16px;
+  }
+
+  .button-row,
+  .header-actions,
+  .uploaded-pdf-row,
+  .subsection-entry-row,
+  .preview-modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .subsection-layout {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    overflow-x: auto;
+  }
 }
 
 .checkbox-row {

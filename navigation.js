@@ -5,7 +5,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!btn || !menu) return;
 
   btn.addEventListener("click", () => {
-    menu.classList.toggle("open");
+    const isOpen = menu.classList.toggle("open");
+    btn.setAttribute("aria-expanded", String(isOpen));
   });
 
   document.addEventListener("click", e => {

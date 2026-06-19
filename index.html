@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Home</title>
 
   <link rel="stylesheet" href="style.css">
@@ -9,12 +10,12 @@
 <body>
 
 <div class="hamburger-container">
-  <button id="hamburgerBtn" class="hamburger">
+  <button id="hamburgerBtn" class="hamburger" aria-label="Open navigation" aria-expanded="false">
     ☰
   </button>
 
   <nav id="sideMenu" class="side-menu">
-    <a href="index">Home</a>
+    <a href="index.html">Home</a>
     <a href="database.html">Database</a>
     <a href="submittal.html">Submittal</a>
     <a href="om.html">O&M Manuals</a>
@@ -33,8 +34,8 @@
       This application helps maintain a datasheet database
       and generate PDF submittal/O&M packets.
     </p>
-    </div>
   </section>
+</main>
 <script src="navigation.js"></script>
 
 </body>
