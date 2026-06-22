@@ -124,6 +124,27 @@ function getSectionLabel(section) {
   return customSectionLabels[section] || section;
 }
 
+function toRoman(value) {
+  const numerals = [
+    [10, "X"],
+    [9, "IX"],
+    [5, "V"],
+    [4, "IV"],
+    [1, "I"]
+  ];
+  let remaining = Math.max(1, Number(value) || 1);
+  let result = "";
+
+  numerals.forEach(([number, numeral]) => {
+    while (remaining >= number) {
+      result += numeral;
+      remaining -= number;
+    }
+  });
+
+  return result;
+}
+
 function renamePdfTitle(id) {
   const item = pdfLibrary.find(x => x.id === id);
   if (!item) return;
@@ -381,8 +402,11 @@ async function drawGeneratedCoverPage(pdfDoc) {
 }
 
 async function drawSectionDividerPage(pdfDoc, sectionTitle) {
-  const templateBytes = await fetch("Files/CoverPage/RomanCoverPage.pdf")
-    .then(res => res.arrayBuffer());
+  if (!romanCoverPageBytesPromise) {
+    romanCoverPageBytesPromise = loadCoverPageAsset("RomanCoverPage.pdf");
+  }
+
+  const templateBytes = await romanCoverPageBytesPromise;
 
   const templatePdf = await PDFDocument.load(templateBytes);
   const [templatePage] = await pdfDoc.copyPages(templatePdf, [0]);
@@ -528,20 +552,33 @@ async function buildPacket() {
   const sectionTargets = {};
 
   let currentSection = null;
-  const sectionStartPages = {};
 
   for (const item of contentFiles) {
     if (item.packetSection !== currentSection) {
       currentSection = item.packetSection;
 
-    const sectionLabel = getSectionLabel(currentSection);
+      const sectionNumber = Object.keys(sectionTargets).length + 1;
+      const romanNumber = toRoman(sectionNumber);
+      const sectionLabel = getSectionLabel(currentSection);
+      const sectionTitle = `${romanNumber}. ${sectionLabel}`;
+      const targetPageIndex = finalPdf.getPageCount();
 
-    await drawSectionDividerPage(finalPdf, sectionLabel);
-  }
+      await drawSectionDividerPage(finalPdf, sectionTitle);
 
-  const startPage = finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+      sectionTargets[currentSection] = {
+        roman: romanNumber,
+        title: sectionLabel,
+        targetPageIndex,
+        pageNumber:
+          targetPageIndex + 1 - noNumberPageIndexes.length
+      };
+    }
 
-    if (!item.hideParentTOC) {
+    const startPage =
+      finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+
+    // Warranty document titles are added only when tocDetection finds them.
+    if (!item.hideParentTOC && item.packetSection !== "Warranty") {
       tocItems.push({
         title: item.displayTitle,
         section: item.packetSection,
@@ -587,7 +624,12 @@ async function buildPacket() {
     await appendPDF(finalPdf, item.file);
   }
 
-  await drawTOCOnExistingPage(finalPdf, tocPage, tocItems);
+  await drawTOCOnExistingPage(
+    finalPdf,
+    tocPage,
+    tocItems,
+    sectionTargets
+  );
   await addPageNumbers(finalPdf, noNumberPageIndexes);
 
   const pdfBytes = await finalPdf.save();
@@ -600,7 +642,10 @@ async function buildPacket() {
   downloadFile(pdfBytes, outputName, "application/pdf");
   console.log("Download function ran.");
 
-  if (typeof mergeSubmittalIntoLibrary === "function") {
+  if (
+    typeof supabaseClient !== "undefined" &&
+    typeof mergeSubmittalIntoLibrary === "function"
+  ) {
     try {
       await mergeSubmittalIntoLibrary(included);
     } catch (e) {
@@ -820,11 +865,11 @@ async function createTransitWarrantyFile({
   const templateBytes = await loadTransitWarrantyTemplate(templateFileName);
   const warrantyPdf = await PDFDocument.load(templateBytes);
   const pages = warrantyPdf.getPages();
-  const detailsPage = pages[2];
+  const detailsPage = pages[pages.length - 1];
   const PDFName = window.PDFLib.PDFName;
 
   if (!detailsPage || !PDFName) {
-    throw new Error("The transit warranty template has an unexpected format.");
+    throw new Error("The transit warranty template could not be loaded.");
   }
 
   const annotationsKey = PDFName.of("Annots");
@@ -1429,7 +1474,12 @@ function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPage
   sourcePage.node.addAnnot(annotationRef);
 }
 
-async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
+async function drawTOCOnExistingPage(
+  pdfDoc,
+  page,
+  tocItems,
+  sectionTargets = {}
+) {
   const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
   const timesBoldItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
@@ -1584,11 +1634,6 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
         "Appendix"
       ];
 
-  const romans = [
-    "I", "II", "III", "IV", "V", "VI",
-    "VII", "VIII", "IX", "X", "XI", "XII"
-  ];
-
   let sectionNumber = 0;
   const displayedPageNumbers = new Set();
 
@@ -1597,10 +1642,12 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
 
     if (items.length === 0) return;
 
-    const roman = romans[sectionNumber] || `${sectionNumber + 1}`;
+    const sectionTarget = sectionTargets[section];
+    const roman = sectionTarget?.roman || toRoman(sectionNumber + 1);
     sectionNumber++;
 
     const sectionLabel = getSectionLabel(section);
+    const sectionText = `${roman}. ${sectionLabel}`;
 
     page.drawText(sectionText, {
       x: leftMargin,
@@ -1608,6 +1655,49 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
       size: 12,
       font: timesBold
     });
+
+    if (sectionTarget) {
+      const sectionPageNumber = String(sectionTarget.pageNumber);
+      const sectionTextWidth =
+        timesBold.widthOfTextAtSize(sectionText, 12);
+      const sectionPageWidth =
+        timesBold.widthOfTextAtSize(sectionPageNumber, 12);
+      const sectionPageX = pageRight - sectionPageWidth;
+
+      drawDottedLeader(
+        leftMargin + sectionTextWidth + 6,
+        sectionPageX - 8,
+        y
+      );
+
+      page.drawText(sectionPageNumber, {
+        x: sectionPageX,
+        y,
+        size: 12,
+        font: timesBold
+      });
+      displayedPageNumbers.add(sectionPageNumber);
+
+      addInternalPageLink(
+        pdfDoc,
+        page,
+        leftMargin,
+        y - 2,
+        sectionTextWidth,
+        14,
+        sectionTarget.targetPageIndex
+      );
+
+      addInternalPageLink(
+        pdfDoc,
+        page,
+        sectionPageX,
+        y - 2,
+        sectionPageWidth,
+        14,
+        sectionTarget.targetPageIndex
+      );
+    }
 
     y -= 14;
 
