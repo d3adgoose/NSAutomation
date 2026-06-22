@@ -697,6 +697,8 @@ function resetPacketBuilder() {
 function openWarrantyPromptModal() {
   const modal = document.getElementById("warrantyPromptModal");
   const createCheckbox = document.getElementById("createWarrantySheet");
+  const vehicleType = document.getElementById("warrantyVehicleType");
+  const washType = document.getElementById("washType")?.value;
   const durationInput = document.getElementById("warrantyLaborDuration");
   const materialYearsInput = document.getElementById("warrantyMaterialYears");
   const unitSelect = document.getElementById("warrantyLaborUnit");
@@ -710,6 +712,9 @@ function openWarrantyPromptModal() {
   if (!modal || !createCheckbox) return;
 
   createCheckbox.checked = false;
+  if (vehicleType) {
+    vehicleType.value = washType === "Car Wash" ? "car" : "transit";
+  }
   if (materialYearsInput) materialYearsInput.value = "";
   if (durationInput) durationInput.value = "";
   if (unitSelect) unitSelect.value = "days";
@@ -723,6 +728,7 @@ function openWarrantyPromptModal() {
   if (status) status.textContent = "";
 
   updateWarrantyPeriodEnd();
+  updateWarrantyVehicleFields();
   toggleWarrantyCreator();
   modal.classList.remove("hidden");
 }
@@ -745,6 +751,28 @@ function toggleWarrantyCreator() {
     : "Continue Without Warranty";
 }
 
+function updateWarrantyVehicleFields() {
+  const vehicleType = document.getElementById("warrantyVehicleType")?.value;
+  const laborUnit = document.getElementById("warrantyLaborUnit");
+  const transitFields = document.getElementById("warrantyTransitFields");
+  const isCar = vehicleType === "car";
+
+  transitFields?.classList.toggle("hidden", isCar);
+
+  if (laborUnit) {
+    const units = isCar
+      ? [["days", "Days"], ["months", "Months"]]
+      : [["days", "Days"], ["years", "Years"]];
+
+    laborUnit.replaceChildren(...units.map(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }));
+  }
+}
+
 async function continueWarrantyPrompt() {
   const createCheckbox = document.getElementById("createWarrantySheet");
   let warrantyAdded = false;
@@ -762,6 +790,8 @@ async function continueWarrantyPrompt() {
   const materialYears = Number(
     document.getElementById("warrantyMaterialYears")?.value
   );
+  const vehicleType =
+    document.getElementById("warrantyVehicleType")?.value || "transit";
   const unit = document.getElementById("warrantyLaborUnit")?.value;
   const commencement = document.getElementById("warrantyCommencement")?.value;
   const commencementDate =
@@ -786,7 +816,7 @@ async function continueWarrantyPrompt() {
     return;
   }
 
-  if (!commencementDate || !periodEndDate) {
+  if (vehicleType === "transit" && (!commencementDate || !periodEndDate)) {
     if (status) status.textContent = "Select the warranty commencement date.";
     return;
   }
@@ -795,17 +825,24 @@ async function continueWarrantyPrompt() {
   if (status) status.textContent = "Creating warranty sheet...";
 
   try {
-    const warrantyFile = await createTransitWarrantyFile({
-      materialYears,
-      duration,
-      unit,
-      commencement,
-      commencementDate,
-      periodEndDate,
-      representative,
-      representativeDate,
-      revisionPreparedBy
-    });
+    const warrantyFile = vehicleType === "car"
+      ? await createCarWarrantyFile({
+          materialYears,
+          duration,
+          unit,
+          revisionPreparedBy
+        })
+      : await createTransitWarrantyFile({
+          materialYears,
+          duration,
+          unit,
+          commencement,
+          commencementDate,
+          periodEndDate,
+          representative,
+          representativeDate,
+          revisionPreparedBy
+        });
 
     pdfLibrary.push({
       id: crypto.randomUUID(),
@@ -931,6 +968,49 @@ async function createTransitWarrantyFile({
   );
 }
 
+async function createCarWarrantyFile({
+  materialYears,
+  duration,
+  unit,
+  revisionPreparedBy
+}) {
+  const templateFileName = "CarWarranty.pdf";
+  const templateBytes = await loadCarWarrantyTemplate(templateFileName);
+  const warrantyPdf = await PDFDocument.load(templateBytes);
+  const pages = warrantyPdf.getPages();
+  const detailsPage = pages[pages.length - 1];
+  const PDFName = window.PDFLib.PDFName;
+
+  if (!detailsPage || !PDFName) {
+    throw new Error("The car warranty template could not be loaded.");
+  }
+
+  const annotationsKey = PDFName.of("Annots");
+  pages.forEach(page => page.node.delete(annotationsKey));
+  warrantyPdf.catalog.delete(PDFName.of("AcroForm"));
+
+  const font = await warrantyPdf.embedFont(StandardFonts.Helvetica);
+  const projectNumber =
+    document.getElementById("projectNumber")?.value.trim() || "";
+  const materialLabel = `${materialYears} year(s)`;
+  const laborLabel = unit === "months"
+    ? `${duration} month(s)`
+    : `${duration} days`;
+
+  drawWarrantyFieldText(detailsPage, projectNumber, 213, 651, 9, 56, font);
+  drawWarrantyFieldText(detailsPage, materialLabel, 182, 594, 8, 43, font);
+  drawWarrantyFieldText(detailsPage, laborLabel, 250, 572, 8, 38, font);
+  drawWarrantyFieldText(detailsPage, revisionPreparedBy, 139, 86, 8, 157, font);
+
+  const warrantyBytes = await warrantyPdf.save();
+
+  return new File(
+    [warrantyBytes],
+    templateFileName,
+    { type: "application/pdf" }
+  );
+}
+
 function updateWarrantyPeriodEnd() {
   const commencementDate =
     document.getElementById("warrantyCommencementDate")?.value || "";
@@ -1014,6 +1094,57 @@ async function loadTransitWarrantyTemplate(templateFileName) {
   }
 
   const base64 = await loadEmbeddedWarrantyTemplate(templateFileName);
+  return decodeBase64Bytes(base64);
+}
+
+async function loadCarWarrantyTemplate(templateFileName) {
+  const templatePath = `Files/Warranty/Car/${templateFileName}`;
+
+  if (window.location.protocol !== "file:") {
+    try {
+      const response = await fetch(templatePath);
+
+      if (response.ok) {
+        return response.arrayBuffer();
+      }
+    } catch (error) {
+      console.warn("Direct car warranty loading failed.", error);
+    }
+  }
+
+  const existingTemplate =
+    window.CAR_WARRANTY_TEMPLATES?.[templateFileName];
+
+  if (existingTemplate) {
+    return decodeBase64Bytes(existingTemplate);
+  }
+
+  const base64 = await new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    const dataFileName = templateFileName.replace(/\.pdf$/i, ".data.js");
+
+    script.src = `Files/Warranty/Car/${dataFileName}`;
+    script.async = true;
+    script.onload = () => {
+      const loadedTemplate =
+        window.CAR_WARRANTY_TEMPLATES?.[templateFileName];
+
+      script.remove();
+
+      if (loadedTemplate) {
+        resolve(loadedTemplate);
+      } else {
+        reject(new Error(`Car warranty data is missing: ${dataFileName}`));
+      }
+    };
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`Car warranty template not found: ${templateFileName}`));
+    };
+
+    document.head.appendChild(script);
+  });
+
   return decodeBase64Bytes(base64);
 }
 

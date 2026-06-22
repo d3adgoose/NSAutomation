@@ -152,6 +152,11 @@ button:hover {
   font-weight: 600;
 }
 
+.warranty-transit-fields {
+  display: grid;
+  gap: 8px;
+}
+
 .warranty-duration-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 150px;

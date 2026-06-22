@@ -157,9 +157,9 @@
 
       <div id="warrantyCreatorFields" class="warranty-creator-fields hidden">
         <label for="warrantyVehicleType">Warranty type</label>
-        <select id="warrantyVehicleType">
+        <select id="warrantyVehicleType" onchange="updateWarrantyVehicleFields()">
           <option value="transit">Transit</option>
-          <option value="car" disabled>Cars (coming later)</option>
+          <option value="car">Car</option>
         </select>
 
         <label for="warrantyMaterialYears">
@@ -174,7 +174,9 @@
             inputmode="numeric"
             placeholder="Number"
           />
-          <div class="warranty-unit-label">Years</div>
+          <select id="warrantyMaterialUnit" aria-label="Material coverage unit">
+            <option value="years">Years</option>
+          </select>
         </div>
 
         <label for="warrantyLaborDuration">How long is labor cover?</label>
@@ -193,46 +195,48 @@
           </select>
         </div>
 
-        <label for="warrantyCommencement">Warranty begins after</label>
-        <select id="warrantyCommencement">
-          <option value="substantial">Substantial Completion</option>
-          <option value="testing">Testing and Completion</option>
-        </select>
+        <div id="warrantyTransitFields" class="warranty-transit-fields">
+          <label for="warrantyCommencement">Warranty begins after</label>
+          <select id="warrantyCommencement">
+            <option value="substantial">Substantial Completion</option>
+            <option value="testing">Testing and Completion</option>
+          </select>
 
-        <div class="warranty-date-row">
-          <div>
-            <label for="warrantyCommencementDate">
-              Warranty commencement date
-            </label>
-            <input
-              id="warrantyCommencementDate"
-              type="date"
-              onchange="updateWarrantyPeriodEnd()"
-            />
+          <div class="warranty-date-row">
+            <div>
+              <label for="warrantyCommencementDate">
+                Warranty commencement date
+              </label>
+              <input
+                id="warrantyCommencementDate"
+                type="date"
+                onchange="updateWarrantyPeriodEnd()"
+              />
+            </div>
+            <div>
+              <label for="warrantyPeriodEndDate">Warranty period ends</label>
+              <input id="warrantyPeriodEndDate" type="date" readonly />
+            </div>
           </div>
-          <div>
-            <label for="warrantyPeriodEndDate">Warranty period ends</label>
-            <input id="warrantyPeriodEndDate" type="date" readonly />
-          </div>
-        </div>
 
-        <div class="warranty-date-row">
-          <div>
-            <label for="warrantyRepresentative">
-              Manufacturer's Representative
-            </label>
-            <select id="warrantyRepresentative">
-              <option value="Victor Sanchez">Victor Sanchez</option>
-              <option value="Michael Howlett">Michael Howlett</option>
-              <option value="David Newell">David Newell</option>
-              <option value="Brad Quay">Brad Quay</option>
-              <option value="Max Diaz">Max Diaz</option>
-              <option value="Francis Tenggardjaja">Francis Tenggardjaja</option>
-            </select>
-          </div>
-          <div>
-            <label for="warrantyRepresentativeDate">Representative date</label>
-            <input id="warrantyRepresentativeDate" type="date" readonly />
+          <div class="warranty-date-row">
+            <div>
+              <label for="warrantyRepresentative">
+                Manufacturer's Representative
+              </label>
+              <select id="warrantyRepresentative">
+                <option value="Victor Sanchez">Victor Sanchez</option>
+                <option value="Michael Howlett">Michael Howlett</option>
+                <option value="David Newell">David Newell</option>
+                <option value="Brad Quay">Brad Quay</option>
+                <option value="Max Diaz">Max Diaz</option>
+                <option value="Francis Tenggardjaja">Francis Tenggardjaja</option>
+              </select>
+            </div>
+            <div>
+              <label for="warrantyRepresentativeDate">Representative date</label>
+              <input id="warrantyRepresentativeDate" type="date" readonly />
+            </div>
           </div>
         </div>
 
