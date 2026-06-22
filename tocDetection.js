@@ -2,6 +2,7 @@ const TOC_DETECTION_RULES = {
   Warranty: [
     {
       title: "Manufacturer's Limited Warranty",
+      tocLevel: 0,
       patterns: [
         "manufacturer’s limited warranty",
         "manufacturer's limited warranty",
@@ -113,7 +114,7 @@ async function detectTOCSubsections(file, section, baseStartPage) {
             section,
             startPage: baseStartPage + pageNumber - 1,
             targetPageIndex: baseStartPage + pageNumber - 2,
-            tocLevel: 1
+            tocLevel: rule.tocLevel ?? 1
           });
 
           console.log(`Detected "${rule.title}" on PDF page ${pageNumber}`);

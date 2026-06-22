@@ -1069,6 +1069,8 @@ async function confirmLibraryMergeOrder() {
 }
 
 window.addEventListener("load", async () => {
+  if (typeof supabaseClient === "undefined") return;
+
   await checkDatabaseLogin();
   loadLibraryDB();
   setupLibraryDropZone();

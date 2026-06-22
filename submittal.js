@@ -1,6 +1,7 @@
 let pdfLibrary = [];
 let pendingBuild = false;
 let customSectionLabels = {};
+let warrantyPromptHandled = false;
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -254,7 +255,13 @@ function renderUploadedPdfList() {
 }
 
 function removeUploadedPDF(id) {
+  const removedItem = pdfLibrary.find(item => item.id === id);
   pdfLibrary = pdfLibrary.filter(item => item.id !== id);
+
+  if (removedItem?.packetSection === "Warranty") {
+    warrantyPromptHandled = false;
+  }
+
   renderUploadedPdfList();
 }
 
@@ -274,6 +281,7 @@ function clearUploadedPDFs() {
   }
 
   pendingBuild = false;
+  warrantyPromptHandled = false;
   renderUploadedPdfList();
 }
 async function drawGeneratedCoverPage(pdfDoc) {
@@ -293,13 +301,7 @@ async function drawGeneratedCoverPage(pdfDoc) {
   const logoX = 430;
 
   try {
-    const res = await fetch("Files/CoverPage/NSCoverLogo.png");
-
-    if (!res.ok) {
-      throw new Error("Cover logo not found");
-    }
-
-    const logoBytes = await res.arrayBuffer();
+    const logoBytes = await loadCoverPageAsset("NSCoverLogo.png");
     const logoImage = await pdfDoc.embedPng(logoBytes);
 
     page.drawImage(logoImage, {
@@ -423,8 +425,7 @@ async function drawGeneratedCoverPage(pdfDoc) {
 }
 
 async function drawSectionDividerPage(pdfDoc, sectionTitle) {
-  const templateBytes = await fetch("Files/CoverPage/RomanCoverPage.pdf")
-    .then(res => res.arrayBuffer());
+  const templateBytes = await loadCoverPageAsset("RomanCoverPage.pdf");
 
   const templatePdf = await PDFDocument.load(templateBytes);
   const [templatePage] = await pdfDoc.copyPages(templatePdf, [0]);
@@ -490,6 +491,17 @@ async function drawSectionDividerPage(pdfDoc, sectionTitle) {
 }
 
 async function buildPacket() {
+  const hasIncludedWarranty = pdfLibrary.some(item =>
+    item.include && item.packetSection === "Warranty"
+  );
+
+  const warrantyModal = document.getElementById("warrantyPromptModal");
+
+  if (!hasIncludedWarranty && !warrantyPromptHandled && warrantyModal) {
+    openWarrantyPromptModal();
+    return;
+  }
+
   const includedDatasheets = pdfLibrary.filter(item =>
     item.include && item.packetSection === "Datasheets"
   );
@@ -556,27 +568,41 @@ async function buildPacket() {
   const tocPage = finalPdf.addPage([612, 792]);
 
   const tocItems = [];
+  const sectionTargets = {};
 
   let currentSection = null;
 
   for (const item of contentFiles) {
-  if (item.packetSection !== currentSection) {
-    currentSection = item.packetSection;
+    if (item.packetSection !== currentSection) {
+      currentSection = item.packetSection;
 
-    const sectionLabel = getSectionLabel(currentSection);
+      const targetPageIndex = finalPdf.getPageCount();
+      const sectionLabel = getSectionLabel(currentSection);
 
-    await drawSectionDividerPage(finalPdf, sectionLabel);
-  }
+      // Transit warranty PDFs already include their own Warranty divider page.
+      if (currentSection !== "Warranty") {
+        await drawSectionDividerPage(finalPdf, sectionLabel);
+      }
 
-  const startPage = finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+      sectionTargets[currentSection] = {
+        targetPageIndex,
+        pageNumber:
+          targetPageIndex + 1 - noNumberPageIndexes.length
+      };
+    }
 
-    tocItems.push({
-      title: item.displayTitle,
-      section: item.packetSection,
-      startPage,
-      targetPageIndex: finalPdf.getPageCount(),
-      tocLevel: 0
-    });
+    const startPage =
+      finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+
+    if (!item.hideParentTOC) {
+      tocItems.push({
+        title: item.displayTitle,
+        section: item.packetSection,
+        startPage,
+        targetPageIndex: finalPdf.getPageCount(),
+        tocLevel: 0
+      });
+    }
 
     if (
       item.packetSection === "Datasheets" ||
@@ -610,7 +636,12 @@ async function buildPacket() {
     await appendPDF(finalPdf, item.file);
   }
 
-  await drawTOCOnExistingPage(finalPdf, tocPage, tocItems);
+  await drawTOCOnExistingPage(
+    finalPdf,
+    tocPage,
+    tocItems,
+    sectionTargets
+  );
   await addPageNumbers(finalPdf, noNumberPageIndexes);
 
   console.log("About to save PDF...");
@@ -626,13 +657,479 @@ async function buildPacket() {
   downloadFile(pdfBytes, outputName, "application/pdf");
   console.log("Download function ran.");
 
-  if (typeof mergeSubmittalIntoLibrary === "function") {
+  warrantyPromptHandled = false;
+
+  if (
+    typeof supabaseClient !== "undefined" &&
+    typeof mergeSubmittalIntoLibrary === "function"
+  ) {
     try {
       await mergeSubmittalIntoLibrary(included);
     } catch (e) {
       console.error("Error merging into library", e);
     }
   }
+
+  resetPacketBuilder();
+}
+
+function resetPacketBuilder() {
+  pdfLibrary = [];
+  pendingBuild = false;
+  warrantyPromptHandled = false;
+  customSectionLabels = {};
+
+  const pdfUpload = document.getElementById("pdfUpload");
+  if (pdfUpload) pdfUpload.value = "";
+
+  [
+    "projectNumber",
+    "projectName",
+    "projectLocation",
+    "projectAddress",
+    "systemName",
+    "revision"
+  ].forEach(id => {
+    const field = document.getElementById(id);
+    if (field) field.value = "";
+  });
+
+  const washType = document.getElementById("washType");
+  if (washType) washType.selectedIndex = 0;
+
+  [
+    "warrantyPromptModal",
+    "datasheetOrderModal",
+    "subsectionModal"
+  ].forEach(id => {
+    document.getElementById(id)?.classList.add("hidden");
+  });
+
+  const datasheetOrderList = document.getElementById("datasheetOrderList");
+  if (datasheetOrderList) datasheetOrderList.innerHTML = "";
+
+  renderUploadedPdfList();
+}
+
+function openWarrantyPromptModal() {
+  const modal = document.getElementById("warrantyPromptModal");
+  const createCheckbox = document.getElementById("createWarrantySheet");
+  const durationInput = document.getElementById("warrantyLaborDuration");
+  const materialYearsInput = document.getElementById("warrantyMaterialYears");
+  const unitSelect = document.getElementById("warrantyLaborUnit");
+  const commencementSelect = document.getElementById("warrantyCommencement");
+  const commencementDate = document.getElementById("warrantyCommencementDate");
+  const representative = document.getElementById("warrantyRepresentative");
+  const representativeDate = document.getElementById("warrantyRepresentativeDate");
+  const revisionPreparedBy = document.getElementById("warrantyRevisionPreparedBy");
+  const status = document.getElementById("warrantyCreateStatus");
+
+  if (!modal || !createCheckbox) return;
+
+  createCheckbox.checked = false;
+  if (materialYearsInput) materialYearsInput.value = "";
+  if (durationInput) durationInput.value = "";
+  if (unitSelect) unitSelect.value = "days";
+  if (commencementSelect) commencementSelect.value = "substantial";
+  if (commencementDate) commencementDate.value = "";
+  if (representative) representative.selectedIndex = 0;
+  if (representativeDate) {
+    representativeDate.value = getWarrantyDateInputValue(new Date());
+  }
+  if (revisionPreparedBy) revisionPreparedBy.value = "";
+  if (status) status.textContent = "";
+
+  updateWarrantyPeriodEnd();
+  toggleWarrantyCreator();
+  modal.classList.remove("hidden");
+}
+
+function closeWarrantyPromptModal() {
+  const modal = document.getElementById("warrantyPromptModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function toggleWarrantyCreator() {
+  const createCheckbox = document.getElementById("createWarrantySheet");
+  const fields = document.getElementById("warrantyCreatorFields");
+  const continueButton = document.getElementById("continueWarrantyButton");
+
+  if (!createCheckbox || !fields || !continueButton) return;
+
+  fields.classList.toggle("hidden", !createCheckbox.checked);
+  continueButton.textContent = createCheckbox.checked
+    ? "Add Warranty & Continue"
+    : "Continue Without Warranty";
+}
+
+async function continueWarrantyPrompt() {
+  const createCheckbox = document.getElementById("createWarrantySheet");
+  let warrantyAdded = false;
+
+  if (!createCheckbox?.checked) {
+    warrantyPromptHandled = true;
+    closeWarrantyPromptModal();
+    buildPacket();
+    return;
+  }
+
+  const duration = Number(
+    document.getElementById("warrantyLaborDuration")?.value
+  );
+  const materialYears = Number(
+    document.getElementById("warrantyMaterialYears")?.value
+  );
+  const unit = document.getElementById("warrantyLaborUnit")?.value;
+  const commencement = document.getElementById("warrantyCommencement")?.value;
+  const commencementDate =
+    document.getElementById("warrantyCommencementDate")?.value || "";
+  const periodEndDate = getWarrantyPeriodEndDate(commencementDate);
+  const representative =
+    document.getElementById("warrantyRepresentative")?.value || "";
+  const representativeDate =
+    document.getElementById("warrantyRepresentativeDate")?.value || "";
+  const revisionPreparedBy =
+    document.getElementById("warrantyRevisionPreparedBy")?.value.trim() || "";
+  const status = document.getElementById("warrantyCreateStatus");
+  const continueButton = document.getElementById("continueWarrantyButton");
+
+  if (!Number.isInteger(materialYears) || materialYears < 1) {
+    if (status) status.textContent = "Enter the material warranty years.";
+    return;
+  }
+
+  if (!Number.isInteger(duration) || duration < 1) {
+    if (status) status.textContent = "Enter a whole number greater than zero.";
+    return;
+  }
+
+  if (!commencementDate || !periodEndDate) {
+    if (status) status.textContent = "Select the warranty commencement date.";
+    return;
+  }
+
+  if (continueButton) continueButton.disabled = true;
+  if (status) status.textContent = "Creating warranty sheet...";
+
+  try {
+    const warrantyFile = await createTransitWarrantyFile({
+      materialYears,
+      duration,
+      unit,
+      commencement,
+      commencementDate,
+      periodEndDate,
+      representative,
+      representativeDate,
+      revisionPreparedBy
+    });
+
+    pdfLibrary.push({
+      id: crypto.randomUUID(),
+      file: warrantyFile,
+      fileName: warrantyFile.name,
+      uploadDate: new Date().toLocaleDateString(),
+      displayTitle: "Manufacturer's Limited Warranty",
+      documentType: "Warranty",
+      packetSection: "Warranty",
+      include: true,
+      hideParentTOC: true,
+      notes:
+        `Materials: ${materialYears} year(s); ` +
+        `Labor: ${duration} ${unit}`,
+      datasheetOrder: null,
+      tocEntries: []
+    });
+    warrantyAdded = true;
+
+    warrantyPromptHandled = true;
+    sortLibraryBySection();
+    renderUploadedPdfList();
+    if (status) status.textContent = "Warranty sheet added.";
+    closeWarrantyPromptModal();
+    await buildPacket();
+  } catch (error) {
+    console.error("Could not continue warranty build:", error);
+
+    if (warrantyAdded) {
+      alert(
+        "The warranty sheet was added, but the PDF packet could not be built. " +
+        "Click Build PDF Packet to try again."
+      );
+    } else if (status) {
+      status.textContent = "The warranty sheet could not be created. Try again.";
+    }
+  } finally {
+    if (continueButton) continueButton.disabled = false;
+  }
+}
+
+async function createTransitWarrantyFile({
+  materialYears,
+  duration,
+  unit,
+  commencement,
+  commencementDate,
+  periodEndDate,
+  representative,
+  representativeDate,
+  revisionPreparedBy
+}) {
+  const commencementCode = commencement === "testing" ? "TC" : "SC";
+  const durationCode = unit === "years" ? "Y" : "D";
+  const templateFileName =
+    `Transit${commencementCode}${durationCode}Warranty.pdf`;
+  const templateBytes = await loadTransitWarrantyTemplate(templateFileName);
+  const warrantyPdf = await PDFDocument.load(templateBytes);
+  const pages = warrantyPdf.getPages();
+  const detailsPage = pages[2];
+  const PDFName = window.PDFLib.PDFName;
+
+  if (!detailsPage || !PDFName) {
+    throw new Error("The transit warranty template has an unexpected format.");
+  }
+
+  const annotationsKey = PDFName.of("Annots");
+  pages.forEach(page => page.node.delete(annotationsKey));
+  warrantyPdf.catalog.delete(PDFName.of("AcroForm"));
+
+  const font = await warrantyPdf.embedFont(StandardFonts.Helvetica);
+  const projectNumber = document.getElementById("projectNumber")?.value || "";
+  const projectName = document.getElementById("projectName")?.value || "";
+  const projectAddress = document.getElementById("projectAddress")?.value || "";
+  const unitLabel = unit === "years" ? "year(s)" : "days";
+  const commencementLabel = commencement === "testing"
+    ? "Testing and Completion."
+    : "Substantial Completion.";
+
+  drawWarrantyFieldText(detailsPage, projectNumber, 216, 660, 8, 242, font);
+  drawWarrantyFieldText(detailsPage, projectName, 216, 648, 8, 242, font);
+  drawWarrantyFieldText(detailsPage, projectAddress, 216, 635, 8, 242, font);
+  drawWarrantyFieldText(detailsPage, String(materialYears), 37, 581, 9, 15, font);
+  drawWarrantyFieldText(detailsPage, String(duration), 399, 581, 9, 19, font);
+  drawWarrantyFieldText(detailsPage, unitLabel, 420, 581, 8, 36, font);
+  drawWarrantyFieldText(detailsPage, commencementLabel, 36, 566, 8, 116, font);
+  drawWarrantyFieldText(
+    detailsPage,
+    formatWarrantyDateForPdf(commencementDate),
+    203,
+    520,
+    8,
+    65,
+    font
+  );
+  drawWarrantyFieldText(
+    detailsPage,
+    formatWarrantyDateForPdf(periodEndDate),
+    475,
+    520,
+    8,
+    59,
+    font
+  );
+  drawWarrantyFieldText(detailsPage, representative, 178, 178, 8, 180, font);
+  drawWarrantyFieldText(
+    detailsPage,
+    formatWarrantyDateForPdf(representativeDate),
+    390,
+    178,
+    8,
+    145,
+    font
+  );
+  drawWarrantyFieldText(detailsPage, revisionPreparedBy, 129, 97, 8, 157, font);
+
+  const warrantyBytes = await warrantyPdf.save();
+
+  return new File(
+    [warrantyBytes],
+    templateFileName,
+    { type: "application/pdf" }
+  );
+}
+
+function updateWarrantyPeriodEnd() {
+  const commencementDate =
+    document.getElementById("warrantyCommencementDate")?.value || "";
+  const periodEndInput = document.getElementById("warrantyPeriodEndDate");
+
+  if (periodEndInput) {
+    periodEndInput.value = getWarrantyPeriodEndDate(commencementDate);
+  }
+}
+
+function getWarrantyPeriodEndDate(commencementDate) {
+  const date = parseWarrantyDateInput(commencementDate);
+
+  if (!date) return "";
+
+  date.setDate(date.getDate() + 365);
+  return getWarrantyDateInputValue(date);
+}
+
+function parseWarrantyDateInput(value) {
+  const parts = String(value || "").split("-").map(Number);
+
+  if (parts.length !== 3 || parts.some(part => !Number.isFinite(part))) {
+    return null;
+  }
+
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function getWarrantyDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatWarrantyDateForPdf(value) {
+  const date = parseWarrantyDateInput(value);
+
+  if (!date) return "";
+
+  return [
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+    date.getFullYear()
+  ].join("/");
+}
+
+function drawWarrantyFieldText(page, text, x, y, size, maxWidth, font) {
+  const value = String(text || "");
+  let fontSize = size;
+
+  while (fontSize > 6 && font.widthOfTextAtSize(value, fontSize) > maxWidth) {
+    fontSize -= 0.5;
+  }
+
+  page.drawText(value, {
+    x,
+    y,
+    size: fontSize,
+    font,
+    color: rgb(0, 0, 0),
+    maxWidth
+  });
+}
+
+async function loadTransitWarrantyTemplate(templateFileName) {
+  const templatePath = `Files/Warranty/Transit/${templateFileName}`;
+
+  if (window.location.protocol !== "file:") {
+    try {
+      const response = await fetch(templatePath);
+
+      if (response.ok) {
+        return response.arrayBuffer();
+      }
+    } catch (error) {
+      console.warn("Direct warranty template loading failed.", error);
+    }
+  }
+
+  const base64 = await loadEmbeddedWarrantyTemplate(templateFileName);
+  return decodeBase64Bytes(base64);
+}
+
+function loadEmbeddedWarrantyTemplate(templateFileName) {
+  const existingTemplate =
+    window.TRANSIT_WARRANTY_TEMPLATES?.[templateFileName];
+
+  if (existingTemplate) {
+    return Promise.resolve(existingTemplate);
+  }
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    const dataFileName = templateFileName.replace(/\.pdf$/i, ".data.js");
+
+    script.src = `Files/Warranty/Transit/${dataFileName}`;
+    script.async = true;
+    script.onload = () => {
+      const loadedTemplate =
+        window.TRANSIT_WARRANTY_TEMPLATES?.[templateFileName];
+
+      script.remove();
+
+      if (loadedTemplate) {
+        resolve(loadedTemplate);
+      } else {
+        reject(new Error(`Warranty data is missing: ${dataFileName}`));
+      }
+    };
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`Warranty template not found: ${templateFileName}`));
+    };
+
+    document.head.appendChild(script);
+  });
+}
+
+async function loadCoverPageAsset(fileName) {
+  const assetPath = `Files/CoverPage/${fileName}`;
+
+  if (window.location.protocol !== "file:") {
+    try {
+      const response = await fetch(assetPath);
+
+      if (response.ok) {
+        return response.arrayBuffer();
+      }
+    } catch (error) {
+      console.warn("Direct cover asset loading failed.", error);
+    }
+  }
+
+  const base64 = await loadEmbeddedCoverPageAsset(fileName);
+  return decodeBase64Bytes(base64);
+}
+
+function loadEmbeddedCoverPageAsset(fileName) {
+  const existingAsset = window.COVER_PAGE_ASSETS?.[fileName];
+
+  if (existingAsset) {
+    return Promise.resolve(existingAsset);
+  }
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    const dataFileName = fileName.replace(/\.[^.]+$/i, ".data.js");
+
+    script.src = `Files/CoverPage/${dataFileName}`;
+    script.async = true;
+    script.onload = () => {
+      const loadedAsset = window.COVER_PAGE_ASSETS?.[fileName];
+
+      script.remove();
+
+      if (loadedAsset) {
+        resolve(loadedAsset);
+      } else {
+        reject(new Error(`Cover asset data is missing: ${dataFileName}`));
+      }
+    };
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`Cover asset not found: ${fileName}`));
+    };
+
+    document.head.appendChild(script);
+  });
+}
+
+function decodeBase64Bytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
 }
 
 function openDatasheetOrderModal(datasheets) {
@@ -899,7 +1396,12 @@ function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPage
   sourcePage.node.addAnnot(annotationRef);
 }
 
-async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
+async function drawTOCOnExistingPage(
+  pdfDoc,
+  page,
+  tocItems,
+  sectionTargets = {}
+) {
   const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const timesBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
   const timesBoldItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
@@ -1057,6 +1559,7 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
   const romans = ["I", "II", "III", "IV", "V", "VI", "VII"];
 
   let sectionNumber = 0;
+  const displayedPageNumbers = new Set();
 
   sectionDefinitions.forEach(section => {
     const items = tocItems.filter(item => item.section === section);
@@ -1067,13 +1570,63 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
     sectionNumber++;
 
     const sectionLabel = getSectionLabel(section);
+    const sectionText = `${roman}. ${sectionLabel}`;
+    const sectionTarget = sectionTargets[section];
 
-    page.drawText(`${roman}. ${sectionLabel}`, {
+    page.drawText(sectionText, {
       x: leftMargin,
       y,
       size: 12,
       font: timesBold
     });
+
+    if (sectionTarget) {
+      const sectionPageNumber = String(sectionTarget.pageNumber);
+      const sectionTextWidth =
+        timesBold.widthOfTextAtSize(sectionText, 12);
+      const sectionPageWidth =
+        timesBold.widthOfTextAtSize(sectionPageNumber, 12);
+      const sectionPageX = pageRight - sectionPageWidth;
+      const itemUsesSectionPage = items.some(item =>
+        String(item.startPage) === sectionPageNumber
+      );
+
+      addInternalPageLink(
+        pdfDoc,
+        page,
+        leftMargin,
+        y - 2,
+        sectionTextWidth,
+        14,
+        sectionTarget.targetPageIndex
+      );
+
+      if (!itemUsesSectionPage) {
+        drawDottedLeader(
+          leftMargin + sectionTextWidth + 6,
+          sectionPageX - 8,
+          y
+        );
+
+        page.drawText(sectionPageNumber, {
+          x: sectionPageX,
+          y,
+          size: 12,
+          font: timesBold
+        });
+        displayedPageNumbers.add(sectionPageNumber);
+
+        addInternalPageLink(
+          pdfDoc,
+          page,
+          sectionPageX,
+          y - 2,
+          sectionPageWidth,
+          14,
+          sectionTarget.targetPageIndex
+        );
+      }
+    }
 
     y -= 14;
 
@@ -1091,6 +1644,7 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
       const bulletX = settings.bulletX;
       const titleX = settings.titleX;
       const pageNum = `${item.startPage}`;
+      const showPageNumber = !displayedPageNumbers.has(pageNum);
       const pageNumWidth = times.widthOfTextAtSize(pageNum, 12);
       const pageNumX = pageRight - pageNumWidth;
 
@@ -1109,7 +1663,10 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
       });
 
       const titleWidth = times.widthOfTextAtSize(item.title, 12);
-      drawDottedLeader(titleX + titleWidth + 6, pageNumX - 8, y);
+
+      if (showPageNumber) {
+        drawDottedLeader(titleX + titleWidth + 6, pageNumX - 8, y);
+      }
 
       if (item.targetPageIndex !== undefined) {
         addInternalPageLink(
@@ -1121,14 +1678,29 @@ async function drawTOCOnExistingPage(pdfDoc, page, tocItems) {
           14,
           item.targetPageIndex
         );
+
+        if (showPageNumber) {
+          addInternalPageLink(
+            pdfDoc,
+            page,
+            pageNumX,
+            y - 2,
+            pageNumWidth,
+            14,
+            item.targetPageIndex
+          );
+        }
       }
 
-      page.drawText(pageNum, {
-        x: pageNumX,
-        y,
-        size: 12,
-        font: times
-      });
+      if (showPageNumber) {
+        page.drawText(pageNum, {
+          x: pageNumX,
+          y,
+          size: 12,
+          font: times
+        });
+        displayedPageNumbers.add(pageNum);
+      }
 
       y -= 12;
     });
