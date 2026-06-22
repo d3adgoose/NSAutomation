@@ -143,6 +143,120 @@
     </section>
   </main>
 
+  <div id="warrantyPromptModal" class="modal hidden">
+    <div class="modal-content warranty-modal-content">
+      <h2>Warranty Sheet</h2>
+      <p>No warranty PDF is included in this packet.</p>
+
+      <label class="checkbox-row warranty-create-toggle">
+        <input type="checkbox" id="createWarrantySheet" onchange="toggleWarrantyCreator()" />
+        <span>Do you want to create a warranty sheet?</span>
+      </label>
+
+      <div id="warrantyCreatorFields" class="warranty-creator-fields hidden">
+        <label for="warrantyVehicleType">Warranty type</label>
+        <select id="warrantyVehicleType" onchange="updateWarrantyVehicleFields()">
+          <option value="transit">Transit</option>
+          <option value="car">Car</option>
+        </select>
+
+        <label for="warrantyMaterialYears">How many years are materials covered?</label>
+        <div class="warranty-duration-row">
+          <input id="warrantyMaterialYears" type="number" min="1" step="1" inputmode="numeric" placeholder="Number" />
+          <select id="warrantyMaterialUnit" aria-label="Material coverage unit">
+            <option value="years">Years</option>
+          </select>
+        </div>
+
+        <label for="warrantyLaborDuration">How long is labor cover?</label>
+        <div class="warranty-duration-row">
+          <input id="warrantyLaborDuration" type="number" min="1" step="1" inputmode="numeric" placeholder="Number" />
+          <select id="warrantyLaborUnit" aria-label="Labor coverage unit">
+            <option value="days">Days</option>
+            <option value="years">Years</option>
+          </select>
+        </div>
+
+        <div id="warrantyTransitFields" class="warranty-transit-fields">
+          <label for="warrantyCommencement">Warranty begins after</label>
+          <select id="warrantyCommencement">
+            <option value="substantial">Substantial Completion</option>
+            <option value="testing">Testing and Completion</option>
+          </select>
+
+          <div class="warranty-date-row">
+            <div>
+              <label for="warrantyCommencementDate">Warranty commencement date</label>
+              <input id="warrantyCommencementDate" type="date" onchange="updateWarrantyPeriodEnd()" />
+            </div>
+            <div>
+              <label for="warrantyPeriodEndDate">Warranty period ends</label>
+              <input id="warrantyPeriodEndDate" type="date" />
+            </div>
+          </div>
+
+          <div class="warranty-date-row">
+            <div>
+              <label for="warrantyRepresentative">Manufacturer's Representative</label>
+              <select id="warrantyRepresentative">
+                <option value="Victor Sanchez">Victor Sanchez</option>
+                <option value="Michael Howlett">Michael Howlett</option>
+                <option value="David Newell">David Newell</option>
+                <option value="Brad Quay">Brad Quay</option>
+                <option value="Max Diaz">Max Diaz</option>
+                <option value="Francis Tenggardjaja">Francis Tenggardjaja</option>
+              </select>
+            </div>
+            <div>
+              <label for="warrantyRepresentativeDate">Representative date</label>
+              <input id="warrantyRepresentativeDate" type="date" />
+            </div>
+          </div>
+        </div>
+
+        <label for="warrantyRevisionPreparedBy">Revision Prepared By</label>
+        <input id="warrantyRevisionPreparedBy" placeholder="Name" />
+        <p id="warrantyCreateStatus" class="warranty-status" aria-live="polite"></p>
+      </div>
+
+      <div class="button-row">
+        <button id="continueWarrantyButton" onclick="continueWarrantyPrompt()">Continue Without Warranty</button>
+        <button class="secondary" onclick="closeWarrantyPromptModal()">Cancel Build</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="datasheetOrderModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Organize Datasheets</h2>
+      <div id="datasheetOrderList"></div>
+
+      <div class="button-row">
+        <button onclick="confirmDatasheetOrder()">Continue Building PDF</button>
+        <button class="secondary" onclick="closeDatasheetOrderModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pageManagerModal" class="modal hidden">
+    <div class="modal-content page-manager-modal-content">
+      <div class="page-manager-header">
+        <h2 id="pageManagerTitle">Manage PDF Pages</h2>
+        <button class="secondary" onclick="closePageManager()">Close</button>
+      </div>
+
+      <input type="hidden" id="activePageManagerPdfId" />
+      <div class="button-row page-manager-actions">
+        <button onclick="selectAllManagedPages()">Select All</button>
+        <button class="secondary" onclick="clearManagedPageSelection()">Clear Selection</button>
+        <button onclick="extractSelectedPages()">Extract Selected</button>
+        <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
+      </div>
+      <p id="pageManagerStatus" class="warranty-status" aria-live="polite"></p>
+      <div id="pageManagerPreviewList" class="page-manager-grid"></div>
+    </div>
+  </div>
+
  <div id="subsectionModal" class="modal hidden">
     <div class="modal-content large-modal">
 
@@ -156,6 +270,13 @@
       <div class="subsection-layout">
 
         <div class="subsection-preview-panel">
+          <div class="subsection-page-actions">
+            <button onclick="selectAllSubsectionPages()">Select All</button>
+            <button class="secondary" onclick="clearSubsectionPageSelection()">Clear</button>
+            <button onclick="extractSelectedPages()">Extract</button>
+            <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete</button>
+          </div>
+          <div id="subsectionPageSelectionStatus" class="subsection-page-selection-status"></div>
           <div id="subsectionPagePreviewList"></div>
         </div>
 

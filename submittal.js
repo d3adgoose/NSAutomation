@@ -4,6 +4,7 @@ let customSectionLabels = {};
 const sourcePDFBytesCache = new WeakMap();
 let romanCoverPageBytesPromise = null;
 let warrantyPromptHandled = false;
+let selectedManagedPages = new Set();
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -191,6 +192,14 @@ function renderUploadedPdfList() {
       `
       : "";
 
+    const managePdfButton = !canHaveSubsections
+      ? `
+        <button onclick="openPageManager('${item.id}')">
+          Manage PDF
+        </button>
+      `
+      : "";
+
     const subsectionCount = canHaveSubsections
       ? `
         <div class="subsection-count">
@@ -218,6 +227,7 @@ function renderUploadedPdfList() {
         </button>
 
         ${subsectionButton}
+        ${managePdfButton}
 
         <button
           class="remove-pdf-btn"
@@ -229,6 +239,274 @@ function renderUploadedPdfList() {
 
     container.appendChild(row);
   });
+}
+
+async function openPageManager(id) {
+  const item = pdfLibrary.find(entry => entry.id === id);
+  const modal = document.getElementById("pageManagerModal");
+  const activeId = document.getElementById("activePageManagerPdfId");
+  const title = document.getElementById("pageManagerTitle");
+
+  if (!item || !modal || !activeId || !title) return;
+
+  activeId.value = id;
+  title.textContent = item.displayTitle || item.fileName;
+  selectedManagedPages = new Set();
+  modal.classList.remove("hidden");
+
+  await renderPageManagerPreviews(item);
+}
+
+function closePageManager() {
+  document.getElementById("pageManagerModal")?.classList.add("hidden");
+  selectedManagedPages = new Set();
+}
+
+function getActivePageManagerItem() {
+  const pageManagerModal = document.getElementById("pageManagerModal");
+  const pageManagerOpen =
+    pageManagerModal && !pageManagerModal.classList.contains("hidden");
+  const id = pageManagerOpen
+    ? document.getElementById("activePageManagerPdfId")?.value
+    : document.getElementById("activeSubsectionPdfId")?.value;
+
+  return pdfLibrary.find(item => item.id === id);
+}
+
+async function renderPageManagerPreviews(item) {
+  const previewList = document.getElementById("pageManagerPreviewList");
+  const status = document.getElementById("pageManagerStatus");
+
+  if (!previewList) return;
+
+  previewList.innerHTML = "";
+  if (status) status.textContent = "Loading pages...";
+
+  try {
+    const sourceBytes = await getSourcePDFBytes(item.file);
+    const pdf = await pdfjsLib.getDocument({ data: sourceBytes.slice(0) }).promise;
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 0.42 });
+      const card = document.createElement("div");
+      const header = document.createElement("label");
+      const checkbox = document.createElement("input");
+      const label = document.createElement("span");
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      card.className = "page-manager-card";
+      card.dataset.pageNumber = String(pageNumber);
+      header.className = "page-manager-card-header";
+      checkbox.type = "checkbox";
+      checkbox.value = String(pageNumber);
+      label.textContent = `Page ${pageNumber}`;
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      const updateSelection = checked => {
+        checkbox.checked = checked;
+        card.classList.toggle("selected", checked);
+
+        if (checked) {
+          selectedManagedPages.add(pageNumber);
+        } else {
+          selectedManagedPages.delete(pageNumber);
+        }
+
+        updatePageManagerStatus(pdf.numPages);
+      };
+
+      checkbox.addEventListener("change", () => {
+        updateSelection(checkbox.checked);
+      });
+      card.addEventListener("click", event => {
+        if (event.target === checkbox) return;
+        updateSelection(!checkbox.checked);
+      });
+
+      header.appendChild(checkbox);
+      header.appendChild(label);
+      card.appendChild(header);
+      card.appendChild(canvas);
+      previewList.appendChild(card);
+
+      await page.render({ canvasContext: context, viewport }).promise;
+    }
+
+    updatePageManagerStatus(pdf.numPages);
+  } catch (error) {
+    console.error("Could not render PDF pages:", error);
+    if (status) status.textContent = "The PDF pages could not be loaded.";
+  }
+}
+
+function updatePageManagerStatus(totalPages) {
+  const status = document.getElementById("pageManagerStatus");
+  if (!status) return;
+
+  status.textContent =
+    `${selectedManagedPages.size} of ${totalPages} page(s) selected`;
+}
+
+function updateSubsectionPageSelectionStatus(totalPages) {
+  const status = document.getElementById("subsectionPageSelectionStatus");
+  if (!status) return;
+
+  status.textContent =
+    `${selectedManagedPages.size} of ${totalPages} page(s) selected for PDF actions`;
+}
+
+function selectAllSubsectionPages() {
+  const previews = Array.from(document.querySelectorAll(".pdf-page-preview"));
+  selectedManagedPages = new Set(
+    previews.map(preview => Number(preview.dataset.pageNumber))
+  );
+
+  previews.forEach(preview => {
+    preview.classList.add("page-action-selected");
+    const checkbox = preview.querySelector(".page-edit-checkbox");
+    if (checkbox) checkbox.checked = true;
+  });
+
+  updateSubsectionPageSelectionStatus(previews.length);
+}
+
+function clearSubsectionPageSelection() {
+  const previews = Array.from(document.querySelectorAll(".pdf-page-preview"));
+  selectedManagedPages = new Set();
+
+  previews.forEach(preview => {
+    preview.classList.remove("page-action-selected");
+    const checkbox = preview.querySelector(".page-edit-checkbox");
+    if (checkbox) checkbox.checked = false;
+  });
+
+  updateSubsectionPageSelectionStatus(previews.length);
+}
+
+function selectAllManagedPages() {
+  const cards = Array.from(document.querySelectorAll(".page-manager-card"));
+  selectedManagedPages = new Set(
+    cards.map(card => Number(card.dataset.pageNumber))
+  );
+
+  cards.forEach(card => {
+    card.classList.add("selected");
+    const checkbox = card.querySelector('input[type="checkbox"]');
+    if (checkbox) checkbox.checked = true;
+  });
+
+  updatePageManagerStatus(cards.length);
+}
+
+function clearManagedPageSelection() {
+  const cards = Array.from(document.querySelectorAll(".page-manager-card"));
+  selectedManagedPages = new Set();
+
+  cards.forEach(card => {
+    card.classList.remove("selected");
+    const checkbox = card.querySelector('input[type="checkbox"]');
+    if (checkbox) checkbox.checked = false;
+  });
+
+  updatePageManagerStatus(cards.length);
+}
+
+async function extractSelectedPages() {
+  const item = getActivePageManagerItem();
+  const selectedPages = Array.from(selectedManagedPages).sort((a, b) => a - b);
+
+  if (!item || selectedPages.length === 0) {
+    alert("Select at least one page to extract.");
+    return;
+  }
+
+  try {
+    const sourceBytes = await getSourcePDFBytes(item.file);
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+    const extractedPdf = await PDFDocument.create();
+    const pageIndexes = selectedPages.map(pageNumber => pageNumber - 1);
+    const copiedPages = await extractedPdf.copyPages(sourcePdf, pageIndexes);
+
+    copiedPages.forEach(page => extractedPdf.addPage(page));
+
+    const outputBytes = await extractedPdf.save();
+    const baseName = item.fileName.replace(/\.pdf$/i, "");
+    downloadFile(
+      outputBytes,
+      `${baseName} - Extracted Pages.pdf`,
+      "application/pdf"
+    );
+  } catch (error) {
+    console.error("Could not extract PDF pages:", error);
+    alert("The selected pages could not be extracted.");
+  }
+}
+
+async function deleteSelectedPages() {
+  const item = getActivePageManagerItem();
+  const selectedPages = Array.from(selectedManagedPages).sort((a, b) => a - b);
+
+  if (!item || selectedPages.length === 0) {
+    alert("Select at least one page to delete.");
+    return;
+  }
+
+  try {
+    const sourceBytes = await getSourcePDFBytes(item.file);
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+
+    if (selectedPages.length >= sourcePdf.getPageCount()) {
+      alert("A PDF must keep at least one page.");
+      return;
+    }
+
+    if (!confirm(`Delete ${selectedPages.length} selected page(s)?`)) return;
+
+    const deletedPageSet = new Set(selectedPages);
+    const keptIndexes = sourcePdf.getPageIndices().filter(
+      pageIndex => !deletedPageSet.has(pageIndex + 1)
+    );
+    const editedPdf = await PDFDocument.create();
+    const copiedPages = await editedPdf.copyPages(sourcePdf, keptIndexes);
+
+    copiedPages.forEach(page => editedPdf.addPage(page));
+
+    const editedBytes = await editedPdf.save();
+    item.file = new File(
+      [editedBytes],
+      item.fileName,
+      { type: "application/pdf", lastModified: Date.now() }
+    );
+    item.tocEntries = (item.tocEntries || []).flatMap(entry => {
+      if (deletedPageSet.has(entry.sourcePage)) return [];
+
+      const deletedBefore = selectedPages.filter(
+        pageNumber => pageNumber < entry.sourcePage
+      ).length;
+
+      return [{ ...entry, sourcePage: entry.sourcePage - deletedBefore }];
+    });
+
+    selectedManagedPages = new Set();
+    renderUploadedPdfList();
+
+    const pageManagerModal = document.getElementById("pageManagerModal");
+    const pageManagerOpen =
+      pageManagerModal && !pageManagerModal.classList.contains("hidden");
+
+    if (pageManagerOpen) {
+      await renderPageManagerPreviews(item);
+    } else {
+      renderCurrentSubsectionList();
+      await renderPDFPagePreviews(item);
+    }
+  } catch (error) {
+    console.error("Could not delete PDF pages:", error);
+    alert("The selected pages could not be deleted.");
+  }
 }
 
 function removeUploadedPDF(id) {
@@ -683,7 +961,8 @@ function resetPacketBuilder() {
   [
     "warrantyPromptModal",
     "datasheetOrderModal",
-    "subsectionModal"
+    "subsectionModal",
+    "pageManagerModal"
   ].forEach(id => {
     document.getElementById(id)?.classList.add("hidden");
   });
@@ -796,7 +1075,9 @@ async function continueWarrantyPrompt() {
   const commencement = document.getElementById("warrantyCommencement")?.value;
   const commencementDate =
     document.getElementById("warrantyCommencementDate")?.value || "";
-  const periodEndDate = getWarrantyPeriodEndDate(commencementDate);
+  const periodEndDate =
+    document.getElementById("warrantyPeriodEndDate")?.value ||
+    getWarrantyPeriodEndDate(commencementDate);
   const representative =
     document.getElementById("warrantyRepresentative")?.value || "";
   const representativeDate =
@@ -1362,6 +1643,7 @@ async function openSubsectionModal(id) {
   title.textContent =
     `TOC Entries: ${item.displayTitle}`;
   activeId.value = item.id;
+  selectedManagedPages = new Set();
 
   const subsectionPageNumber = document.getElementById("subsectionPageNumber");
   const subsectionTitle = document.getElementById("subsectionTitle");
@@ -1396,6 +1678,7 @@ function closeSubsectionModal() {
   const modal = document.getElementById("subsectionModal");
   if (modal) modal.classList.add("hidden");
 
+  selectedManagedPages = new Set();
   renderUploadedPdfList();
 }
 
@@ -1404,11 +1687,12 @@ async function renderPDFPagePreviews(item) {
   if (!previewList) return;
 
   previewList.innerHTML = "";
+  selectedManagedPages = new Set();
 
   const bytes = await getSourcePDFBytes(item.file);
 
   const pdf = await pdfjsLib.getDocument({
-    data: bytes
+    data: bytes.slice(0)
   }).promise;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
@@ -1420,7 +1704,13 @@ async function renderPDFPagePreviews(item) {
     wrapper.className = "pdf-page-preview";
     wrapper.dataset.pageNumber = pageNumber;
 
+    const header = document.createElement("div");
+    const checkbox = document.createElement("input");
     const label = document.createElement("div");
+    header.className = "page-preview-header";
+    checkbox.type = "checkbox";
+    checkbox.className = "page-edit-checkbox";
+    checkbox.setAttribute("aria-label", `Select page ${pageNumber} for PDF actions`);
     label.className = "page-preview-label";
     label.textContent = `Page ${pageNumber}`;
 
@@ -1430,11 +1720,30 @@ async function renderPDFPagePreviews(item) {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
 
-    wrapper.appendChild(label);
+    header.appendChild(checkbox);
+    header.appendChild(label);
+    wrapper.appendChild(header);
     wrapper.appendChild(canvas);
     previewList.appendChild(wrapper);
 
-    wrapper.addEventListener("click", () => {
+    checkbox.addEventListener("click", event => {
+      event.stopPropagation();
+    });
+    checkbox.addEventListener("change", () => {
+      wrapper.classList.toggle("page-action-selected", checkbox.checked);
+
+      if (checkbox.checked) {
+        selectedManagedPages.add(pageNumber);
+      } else {
+        selectedManagedPages.delete(pageNumber);
+      }
+
+      updateSubsectionPageSelectionStatus(pdf.numPages);
+    });
+
+    wrapper.addEventListener("click", event => {
+      if (event.target === checkbox) return;
+
       document.querySelectorAll(".pdf-page-preview").forEach(el => {
         el.classList.remove("selected");
       });
@@ -1448,6 +1757,8 @@ async function renderPDFPagePreviews(item) {
       viewport
     }).promise;
   }
+
+  updateSubsectionPageSelectionStatus(pdf.numPages);
 }
 
 function addTOCEntry(entryType) {

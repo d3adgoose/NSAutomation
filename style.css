@@ -316,6 +316,57 @@ button:disabled {
   background: #f9f9f9;
 }
 
+.subsection-page-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+  background: #f9f9f9;
+}
+
+.subsection-page-selection-status {
+  margin-bottom: 10px;
+  color: #4c5661;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.toc-format-options {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #ccd5df;
+  border-radius: 6px;
+  background: #f7f9fb;
+}
+
+.toc-format-options .checkbox-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin: 0;
+}
+
+.toc-format-options input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+
+.toc-format-options .checkbox-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.toc-format-options .checkbox-text small {
+  color: #58636f;
+  line-height: 1.35;
+}
+
 .subsection-form-panel {
   max-height: 65vh;
   overflow-y: auto;
@@ -337,6 +388,29 @@ button:disabled {
 .pdf-page-preview.selected {
   border-color: #0b2d4d;
   background: #e8eef4;
+}
+
+.pdf-page-preview.page-action-selected {
+  border-color: #b42318;
+  box-shadow: 0 0 0 1px #b42318;
+}
+
+.page-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.page-preview-header input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.page-preview-header .page-preview-label {
+  margin: 0;
 }
 
 .pdf-page-preview canvas {
@@ -490,4 +564,64 @@ button:disabled {
   justify-content: flex-end;
   gap: 10px;
   margin-bottom: 16px;
+}
+
+.page-manager-modal-content {
+  width: min(1100px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.page-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.page-manager-header h2 {
+  margin: 0;
+}
+
+.page-manager-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 0;
+  background: white;
+}
+
+.page-manager-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.page-manager-card {
+  min-width: 0;
+  border: 2px solid #c7cdd3;
+  border-radius: 6px;
+  padding: 8px;
+  background: white;
+  cursor: pointer;
+}
+
+.page-manager-card.selected {
+  border-color: #0b2d4d;
+  background: #e8eef4;
+}
+
+.page-manager-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.page-manager-card canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #d8dde2;
 }

@@ -215,7 +215,7 @@
             </div>
             <div>
               <label for="warrantyPeriodEndDate">Warranty period ends</label>
-              <input id="warrantyPeriodEndDate" type="date" readonly />
+              <input id="warrantyPeriodEndDate" type="date" />
             </div>
           </div>
 
@@ -235,7 +235,7 @@
             </div>
             <div>
               <label for="warrantyRepresentativeDate">Representative date</label>
-              <input id="warrantyRepresentativeDate" type="date" readonly />
+              <input id="warrantyRepresentativeDate" type="date" />
             </div>
           </div>
         </div>
@@ -274,6 +274,25 @@
     </div>
   </div>
 
+  <div id="pageManagerModal" class="modal hidden">
+    <div class="modal-content page-manager-modal-content">
+      <div class="page-manager-header">
+        <h2 id="pageManagerTitle">Manage PDF Pages</h2>
+        <button class="secondary" onclick="closePageManager()">Close</button>
+      </div>
+
+      <input type="hidden" id="activePageManagerPdfId" />
+      <div class="button-row page-manager-actions">
+        <button onclick="selectAllManagedPages()">Select All</button>
+        <button class="secondary" onclick="clearManagedPageSelection()">Clear Selection</button>
+        <button onclick="extractSelectedPages()">Extract Selected</button>
+        <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
+      </div>
+      <p id="pageManagerStatus" class="warranty-status" aria-live="polite"></p>
+      <div id="pageManagerPreviewList" class="page-manager-grid"></div>
+    </div>
+  </div>
+
   <div id="subsectionModal" class="modal hidden">
     <div class="modal-content large-modal">
 
@@ -287,6 +306,13 @@
       <div class="subsection-layout">
 
         <div class="subsection-preview-panel">
+          <div class="subsection-page-actions">
+            <button onclick="selectAllSubsectionPages()">Select All</button>
+            <button class="secondary" onclick="clearSubsectionPageSelection()">Clear</button>
+            <button onclick="extractSelectedPages()">Extract</button>
+            <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete</button>
+          </div>
+          <div id="subsectionPageSelectionStatus" class="subsection-page-selection-status"></div>
           <div id="subsectionPagePreviewList"></div>
         </div>
 
