@@ -1047,8 +1047,6 @@ async function confirmLibraryMergeOrder() {
 }
 
 window.addEventListener("load", async () => {
-  if (!document.getElementById("libraryDBBody")) return;
-
   await checkDatabaseLogin();
   await loadLibraryDB();
   setupLibraryDropZone();
