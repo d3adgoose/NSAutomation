@@ -6,6 +6,7 @@ let romanCoverPageBytesPromise = null;
 let warrantyPromptHandled = false;
 let selectedManagedPages = new Set();
 let pendingSubmittalImportFile = null;
+let submittalImportPreviewToken = 0;
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -1729,12 +1730,14 @@ function openSubmittalImportModal() {
   }
 
   if (status) status.textContent = "No PDF selected.";
+  clearSubmittalImportSummary();
   modal.classList.remove("hidden");
 }
 
 function closeSubmittalImportModal() {
   const modal = document.getElementById("submittalImportModal");
   if (modal) modal.classList.add("hidden");
+  clearSubmittalImportSummary();
 }
 
 function setupSubmittalImportDropZone() {
@@ -1769,14 +1772,20 @@ function setPendingSubmittalImportFile(file) {
   const status =
     document.getElementById("submittalImportModalStatus") ||
     document.getElementById("submittalImportStatus");
+  const previewToken = ++submittalImportPreviewToken;
 
   pendingSubmittalImportFile = file || null;
+  clearSubmittalImportSummary();
 
   if (status) {
     status.textContent = pendingSubmittalImportFile
-      ? `Ready to import ${pendingSubmittalImportFile.name}.`
+      ? `Reading sections from ${pendingSubmittalImportFile.name}...`
       : "Drop or choose a complete Submittal PDF.";
   }
+
+  if (!pendingSubmittalImportFile) return;
+
+  previewSubmittalImportFile(pendingSubmittalImportFile, previewToken);
 }
 
 function handleSubmittalImportSelection(event) {
@@ -1796,6 +1805,131 @@ async function confirmSubmittalImport() {
   }
 
   await importSubmittalFile(file);
+}
+
+async function previewSubmittalImportFile(file, previewToken) {
+  const status =
+    document.getElementById("submittalImportModalStatus") ||
+    document.getElementById("submittalImportStatus");
+
+  try {
+    const summary = await getSubmittalImportSummary(file);
+    if (previewToken !== submittalImportPreviewToken) return;
+
+    renderSubmittalImportSummary(summary);
+    if (status) {
+      status.textContent = summary.some(item => item.range)
+        ? `Ready to import ${file.name}.`
+        : "No matching sections were detected in this PDF.";
+    }
+  } catch (error) {
+    if (previewToken !== submittalImportPreviewToken) return;
+    console.error("Could not preview Submittal import:", error);
+    if (status) {
+      status.textContent =
+        error.message || "The Submittal PDF could not be previewed.";
+    }
+  }
+}
+
+async function getSubmittalImportSummary(file) {
+  const bytes = await file.arrayBuffer();
+  const sourcePdf = await PDFDocument.load(bytes);
+  const pageCount = sourcePdf.getPageCount();
+  const sectionMarkers = await detectImportedPacketSections(bytes, sourcePdf);
+  const tocSectionRanges = await getImportedTOCSectionRanges(bytes, pageCount);
+  const sections = [
+    {
+      section: "Warranty",
+      range: getImportedSectionRange(sectionMarkers, "Warranty", pageCount),
+      subsections: []
+    },
+    {
+      section: "Datasheets",
+      range:
+        tocSectionRanges.Datasheets ||
+        getImportedSectionRange(sectionMarkers, "Datasheets", pageCount),
+      subsections: []
+    },
+    {
+      section: "Shop Drawings",
+      range:
+        tocSectionRanges["Shop Drawings"] ||
+        getImportedSectionRange(sectionMarkers, "Shop Drawings", pageCount),
+      subsections: []
+    }
+  ];
+
+  for (const item of sections) {
+    if (!item.range) continue;
+
+    if (item.section === "Datasheets") {
+      item.subsections = await getImportedDatasheetRanges(
+        bytes,
+        sourcePdf,
+        item.range
+      );
+    } else if (
+      item.section === "Shop Drawings"
+    ) {
+      item.subsections = await detectImportedSubsectionRangesFromCompleteTOC(
+        bytes,
+        item.range,
+        item.section
+      );
+    }
+  }
+
+  return sections;
+}
+
+function clearSubmittalImportSummary() {
+  const container = document.getElementById("submittalImportDetectedSections");
+  if (!container) return;
+
+  container.replaceChildren();
+  container.classList.add("hidden");
+}
+
+function renderSubmittalImportSummary(summary) {
+  const container = document.getElementById("submittalImportDetectedSections");
+  if (!container) return;
+
+  container.replaceChildren();
+
+  const heading = document.createElement("h3");
+  heading.textContent = "Detected sections";
+  container.appendChild(heading);
+
+  summary.forEach(item => {
+    const sectionBlock = document.createElement("div");
+    sectionBlock.className = "import-summary-section";
+
+    const title = document.createElement("strong");
+    title.textContent = item.range
+      ? `${item.section} - pages ${item.range.startPageIndex + 1}-${item.range.endPageIndex}`
+      : `${item.section} - not detected`;
+    sectionBlock.appendChild(title);
+
+    const subsections = item.subsections || [];
+    if (subsections.length > 0) {
+      const list = document.createElement("ul");
+      subsections.forEach((subsection, index) => {
+        const listItem = document.createElement("li");
+        listItem.textContent = subsection.title || `${item.section} ${index + 1}`;
+        list.appendChild(listItem);
+      });
+      sectionBlock.appendChild(list);
+    } else if (item.range) {
+      const note = document.createElement("span");
+      note.textContent = "No subsections detected; this will import as one PDF.";
+      sectionBlock.appendChild(note);
+    }
+
+    container.appendChild(sectionBlock);
+  });
+
+  container.classList.remove("hidden");
 }
 
 async function importSubmittalToOM(event) {
@@ -1862,14 +1996,6 @@ async function importSubmittalFile(file, options = {}) {
           sourcePdf.getPageCount()
         )
       : null;
-    const testingRange = importDatasheets
-      ? tocSectionRanges["Testing Checklist and Testing Procedures"] ||
-        getImportedSectionRange(
-          sectionMarkers,
-          "Testing Checklist and Testing Procedures",
-          sourcePdf.getPageCount()
-        )
-      : null;
     const shopDrawingsRange =
       tocSectionRanges["Shop Drawings"] ||
       getImportedSectionRange(
@@ -1879,10 +2005,6 @@ async function importSubmittalFile(file, options = {}) {
       );
     console.table([
       { section: "Warranty", ...(warrantyRange || {}) },
-      {
-        section: "Testing Checklist and Testing Procedures",
-        ...(testingRange || {})
-      },
       { section: "Datasheets", ...(datasheetRange || {}) },
       { section: "Shop Drawings", ...(shopDrawingsRange || {}) }
     ]);
@@ -1905,63 +2027,35 @@ async function importSubmittalFile(file, options = {}) {
       }));
     }
 
-    if (testingRange) {
-      const testingFile = await extractImportedSection(
-        sourcePdf,
-        testingRange,
-        "Imported Submittal - Testing Checklist and Testing Procedures.pdf"
-      );
-
-      importedItems.push(createImportedLibraryItem({
-        file: testingFile,
-        sourceName: file.name,
-        displayTitle: "Testing Checklist and Testing Procedures",
-        documentType: "Testing Checklist and Testing Procedures",
-        packetSection: "Testing Checklist and Testing Procedures",
-        hideParentTOC: false,
-        datasheetOrder: null
-      }));
-    }
-
     if (datasheetRange) {
-      const datasheetFile = await extractImportedSection(
-        sourcePdf,
-        datasheetRange,
-        "Imported Submittal - Datasheets.pdf"
+      importedItems.push(
+        ...(await createImportedDatasheetItems({
+          bytes,
+          sourcePdf,
+          sourceName: file.name,
+          datasheetRange
+        }))
       );
-
-      importedItems.push(createImportedLibraryItem({
-        file: datasheetFile,
-        sourceName: file.name,
-        displayTitle: "Original Submittal Datasheets",
-        documentType: "Datasheet",
-        packetSection: "Datasheets",
-        hideParentTOC: false,
-        datasheetOrder: -1000
-      }));
     }
 
     if (shopDrawingsRange) {
-      const shopDrawingsFile = await extractImportedSection(
-        sourcePdf,
-        shopDrawingsRange,
-        "Imported Submittal - Shop Drawings.pdf"
+      importedItems.push(
+        ...(await createImportedSectionItems({
+          bytes,
+          sourcePdf,
+          sourceName: file.name,
+          sectionRange: shopDrawingsRange,
+          packetSection: "Shop Drawings",
+          documentType: "Shop Drawing",
+          fallbackTitle: "Imported Submittal Shop Drawings",
+          filePrefix: "Imported Submittal - Shop Drawings"
+        }))
       );
-
-      importedItems.push(createImportedLibraryItem({
-        file: shopDrawingsFile,
-        sourceName: file.name,
-        displayTitle: "Imported Submittal Shop Drawings",
-        documentType: "Shop Drawing",
-        packetSection: "Shop Drawings",
-        hideParentTOC: false,
-        datasheetOrder: null
-      }));
     }
 
     if (importedItems.length === 0) {
       throw new Error(
-        "No Warranty, Testing Checklist, Datasheets, or Shop Drawings entries were detected in the Submittal PDF."
+        "No Warranty, Datasheets, or Shop Drawings entries were detected in the Submittal PDF."
       );
     }
 
@@ -1981,7 +2075,6 @@ async function importSubmittalFile(file, options = {}) {
     if (modalStatus) {
       modalStatus.textContent = importSummary;
     }
-    closeSubmittalImportModal();
   } catch (error) {
     console.error("Could not import Submittal PDF:", error);
     if (status) {
@@ -2081,6 +2174,67 @@ async function createImportedDatasheetItems({
   ];
 }
 
+async function createImportedSectionItems({
+  bytes,
+  sourcePdf,
+  sourceName,
+  sectionRange,
+  packetSection,
+  documentType,
+  fallbackTitle,
+  filePrefix
+}) {
+  const subsectionRanges = await detectImportedSubsectionRangesFromCompleteTOC(
+    bytes,
+    sectionRange,
+    packetSection
+  );
+
+  if (subsectionRanges.length > 0) {
+    const items = [];
+
+    for (let index = 0; index < subsectionRanges.length; index++) {
+      const range = subsectionRanges[index];
+      const title = range.title || `${fallbackTitle} ${index + 1}`;
+      const subsectionFile = await extractImportedSection(
+        sourcePdf,
+        range,
+        sanitizeImportedFileName(`${index + 1} - ${title}.pdf`)
+      );
+
+      items.push(createImportedLibraryItem({
+        file: subsectionFile,
+        sourceName,
+        displayTitle: title,
+        documentType,
+        packetSection,
+        hideParentTOC: false,
+        datasheetOrder: packetSection === "Datasheets" ? -1000 + index : null
+      }));
+    }
+
+    return items;
+  }
+
+  const sectionFile = await extractImportedSection(
+    sourcePdf,
+    sectionRange,
+    `${filePrefix}.pdf`
+  );
+
+  return [
+    createImportedLibraryItem({
+      file: sectionFile,
+      sourceName,
+      displayTitle: fallbackTitle,
+      documentType,
+      packetSection,
+      hideParentTOC: false,
+      datasheetOrder: packetSection === "Datasheets" ? -1000 : null
+    })
+  ];
+}
+
 async function getImportedDatasheetRanges(bytes, sourcePdf, datasheetRange) {
   const metadataRanges = getImportedDatasheetMetadataRanges(
     sourcePdf,
@@ -2118,17 +2272,32 @@ function getImportedDatasheetMetadataRanges(sourcePdf, datasheetRange) {
 }
 
 async function detectImportedDatasheetRangesFromCompleteTOC(bytes, datasheetRange) {
+  return detectImportedSubsectionRangesFromCompleteTOC(
+    bytes,
+    datasheetRange,
+    "Datasheets"
+  );
+}
+
+async function detectImportedSubsectionRangesFromCompleteTOC(
+  bytes,
+  parentRange,
+  packetSection
+) {
   const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
   const tocItems = await detectImportedTOCEntries(pdf);
 
   return buildRangesFromImportedMarkers(
     tocItems
-      .filter(item => item.section === "Datasheets")
       .filter(item =>
-        item.pageIndex >= datasheetRange.startPageIndex &&
-        item.pageIndex < datasheetRange.endPageIndex
+        item.section === packetSection &&
+        !item.isSectionHeading
+      )
+      .filter(item =>
+        item.pageIndex >= parentRange.startPageIndex &&
+        item.pageIndex < parentRange.endPageIndex
       ),
-    datasheetRange
+    parentRange
   );
 }
 
@@ -2263,6 +2432,22 @@ function sanitizeImportedFileName(fileName) {
     .trim();
 }
 
+function cleanImportedTOCTitle(title) {
+  return String(title || "")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/\.{2,}/g, " ")
+    .replace(/(?:\s+\.\s*){2,}/g, " ")
+    .replace(/\s+\.\s+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s*\-]+/g, "")
+    .replace(/[\s.\-]+$/g, "")
+    .trim();
+}
+
+function isKnownImportedSectionHeading(title) {
+  return getImportedSectionTitleMap().has(normalizeImportedSectionText(title));
+}
+
 function getImportedSectionTitleMap() {
   return new Map([
     ["warranty", "Warranty"],
@@ -2317,6 +2502,10 @@ async function detectImportedSectionMarkersFromTOC(pdf) {
 async function detectImportedTOCEntries(pdf) {
   const entries = [];
   const diagnostics = [];
+  let currentSection = "";
+  let pendingSectionHeading = null;
+  let printedPageOffset = null;
+  let foundTOC = false;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
@@ -2324,31 +2513,59 @@ async function detectImportedTOCEntries(pdf) {
     const rows = buildImportedTextRows(content.items);
     const lines = rows.map(row => row.text);
     const pageText = normalizeImportedSectionText(lines.join(" "));
-    const hasTOCLikeRows = rows.some(row =>
-      parseImportedTOCRow(row, pageNumber - 2)
-    );
+    const pageOffset = printedPageOffset ?? pageNumber - 2;
+    const parsedRows = rows
+      .map(row => {
+        const parsed =
+          parseImportedTOCRow(row, pageOffset) ||
+          parseImportedTOCLine(row.text, pageOffset) ||
+          parseImportedTOCHeadingLine(row.text);
+        if (!parsed || !isLikelyImportedTOCRow(row, parsed)) return null;
+        return parsed;
+      })
+      .filter(Boolean);
+    const hasTOCLikeRows = parsedRows.length > 0;
+    const hasTOCHeading = pageText.includes("table of contents");
 
-    if (!pageText.includes("table of contents") && !(pageNumber <= 5 && hasTOCLikeRows)) {
+    if (
+      !hasTOCHeading &&
+      !(foundTOC && hasTOCLikeRows) &&
+      !(pageNumber <= 8 && hasTOCLikeRows)
+    ) {
+      if (foundTOC && pageNumber > 12) break;
       continue;
     }
 
-    const printedPageOffset = pageNumber - 2;
-    let currentSection = "";
+    if (printedPageOffset === null) {
+      printedPageOffset = pageNumber - 2;
+    }
+
+    foundTOC = true;
     diagnostics.push(...lines.slice(0, 80));
 
-    rows.forEach(row => {
-      const parsed =
-        parseImportedTOCRow(row, printedPageOffset) ||
-        parseImportedTOCLine(row.text, printedPageOffset);
-      if (!parsed) return;
-
-      if (parsed.section) {
+    parsedRows.forEach(parsed => {
+      if (parsed.isSectionHeading && parsed.section) {
         currentSection = parsed.section;
-      } else {
+        pendingSectionHeading = parsed;
+        entries.push(parsed);
+        return;
+      }
+
+      if (!parsed.section) {
         parsed.section = currentSection;
       }
 
-      if (parsed.section) entries.push(parsed);
+      if (!parsed.section) return;
+
+      if (
+        pendingSectionHeading &&
+        pendingSectionHeading.section === parsed.section &&
+        pendingSectionHeading.pageIndex == null
+      ) {
+        pendingSectionHeading.pageIndex = Math.max(0, parsed.pageIndex - 1);
+      }
+
+      entries.push(parsed);
     });
   }
 
@@ -2364,6 +2581,16 @@ async function detectImportedTOCEntries(pdf) {
   }
 
   return entries;
+}
+
+function isLikelyImportedTOCRow(row, parsed) {
+  if (parsed.isSectionHeading) return true;
+
+  const text = String(row?.text || "");
+  if (/\.{2,}|…|\. \./.test(text)) return true;
+
+  const normalizedTitle = normalizeImportedSectionText(parsed.title);
+  return getImportedSectionTitleMap().has(normalizedTitle);
 }
 
 async function getImportedTOCSectionRanges(bytes, totalPages) {
@@ -2389,15 +2616,23 @@ async function getImportedTOCSectionRanges(bytes, totalPages) {
       .find(entry =>
         entry.section === section &&
         !entry.isSectionHeading &&
-        entry.pageIndex >= sectionEntry.pageIndex
+        entry.pageIndex != null &&
+        (
+          sectionEntry.pageIndex == null ||
+          entry.pageIndex >= sectionEntry.pageIndex
+        )
       );
     const nextSectionEntry = entries
       .slice(sectionEntryIndex + 1)
       .find(entry =>
         entry.isSectionHeading &&
         entry.section !== section &&
+        entry.pageIndex != null &&
+        sectionEntry.pageIndex != null &&
         entry.pageIndex > sectionEntry.pageIndex
       );
+    if (sectionEntry.pageIndex == null && !firstChildEntry) return;
+
     const startPageIndex = firstChildEntry?.pageIndex ??
       sectionEntry.pageIndex + (sectionEntry.isSectionHeading ? 1 : 0);
     const endPageIndex = nextSectionEntry?.pageIndex ?? totalPages;
@@ -2424,7 +2659,7 @@ function parseImportedTOCLine(line, printedPageOffset) {
 
   if (!match) return null;
 
-  let title = match[1].replace(/[.\-]+$/g, "").trim();
+  let title = cleanImportedTOCTitle(match[1]);
   const printedPage = Number(match[2]);
   const pageIndex = printedPage + printedPageOffset - 1;
   const normalizedTitle = normalizeImportedSectionText(title);
@@ -2433,37 +2668,71 @@ function parseImportedTOCLine(line, printedPageOffset) {
   const section = resolveImportedTOCSectionTitle(sectionTitle);
 
   if (sectionMatch) {
-    title = title.replace(/^[ivxlcdm]+\.?\s+/i, "").trim();
+    title = cleanImportedTOCTitle(title.replace(/^[ivxlcdm]+\.?\s+/i, ""));
   }
 
   return {
     title,
     pageIndex,
     section,
-    isSectionHeading: !!sectionMatch && !!section
+    isSectionHeading:
+      !!section &&
+      (!!sectionMatch || isKnownImportedSectionHeading(title))
+  };
+}
+
+function parseImportedTOCHeadingLine(line) {
+  const cleanedLine = cleanImportedTOCTitle(
+    String(line || "")
+      .replace(/[^\x20-\x7E]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+  if (!cleanedLine || /\d+\s*$/.test(cleanedLine)) return null;
+
+  const normalizedTitle = normalizeImportedSectionText(cleanedLine);
+  const sectionMatch = normalizedTitle.match(/^([ivxlcdm]+)\s+(.+)$/i);
+  const sectionTitle = sectionMatch ? sectionMatch[2] : normalizedTitle;
+  const section = resolveImportedTOCSectionTitle(sectionTitle);
+
+  if (!section || !isKnownImportedSectionHeading(sectionTitle)) return null;
+
+  const title = sectionMatch
+    ? cleanImportedTOCTitle(cleanedLine.replace(/^[ivxlcdm]+\.?\s+/i, ""))
+    : cleanedLine;
+
+  return {
+    title,
+    pageIndex: null,
+    section,
+    isSectionHeading: true
   };
 }
 
 function parseImportedTOCRow(row, printedPageOffset) {
   const numberPart = [...row.parts]
     .reverse()
-    .find(part => /^\d+$/.test(part.text.trim()));
+    .find(part => /\d+\s*$/.test(part.text.trim()));
 
   if (!numberPart) return null;
 
-  const title = row.parts
+  const numberMatch = numberPart.text.trim().match(/(\d+)\s*$/);
+  const pageNumberText = numberMatch?.[1];
+  if (!pageNumberText) return null;
+
+  const titleParts = row.parts
     .filter(part => part.x < numberPart.x)
     .map(part => part.text)
-    .join(" ")
-    .replace(/[^\x20-\x7E]+/g, " ")
-    .replace(/\.{2,}/g, " ")
-    .replace(/\s+/g, " ")
+    .join(" ");
+  const embeddedTitle = numberPart.text
+    .replace(/(\d+)\s*$/, "")
     .trim();
+  const title = cleanImportedTOCTitle(titleParts || embeddedTitle);
 
   if (!title || /^page no\.?$/i.test(title)) return null;
 
   return parseImportedTOCLine(
-    `${title} ${numberPart.text.trim()}`,
+    `${title} ${pageNumberText}`,
     printedPageOffset
   );
 }

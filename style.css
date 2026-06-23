@@ -477,6 +477,51 @@ button:disabled {
   margin: 0;
 }
 
+.import-summary {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid #d9e2ea;
+  border-radius: 8px;
+  background: #f8fbff;
+  text-align: left;
+}
+
+.import-summary.hidden {
+  display: none;
+}
+
+.import-summary h3 {
+  margin: 0;
+  color: #17476f;
+  font-size: 15px;
+}
+
+.import-summary-section {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid #e3ebf2;
+}
+
+.import-summary-section:first-of-type {
+  border-top: 0;
+}
+
+.import-summary-section strong {
+  color: #1f2933;
+}
+
+.import-summary-section ul {
+  margin: 2px 0 0 18px;
+  padding: 0;
+}
+
+.import-summary-section li {
+  margin: 2px 0;
+}
+
 .upload-instructions {
   text-align: center;
   margin-bottom: 15px;
