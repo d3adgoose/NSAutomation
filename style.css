@@ -461,6 +461,18 @@ button:disabled {
   border-color:  #17476f;;
 }
 
+.import-drop-zone {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 22px;
+}
+
+.import-drop-zone p {
+  margin: 0;
+}
+
 .upload-instructions {
   text-align: center;
   margin-bottom: 15px;

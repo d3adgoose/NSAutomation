@@ -91,11 +91,22 @@
           accept="application/pdf"
           multiple
         />
+        <input
+          type="file"
+          id="submittalImport"
+          class="hidden"
+          accept="application/pdf"
+        />
+        <button onclick="openSubmittalImportModal()">
+          Import Submittal PDF
+        </button>
         <button onclick="renameTOCSections()">Rename Roman Numerals</button>
         <button onclick="clearUploadedPDFs()">
           Clear PDFs
         </button>
       </div>
+
+      <p id="submittalImportStatus" class="warranty-status" aria-live="polite"></p>
 
       <div id="dropZone" class="drop-zone">
         <p><strong>Drag & Drop PDFs Here</strong></p>
@@ -142,6 +153,32 @@
       </div>
     </section>
   </main>
+
+  <div id="submittalImportModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Import Submittal PDF</h2>
+      <p>
+        Drop in a completed Submittal packet and import the sections needed for
+        this O&amp;M packet.
+      </p>
+
+      <div id="submittalImportDropZone" class="drop-zone import-drop-zone">
+        <p><strong>Drop Complete Submittal PDF Here</strong></p>
+        <button onclick="document.getElementById('submittalImport').click()">
+          Choose PDF
+        </button>
+      </div>
+
+      <div class="button-row">
+        <button onclick="confirmSubmittalImport()">Import Detected Sections</button>
+        <button class="secondary" onclick="closeSubmittalImportModal()">Cancel</button>
+      </div>
+
+      <p id="submittalImportModalStatus" class="warranty-status" aria-live="polite">
+        No PDF selected.
+      </p>
+    </div>
+  </div>
 
   <div id="warrantyPromptModal" class="modal hidden">
     <div class="modal-content warranty-modal-content">
