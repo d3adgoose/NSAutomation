@@ -1862,6 +1862,14 @@ async function importSubmittalFile(file, options = {}) {
           sourcePdf.getPageCount()
         )
       : null;
+    const testingRange = importDatasheets
+      ? tocSectionRanges["Testing Checklist and Testing Procedures"] ||
+        getImportedSectionRange(
+          sectionMarkers,
+          "Testing Checklist and Testing Procedures",
+          sourcePdf.getPageCount()
+        )
+      : null;
     const shopDrawingsRange =
       tocSectionRanges["Shop Drawings"] ||
       getImportedSectionRange(
@@ -1871,6 +1879,10 @@ async function importSubmittalFile(file, options = {}) {
       );
     console.table([
       { section: "Warranty", ...(warrantyRange || {}) },
+      {
+        section: "Testing Checklist and Testing Procedures",
+        ...(testingRange || {})
+      },
       { section: "Datasheets", ...(datasheetRange || {}) },
       { section: "Shop Drawings", ...(shopDrawingsRange || {}) }
     ]);
@@ -1889,6 +1901,24 @@ async function importSubmittalFile(file, options = {}) {
         documentType: "Warranty",
         packetSection: "Warranty",
         hideParentTOC: true,
+        datasheetOrder: null
+      }));
+    }
+
+    if (testingRange) {
+      const testingFile = await extractImportedSection(
+        sourcePdf,
+        testingRange,
+        "Imported Submittal - Testing Checklist and Testing Procedures.pdf"
+      );
+
+      importedItems.push(createImportedLibraryItem({
+        file: testingFile,
+        sourceName: file.name,
+        displayTitle: "Testing Checklist and Testing Procedures",
+        documentType: "Testing Checklist and Testing Procedures",
+        packetSection: "Testing Checklist and Testing Procedures",
+        hideParentTOC: false,
         datasheetOrder: null
       }));
     }
@@ -1931,7 +1961,7 @@ async function importSubmittalFile(file, options = {}) {
 
     if (importedItems.length === 0) {
       throw new Error(
-        "No Warranty, Datasheets, or Shop Drawings entries were detected in the Submittal PDF."
+        "No Warranty, Testing Checklist, Datasheets, or Shop Drawings entries were detected in the Submittal PDF."
       );
     }
 
@@ -2242,8 +2272,10 @@ function getImportedSectionTitleMap() {
     ["testing checklist", "Testing Checklist and Testing Procedures"],
     ["testing procedures", "Testing Checklist and Testing Procedures"],
     ["testing procedure", "Testing Checklist and Testing Procedures"],
+    ["testing", "Testing Checklist and Testing Procedures"],
     ["sequence of operations", "Sequence of Operations"],
     ["parts list", "Parts List"],
+    ["equipment datasheets", "Datasheets"],
     ["equipment data", "Datasheets"],
     ["datasheets", "Datasheets"],
     ["control panel components", "Control Panel Components"],
@@ -2448,15 +2480,16 @@ function resolveImportedTOCSectionTitle(title) {
     return "Warranty";
   }
   if (normalizedTitle.includes("limited warranty")) return "Warranty";
-  if (normalizedTitle.includes("data sheet")) return "Datasheets";
-  if (normalizedTitle.includes("datasheet")) return "Datasheets";
-  if (normalizedTitle.includes("equipment data")) return "Datasheets";
   if (
     normalizedTitle.includes("testing checklist") ||
-    normalizedTitle.includes("testing procedure")
+    normalizedTitle.includes("testing procedure") ||
+    normalizedTitle === "testing"
   ) {
     return "Testing Checklist and Testing Procedures";
   }
+  if (normalizedTitle.includes("data sheet")) return "Datasheets";
+  if (normalizedTitle.includes("datasheet")) return "Datasheets";
+  if (normalizedTitle.includes("equipment data")) return "Datasheets";
   if (normalizedTitle.includes("shop drawing")) return "Shop Drawings";
   if (normalizedTitle === "drawings" || normalizedTitle.endsWith(" drawings")) {
     return "Shop Drawings";
@@ -2628,11 +2661,13 @@ function isImportedDatasheetsMarkerPage(normalizedPageText) {
   return (
     normalizedPageText === "datasheets" ||
     normalizedPageText === "data sheets" ||
+    normalizedPageText === "equipment datasheets" ||
     normalizedPageText === "equipment data" ||
-    /^([ivxlcdm]+ )?(datasheets|data sheets|equipment data)$/.test(
+    /^([ivxlcdm]+ )?(datasheets|data sheets|equipment datasheets|equipment data)$/.test(
       normalizedPageText
     ) ||
     compactText === "datasheets" ||
+    compactText === "equipmentdatasheets" ||
     compactText === "equipmentdata"
   );
 }
@@ -2643,9 +2678,14 @@ function resolveImportedSparseSectionMarker(normalizedPageText) {
   const compactCleanedText = cleanedText.replace(/\s+/g, "");
   const sectionMap = new Map([
     ["warranty", "Warranty"],
+    ["testing checklist and testing procedures", "Testing Checklist and Testing Procedures"],
+    ["testing checklist", "Testing Checklist and Testing Procedures"],
+    ["testing procedures", "Testing Checklist and Testing Procedures"],
+    ["testing procedure", "Testing Checklist and Testing Procedures"],
+    ["testing", "Testing Checklist and Testing Procedures"],
     ["datasheets", "Datasheets"],
     ["datasheet", "Datasheets"],
-    ["datasheets", "Datasheets"],
+    ["equipment datasheets", "Datasheets"],
     ["data sheets", "Datasheets"],
     ["equipment data", "Datasheets"],
     ["control panel components", "Control Panel Components"],
@@ -2682,6 +2722,13 @@ function resolveImportedSectionTitle(title, sectionTitleMap) {
   const exactSection = sectionTitleMap.get(title);
   if (exactSection) return exactSection;
   if (title.includes("warranty")) return "Warranty";
+  if (
+    title.includes("testing checklist") ||
+    title.includes("testing procedure") ||
+    title === "testing"
+  ) {
+    return "Testing Checklist and Testing Procedures";
+  }
   if (title.includes("datasheet") || title.includes("equipment data")) {
     return "Datasheets";
   }

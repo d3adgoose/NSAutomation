@@ -295,6 +295,10 @@ button:disabled {
   background: #17476f;
 }
 
+.attach-pdf-btn input[type="file"] {
+  display: none;
+}
+
 .large-modal {
   width: 1000px;
   max-width: 95%;
@@ -636,4 +640,86 @@ button:disabled {
   width: 100%;
   height: auto;
   border: 1px solid #d8dde2;
+}
+
+.converter-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  margin-top: 16px;
+}
+
+.converter-drop-zone {
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.converter-drop-zone p {
+  margin: 4px 0;
+}
+
+.converter-drop-zone.dragover {
+  border-color: #0b2d4d;
+  background: #eef5fb;
+}
+
+.converter-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.converter-section-heading h2 {
+  margin: 0;
+}
+
+.converter-preview-modal-content {
+  width: 95%;
+  max-width: 1200px;
+}
+
+.converter-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.converter-preview-page {
+  width: 100%;
+  margin-bottom: 16px;
+  border: 1px solid #ccc;
+  background: white;
+}
+
+@media (max-width: 800px) {
+  .converter-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.upload-drop-zone {
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.upload-drop-zone p {
+  margin: 4px 0;
+}
+
+.upload-drop-zone.dragover {
+  border-color: #0b2d4d;
+  background: #eef5fb;
 }

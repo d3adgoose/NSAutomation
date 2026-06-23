@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>Converter</title>
+
+  <link rel="stylesheet" href="style.css" />
+
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+
+<body>
+  <div class="hamburger-container">
+    <button id="hamburgerBtn" class="hamburger" aria-label="Open navigation" aria-expanded="false">
+      ☰
+    </button>
+
+    <nav id="sideMenu" class="side-menu">
+      <a href="index.html">Home</a>
+      <a href="database.html">Database</a>
+      <a href="converter.html">Converter</a>
+      <a href="submittal.html">Submittal</a>
+      <a href="om.html">O&M Manuals</a>
+    </nav>
+  </div>
+
+  <header>
+    <h1>Converter</h1>
+    <p>Convert part numbers, item codes, and other PDF values using Excel cross-reference files.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <details open>
+        <summary><strong>How to Use Converter</strong></summary>
+
+        <div class="instructions-box">
+          <ol>
+            <li>Drop in or choose a PDF such as a submittal, O&M manual, or datasheet.</li>
+            <li>Drop in or choose an Excel file with columns named <strong>Old Part #</strong> and <strong>Item Code</strong>.</li>
+            <li>Click <strong>Preview Changes</strong> to scan the PDF.</li>
+            <li>Click <strong>Preview PDF Before / After</strong> to visually compare the original and converted PDF.</li>
+            <li>Click <strong>Generate Converted PDF</strong> to download the updated PDF.</li>
+          </ol>
+        </div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Part Number Converter</h2>
+
+      <div class="converter-upload-grid">
+        <div>
+          <h3>1. Upload PDF</h3>
+
+          <div id="converterPdfDropZone" class="drop-zone converter-drop-zone">
+            <p><strong>Drag & Drop PDF Here</strong></p>
+            <p>Submittal, O&M manual, or datasheet</p>
+
+            <label class="attach-pdf-btn">
+              Choose PDF
+              <input
+                id="converterPdfUpload"
+                type="file"
+                accept="application/pdf"
+                style="display:none;"
+              />
+            </label>
+          </div>
+
+          <p id="selectedConverterPdf" class="selected-library-pdf">
+            No PDF selected yet.
+          </p>
+        </div>
+
+        <div>
+          <h3>2. Upload Excel Cross-Reference</h3>
+
+          <div id="converterExcelDropZone" class="drop-zone converter-drop-zone">
+            <p><strong>Drag & Drop Excel Here</strong></p>
+            <p>Must include Old Part # and Item Code columns</p>
+
+            <label class="attach-pdf-btn">
+              Choose Excel
+              <input
+                id="converterExcelUpload"
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                style="display:none;"
+              />
+            </label>
+          </div>
+
+          <p id="selectedConverterExcel" class="selected-library-pdf">
+            No Excel selected yet.
+          </p>
+        </div>
+      </div>
+
+      <div class="button-row">
+        <button onclick="openConverterPdfPreview()">Preview PDF Before / After</button>
+        <button onclick="generateConvertedPDF()">Generate Converted PDF</button>
+        <button class="secondary" onclick="clearConverterFiles()">Clear</button>
+      </div>
+
+      <p id="converterStatus" class="warranty-status">No files selected yet.</p>
+    </section>
+
+    <section class="card">
+      <div class="converter-section-heading">
+        <h2>Detected Changes</h2>
+        <button onclick="previewPartNumberChanges()">Preview Changes</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Old Part #</th>
+            <th>Item Code</th>
+            <th>Found In PDF</th>
+          </tr>
+        </thead>
+
+        <tbody id="converterPreviewBody">
+          <tr>
+            <td colspan="3">No changes previewed yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="converterPreviewModal" class="modal hidden">
+    <div class="modal-content converter-preview-modal-content">
+      <h2>PDF Before / After Preview</h2>
+
+      <p id="converterPreviewModalStatus" class="warranty-status">
+        Preview not loaded yet.
+      </p>
+
+      <div class="converter-preview-grid">
+        <div>
+          <h3>Before</h3>
+          <div id="converterBeforePreview"></div>
+        </div>
+
+        <div>
+          <h3>After</h3>
+          <div id="converterAfterPreview"></div>
+        </div>
+      </div>
+
+      <div class="button-row">
+        <button class="secondary" onclick="closeConverterPdfPreview()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="navigation.js"></script>
+  <script src="converter.js"></script>
+</body>
+</html>

@@ -69,7 +69,7 @@ const fileTypeRules = [
   { documentType: "Maintenance", packetSection: "Maintenance", patterns: ["maintenance"] },
   { documentType: "Safety Procedures", packetSection: "Safety Procedures", patterns: ["warning", "emergency shutdown", "emergency", "shutdown", "safety"] },
   { documentType: "Sequence of Operations", packetSection: "Sequence of Operations", patterns: ["sequence of operations", "sequence of operation", "operations sequence"] },
-  { documentType: "Test Report", packetSection: "Testing Checklist and Testing Procedures", patterns: ["testing checklist", "testing procedure", "testing procedures", "test checklist", "test procedure"] },
+  { documentType: "Testing Checklist and Testing Procedures", packetSection: "Testing Checklist and Testing Procedures", patterns: ["testing checklist", "testing procedure", "testing procedures", "test checklist", "test procedure", "testing"] },
   { documentType: "Parts List", packetSection: "Parts List", patterns: ["parts list", "part list", "parts", "part"] },
   { documentType: "Electrical Schematics", packetSection: "Electrical Schematics", patterns: ["electrical schematic", "electrical schematics", "electrical diagram", "schematic", "diagram"] },
   { documentType: "Control Panel Components", packetSection: "Control Panel Components", patterns: ["control", "panel"] },
@@ -77,7 +77,7 @@ const fileTypeRules = [
   { documentType: "Manual", packetSection: "Manuals", patterns: ["manual"] },
   { documentType: "Certification", packetSection: "Appendix", patterns: ["cert"] },
   { documentType: "Spec Sheet", packetSection: "Datasheets", patterns: ["spec"] },
-  { documentType: "Test Report", packetSection: "Datasheets", patterns: ["test"] },
+  { documentType: "Testing Checklist and Testing Procedures", packetSection: "Testing Checklist and Testing Procedures", patterns: ["test"] },
   { documentType: "Appendix", packetSection: "Appendix", patterns: ["appendix"] }
 ];
 

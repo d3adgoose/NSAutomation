@@ -22,6 +22,7 @@
         <nav id="sideMenu" class="side-menu">
             <a href="index.html">Home</a>
             <a href="database.html">Database</a>
+            <a href="converter.html">Converter</a>
             <a href="submittal.html">Submittal</a>
             <a href="om.html">O&M Manuals</a>
         </nav>
@@ -84,20 +85,26 @@
       <h2>Upload PDFs</h2>
 
       <div class="button-row upload-toolbar">
-        <input
-          type="file"
-          id="pdfUpload"
-          accept="application/pdf"
-          multiple
-        />
         <button onclick="renameTOCSections()">Rename Roman Numerals</button>
         <button onclick="clearUploadedPDFs()">
           Clear PDFs
         </button>
       </div>
 
-      <div id="dropZone" class="drop-zone">
+      <div id="dropZone" class="drop-zone upload-drop-zone">
         <p><strong>Drag & Drop PDFs Here</strong></p>
+        <p>or choose one or more PDFs from your computer</p>
+
+        <label class="attach-pdf-btn">
+          Choose PDFs
+          <input
+            type="file"
+            id="pdfUpload"
+            accept="application/pdf"
+            multiple
+            style="display:none;"
+          />
+        </label>
       </div>
 
       <div id="uploadedPdfList"></div>
