@@ -134,6 +134,17 @@ function updateConverterStatus(message = "") {
   status.textContent = `${pdfText} | ${excelText}`;
 }
 
+function runConverterTask(task, failureMessage) {
+  return Promise.resolve()
+    .then(task)
+    .catch(error => {
+      console.error(failureMessage, error);
+      updateConverterStatus(
+        `${failureMessage} ${error?.message || "Please try again."}`
+      );
+    });
+}
+
 async function readExcelConverterMap() {
   if (!converterExcelFile) {
     alert("Upload an Excel file first.");
@@ -206,7 +217,157 @@ async function extractPDFTextByPage(file) {
   return pages;
 }
 
-async function previewPartNumberChanges() {
+async function extractDrawingPageOCRText(file, textPages) {
+  const hasOCR = await ensureTesseractLoaded();
+  if (!hasOCR) {
+    updateConverterStatus(
+      "Drawing-page OCR could not load, so only selectable PDF text was scanned."
+    );
+    return [];
+  }
+
+  const drawingCandidates = textPages
+    .filter(isDrawingLikeTextPage)
+    .slice(0, 8);
+  if (!drawingCandidates.length) return [];
+
+  updateConverterStatus(
+    `Scanning up to ${drawingCandidates.length} drawing-like page(s) with OCR...`
+  );
+
+  const bytes = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({
+    data: bytes.slice(0)
+  }).promise;
+  const results = [];
+
+  for (const candidate of drawingCandidates) {
+    try {
+      await waitForConverterIdle();
+      updateConverterStatus(
+        `OCR scanning drawing page ${candidate.pageNumber}...`
+      );
+
+      const canvas = await renderPDFPageToCanvas(
+        pdf,
+        candidate.pageNumber,
+        1.35
+      );
+      const ocrResult = await withTimeout(
+        Tesseract.recognize(canvas, "eng"),
+        25000
+      );
+
+      results.push({
+        pageNumber: candidate.pageNumber,
+        text: normalizeOCRText(ocrResult.data?.text || "")
+      });
+    } catch (error) {
+      console.warn(`Could not OCR page ${candidate.pageNumber}:`, error);
+    }
+  }
+
+  return results;
+}
+
+function waitForConverterIdle() {
+  return new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
+}
+
+async function renderPDFPageToCanvas(pdf, pageNumber, scale) {
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+
+  await page.render({
+    canvasContext: context,
+    viewport
+  }).promise;
+
+  return canvas;
+}
+
+function withTimeout(promise, timeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`Timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+    })
+  ]);
+}
+
+async function ensureTesseractLoaded() {
+  if (window.Tesseract) return true;
+
+  const sources = [
+    "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+    "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"
+  ];
+
+  for (const source of sources) {
+    const loaded = await loadConverterScript(source, () => !!window.Tesseract);
+    if (loaded) return true;
+  }
+
+  return false;
+}
+
+function loadConverterScript(source, isReady) {
+  return new Promise(resolve => {
+    if (isReady()) {
+      resolve(true);
+      return;
+    }
+
+    const existing = Array.from(document.scripts).find(
+      script => script.src === source
+    );
+
+    if (existing) {
+      existing.addEventListener("load", () => resolve(isReady()), { once: true });
+      existing.addEventListener("error", () => resolve(false), { once: true });
+      setTimeout(() => resolve(isReady()), 3000);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = source;
+    script.onload = () => resolve(isReady());
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+}
+
+function isDrawingLikeTextPage(page) {
+  const text = String(page.text || "").trim();
+
+  return text.length < 80 || page.textItems.length < 6;
+}
+
+function normalizeOCRText(text) {
+  return String(text || "")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function previewPartNumberChanges() {
+  return runConverterTask(
+    previewPartNumberChangesImpl,
+    "Preview changes failed."
+  );
+}
+
+async function previewPartNumberChangesImpl() {
   if (!converterPdfFile) {
     alert("Upload a PDF first.");
     return;
@@ -228,8 +389,39 @@ async function previewPartNumberChanges() {
   }
 
   const pages = await extractPDFTextByPage(converterPdfFile);
+  converterMatches = buildConverterMatches(map, pages);
+  renderConverterPreview();
 
-  converterMatches = map.map(item => {
+  let ocrPages = [];
+
+  try {
+    ocrPages = await extractDrawingPageOCRText(converterPdfFile, pages);
+  } catch (error) {
+    console.warn("Drawing-page OCR scan failed:", error);
+    updateConverterStatus(
+      "PDF text preview is ready. Drawing-page OCR stopped before it finished."
+    );
+  }
+
+  if (ocrPages.length) {
+    converterMatches = buildConverterMatches(map, pages, ocrPages);
+    renderConverterPreview();
+  }
+
+  const foundCount = converterMatches.filter(item =>
+    item.foundPages.length || item.ocrFoundPages.length
+  ).length;
+  const ocrFoundCount = converterMatches.filter(item =>
+    item.ocrFoundPages.length
+  ).length;
+  const ocrText = ocrFoundCount
+    ? ` ${ocrFoundCount} part number(s) also appeared on drawing/OCR page(s).`
+    : "";
+  updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}`);
+}
+
+function buildConverterMatches(map, pages, ocrPages = []) {
+  return map.map(item => {
     const foundPageCounts = pages
       .map(page => ({
         pageNumber: page.pageNumber,
@@ -237,19 +429,25 @@ async function previewPartNumberChanges() {
       }))
       .filter(page => page.count > 0);
     const foundPages = foundPageCounts.map(page => page.pageNumber);
+    const ocrFoundPageCounts = ocrPages
+      .map(page => ({
+        pageNumber: page.pageNumber,
+        count: countTextOccurrences(page.text, item.oldPart)
+      }))
+      .filter(page => page.count > 0);
+    const ocrFoundPages = ocrFoundPageCounts
+      .map(page => page.pageNumber)
+      .filter(pageNumber => !foundPages.includes(pageNumber));
 
     return {
       ...item,
       foundPages,
       foundPageCounts,
-      foundCount: foundPageCounts.reduce((sum, page) => sum + page.count, 0)
+      foundCount: foundPageCounts.reduce((sum, page) => sum + page.count, 0),
+      ocrFoundPages,
+      ocrFoundPageCounts
     };
   });
-
-  renderConverterPreview();
-
-  const foundCount = converterMatches.filter(item => item.foundPages.length).length;
-  updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).`);
 }
 
 function renderConverterPreview() {
@@ -286,12 +484,31 @@ function renderConverterPreview() {
 }
 
 function getConverterFoundText(match) {
-  if (!match.foundPages.length) return "No";
+  const textParts = [];
 
-  return `Yes - ${match.foundCount} mention(s) on page(s): ${match.foundPages.join(", ")}`;
+  if (match.foundPages.length) {
+    textParts.push(
+      `PDF text: ${match.foundCount} mention(s) on page(s) ${match.foundPages.join(", ")}`
+    );
+  }
+
+  if (match.ocrFoundPages?.length) {
+    textParts.push(
+      `Drawing OCR: page(s) ${match.ocrFoundPages.join(", ")} - review manually`
+    );
+  }
+
+  return textParts.length ? textParts.join(" | ") : "No";
 }
 
-async function generateConvertedPDF() {
+function generateConvertedPDF() {
+  return runConverterTask(
+    generateConvertedPDFImpl,
+    "Converted PDF could not be generated."
+  );
+}
+
+async function generateConvertedPDFImpl() {
   const result = await buildConvertedPDFBytes(true);
   if (!result) return;
 
@@ -789,7 +1006,14 @@ function findExactMatchesInTextItem(text, oldPart) {
   return matches;
 }
 
-async function openConverterPdfPreview() {
+function openConverterPdfPreview() {
+  return runConverterTask(
+    openConverterPdfPreviewImpl,
+    "PDF preview could not be created."
+  );
+}
+
+async function openConverterPdfPreviewImpl() {
   if (!converterPdfFile) {
     alert("Upload a PDF first.");
     return;
