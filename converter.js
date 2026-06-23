@@ -4,6 +4,10 @@ let converterMap = [];
 let converterMatches = [];
 let converterChangedPages = [];
 let converterReplacementDetails = [];
+let converterBuildCache = null;
+let converterScanPromise = null;
+let converterBuildPromise = null;
+let converterRenderedPreviewKey = "";
 
 const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
@@ -73,6 +77,10 @@ function setConverterPdfFile(file) {
   converterMatches = [];
   converterChangedPages = [];
   converterReplacementDetails = [];
+  converterBuildCache = null;
+  converterScanPromise = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
 
   const selected = document.getElementById("selectedConverterPdf");
   if (selected) {
@@ -104,6 +112,10 @@ function setConverterExcelFile(file) {
   converterMatches = [];
   converterChangedPages = [];
   converterReplacementDetails = [];
+  converterBuildCache = null;
+  converterScanPromise = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
 
   const selected = document.getElementById("selectedConverterExcel");
   if (selected) {
@@ -368,6 +380,18 @@ function previewPartNumberChanges() {
 }
 
 async function previewPartNumberChangesImpl() {
+  if (converterScanPromise) return converterScanPromise;
+
+  converterScanPromise = previewPartNumberChangesScan();
+
+  try {
+    return await converterScanPromise;
+  } finally {
+    converterScanPromise = null;
+  }
+}
+
+async function previewPartNumberChangesScan() {
   if (!converterPdfFile) {
     alert("Upload a PDF first.");
     return;
@@ -389,6 +413,7 @@ async function previewPartNumberChangesImpl() {
   }
 
   const pages = await extractPDFTextByPage(converterPdfFile);
+  converterBuildCache = null;
   converterMatches = buildConverterMatches(map, pages);
   renderConverterPreview();
 
@@ -418,6 +443,23 @@ async function previewPartNumberChangesImpl() {
     ? ` ${ocrFoundCount} part number(s) also appeared on drawing/OCR page(s).`
     : "";
   updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}`);
+
+  if (getDetectedChangeRows().some(row => !row.locationText.includes("drawing OCR"))) {
+    warmConverterBuildCache();
+  }
+}
+
+function warmConverterBuildCache() {
+  if (converterBuildCache || converterBuildPromise) return;
+
+  converterBuildPromise = buildConvertedPDFBytes(false)
+    .catch(error => {
+      console.warn("Could not prebuild converted PDF preview:", error);
+      return null;
+    })
+    .finally(() => {
+      converterBuildPromise = null;
+    });
 }
 
 function buildConverterMatches(map, pages, ocrPages = []) {
@@ -456,6 +498,24 @@ function renderConverterPreview() {
 
   tbody.innerHTML = "";
 
+  const detectedRows = getDetectedChangeRows();
+
+  if (detectedRows.length) {
+    detectedRows.forEach(change => {
+      const row = document.createElement("tr");
+
+      row.innerHTML = `
+        <td>${escapeConverterHTML(change.oldPart)}</td>
+        <td>${escapeConverterHTML(change.itemCode)}</td>
+        <td>${escapeConverterHTML(change.locationText)}</td>
+      `;
+
+      tbody.appendChild(row);
+    });
+
+    return;
+  }
+
   if (!converterMatches.length) {
     resetConverterPreview();
     return;
@@ -481,6 +541,37 @@ function renderConverterPreview() {
 
     tbody.appendChild(row);
   });
+}
+
+function getDetectedChangeRows() {
+  const rows = [];
+
+  converterMatches.forEach(match => {
+    (match.foundPageCounts || []).forEach(page => {
+      rows.push({
+        pageNumber: page.pageNumber,
+        oldPart: match.oldPart,
+        itemCode: match.itemCode,
+        locationText: `Page ${page.pageNumber} - ${page.count} PDF text mention(s)`
+      });
+    });
+
+    (match.ocrFoundPageCounts || [])
+      .filter(page => !(match.foundPages || []).includes(page.pageNumber))
+      .forEach(page => {
+        rows.push({
+          pageNumber: page.pageNumber,
+          oldPart: match.oldPart,
+          itemCode: match.itemCode,
+          locationText: `Page ${page.pageNumber} - drawing OCR review`
+        });
+      });
+  });
+
+  return rows.sort((a, b) =>
+    a.pageNumber - b.pageNumber ||
+    a.oldPart.localeCompare(b.oldPart)
+  );
 }
 
 function getConverterFoundText(match) {
@@ -521,6 +612,10 @@ async function generateConvertedPDFImpl() {
 }
 
 async function buildConvertedPDFBytes(showFinalStatus = false) {
+  if (converterBuildPromise && !showFinalStatus) {
+    return converterBuildPromise;
+  }
+
   if (!converterPdfFile) {
     alert("Upload a PDF first.");
     return null;
@@ -542,6 +637,59 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
     updateConverterStatus("Could not generate PDF because no valid Excel rows were found.");
     return null;
   }
+
+  if (converterBuildCache) {
+    if (showFinalStatus) {
+      const pageText = converterBuildCache.changedPages.length
+        ? ` on page(s) ${converterBuildCache.changedPages.join(", ")}`
+        : "";
+      updateConverterStatus(
+        getConverterVerificationStatus(
+          converterBuildCache.replacementDetails.length,
+          pageText,
+          converterBuildCache.verification
+        )
+      );
+    }
+
+    return converterBuildCache;
+  }
+
+  if (converterBuildPromise) {
+    const pendingResult = await converterBuildPromise;
+    if (pendingResult) {
+      if (showFinalStatus) {
+        const pageText = pendingResult.changedPages.length
+          ? ` on page(s) ${pendingResult.changedPages.join(", ")}`
+          : "";
+        updateConverterStatus(
+          getConverterVerificationStatus(
+            pendingResult.replacementDetails.length,
+            pageText,
+            pendingResult.verification
+          )
+        );
+      }
+
+      return pendingResult;
+    }
+  }
+
+  if (!showFinalStatus) {
+    converterBuildPromise = buildConvertedPDFBytesImpl(showFinalStatus)
+      .finally(() => {
+        converterBuildPromise = null;
+      });
+    return converterBuildPromise;
+  }
+
+  return buildConvertedPDFBytesImpl(showFinalStatus);
+}
+
+async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
+  const map = converterMap.length
+    ? converterMap
+    : await readExcelConverterMap();
 
   const originalBytes = await converterPdfFile.arrayBuffer();
   const pdfDoc = await PDFDocument.load(originalBytes);
@@ -658,12 +806,14 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
     );
   }
 
-  return {
+  converterBuildCache = {
     bytes: convertedBytes,
     changedPages: converterChangedPages,
     replacementDetails,
     verification
   };
+
+  return converterBuildCache;
 }
 
 function getTextItemReplacements(text, map) {
@@ -1032,10 +1182,17 @@ async function openConverterPdfPreviewImpl() {
   if (modal) modal.classList.remove("hidden");
   if (status) status.textContent = "Building before and after preview...";
 
-  if (beforeContainer) beforeContainer.innerHTML = "";
-  if (afterContainer) afterContainer.innerHTML = "";
+  if (!getDetectedChangeRows().length) {
+    if (status) status.textContent = "Scanning for detected changes first...";
+    await previewPartNumberChangesImpl();
+  }
 
   const originalBytes = await converterPdfFile.arrayBuffer();
+  if (status) {
+    status.textContent = converterBuildCache
+      ? "Loading cached before and after preview..."
+      : "Building before and after preview...";
+  }
   const result = await buildConvertedPDFBytes(false);
 
   if (!result) {
@@ -1046,15 +1203,44 @@ async function openConverterPdfPreviewImpl() {
   const pagesToPreview = result.changedPages.length
     ? result.changedPages
     : getPreviewPagesFromMatches();
+  const previewKey = getConverterPreviewKey(result, pagesToPreview);
+
+  if (
+    converterRenderedPreviewKey === previewKey &&
+    beforeContainer?.childElementCount &&
+    afterContainer?.childElementCount
+  ) {
+    if (status) {
+      status.textContent = pagesToPreview.length
+        ? `Preview ready. Showing cached changed page(s): ${pagesToPreview.join(", ")}.`
+        : "Preview ready. No changed pages were found.";
+    }
+    return;
+  }
+
+  if (beforeContainer) beforeContainer.innerHTML = "";
+  if (afterContainer) afterContainer.innerHTML = "";
 
   await renderPdfPreviewBytes(originalBytes, beforeContainer, pagesToPreview);
   await renderPdfPreviewBytes(result.bytes, afterContainer, pagesToPreview);
+  converterRenderedPreviewKey = previewKey;
 
   if (status) {
     status.textContent = pagesToPreview.length
       ? `Preview ready. Showing changed page(s): ${pagesToPreview.join(", ")}.`
       : "Preview ready. No changed pages were found.";
   }
+}
+
+function getConverterPreviewKey(result, pagesToPreview) {
+  return [
+    converterPdfFile?.name || "",
+    converterPdfFile?.size || 0,
+    converterExcelFile?.name || "",
+    converterExcelFile?.size || 0,
+    result.bytes?.byteLength || result.bytes?.length || 0,
+    pagesToPreview.join(",")
+  ].join("|");
 }
 
 function closeConverterPdfPreview() {
@@ -1064,7 +1250,7 @@ function closeConverterPdfPreview() {
 function getPreviewPagesFromMatches() {
   return Array.from(
     new Set(
-      converterMatches.flatMap(match => match.foundPages || [])
+      getDetectedChangeRows().map(row => row.pageNumber)
     )
   ).sort((a, b) => a - b);
 }
@@ -1117,6 +1303,7 @@ function clearConverterFiles() {
   converterMatches = [];
   converterChangedPages = [];
   converterReplacementDetails = [];
+  converterBuildCache = null;
 
   const pdfInput = document.getElementById("converterPdfUpload");
   const excelInput = document.getElementById("converterExcelUpload");
