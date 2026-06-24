@@ -596,6 +596,7 @@ function clearUploadedPDFs() {
   pendingBuild = false;
   warrantyPromptHandled = false;
   renderUploadedPdfList();
+  updatePacketBuildStatus();
 }
 async function drawGeneratedCoverPage(pdfDoc) {
   const page = pdfDoc.addPage([612, 792]);
@@ -816,7 +817,29 @@ async function drawSectionDividerPage(pdfDoc, sectionTitle, packetSection = "") 
   return page;
 }
 
+function getPacketBuildLabel() {
+  return typeof isOMPacket === "function" && isOMPacket()
+    ? "O&M manual"
+    : "Submittal packet";
+}
+
+function updatePacketBuildStatus(message = "") {
+  const status = document.getElementById("packetBuildStatus");
+  if (!status) return;
+
+  status.textContent = message || "Ready to build.";
+}
+
+function getBuildErrorMessage(buildLabel, error, context = "") {
+  const reason = error?.message || "Please try again.";
+  return context
+    ? `${buildLabel} could not be built while ${context}. ${reason}`
+    : `${buildLabel} could not be built. ${reason}`;
+}
+
 async function buildPacket() {
+  const buildLabel = getPacketBuildLabel();
+  let buildContext = "starting the build";
   const hasIncludedWarranty = pdfLibrary.some(item =>
     item.include && item.packetSection === "Warranty"
   );
@@ -824,6 +847,7 @@ async function buildPacket() {
   const warrantyModal = document.getElementById("warrantyPromptModal");
 
   if (!warrantyPromptHandled && warrantyModal) {
+    updatePacketBuildStatus("Review warranty options to continue building.");
     openWarrantyPromptModal({ hasIncludedWarranty });
     return;
   }
@@ -833,16 +857,25 @@ async function buildPacket() {
   );
 
   if (includedDatasheets.length > 1 && !pendingBuild) {
+    updatePacketBuildStatus("Organize datasheets to continue building.");
     openDatasheetOrderModal(includedDatasheets);
     return;
   }
 
   pendingBuild = false;
+  updatePacketBuildStatus(`Building ${buildLabel}...`);
 
+  try {
+  buildContext = "creating a new PDF";
   const finalPdf = await PDFDocument.create();
   const noNumberPageIndexes = [];
 
   const included = pdfLibrary.filter(item => item.include);
+  if (included.length === 0) {
+    throw new Error("No PDFs are included. Add at least one PDF or check Include on an uploaded file.");
+  }
+
+  updatePacketBuildStatus(`Preparing ${included.length} included PDF(s)...`);
 
   const revisionRemarks = included.filter(x => x.packetSection === "Revision Remarks");
   //const coverPages = included.filter(x => x.packetSection === "Cover Page");
@@ -883,14 +916,23 @@ async function buildPacket() {
   }
 
   // Revision Remarks comes FIRST, but is not numbered or in TOC
+  if (revisionRemarks.length) {
+    updatePacketBuildStatus("Adding revision remarks...");
+  }
+
   for (const item of revisionRemarks) {
+    buildContext = `adding revision remarks: ${item.displayTitle || item.file?.name || "PDF"}`;
     const addedIndexes = await appendPDF(finalPdf, item.file);
     noNumberPageIndexes.push(...addedIndexes);
   }
 
   // Generated Cover Page comes after Revision Remarks
+  buildContext = "creating the cover page";
+  updatePacketBuildStatus("Creating cover page...");
   await drawGeneratedCoverPage(finalPdf);
 
+  buildContext = "creating the table of contents page";
+  updatePacketBuildStatus("Creating table of contents...");
   const tocPage = finalPdf.addPage([612, 792]);
 
   const tocItems = [];
@@ -898,7 +940,14 @@ async function buildPacket() {
 
   let currentSection = null;
 
-  for (const item of contentFiles) {
+  for (let itemIndex = 0; itemIndex < contentFiles.length; itemIndex += 1) {
+    const item = contentFiles[itemIndex];
+    const itemTitle = item.displayTitle || item.file?.name || "PDF";
+    buildContext = `adding ${getSectionLabel(item.packetSection)}: ${itemTitle}`;
+    updatePacketBuildStatus(
+      `Adding ${getSectionLabel(item.packetSection)}: ${itemTitle} (${itemIndex + 1} of ${contentFiles.length})...`
+    );
+
     if (item.packetSection !== currentSection) {
       currentSection = item.packetSection;
 
@@ -955,6 +1004,7 @@ async function buildPacket() {
 
       tocItems.push(...manualEntries);
     } else {
+      buildContext = `detecting TOC entries for ${getSectionLabel(item.packetSection)}: ${itemTitle}`;
       const detectedSubsections =
         await detectTOCSubsections(
           item.file,
@@ -966,27 +1016,36 @@ async function buildPacket() {
     }
 
 
+    buildContext = `appending ${getSectionLabel(item.packetSection)}: ${itemTitle}`;
     const addedIndexes = await appendPDF(finalPdf, item.file, {
       clearFooter: item.importedFromSubmittal
     });
+    buildContext = `marking imported subsection pages for ${itemTitle}`;
     markImportedSubsectionPages(finalPdf, addedIndexes, item);
   }
 
+  buildContext = "drawing the table of contents";
   await drawTOCOnExistingPage(
     finalPdf,
     tocPage,
     tocItems,
     sectionTargets
   );
+  buildContext = "adding page numbers";
+  updatePacketBuildStatus("Adding page numbers...");
   await addPageNumbers(finalPdf, noNumberPageIndexes);
 
+  buildContext = "saving the final PDF";
+  updatePacketBuildStatus("Saving final PDF...");
   const pdfBytes = await finalPdf.save();
 
+  buildContext = "creating the output file name";
   const outputName =
     typeof getOMOutputFileName === "function"
       ? getOMOutputFileName()
       : getOutputFileName();
 
+  updatePacketBuildStatus("Downloading final PDF...");
   downloadFile(pdfBytes, outputName, "application/pdf");
   console.log("Download function ran.");
   warrantyPromptHandled = false;
@@ -1002,7 +1061,17 @@ async function buildPacket() {
     }
   }
 
+  buildContext = "resetting the builder";
   resetPacketBuilder();
+  updatePacketBuildStatus(`${buildLabel} downloaded. Ready for the next build.`);
+  } catch (error) {
+    console.error(`Could not build ${buildLabel}:`, error);
+    pendingBuild = false;
+    warrantyPromptHandled = false;
+    const message = getBuildErrorMessage(buildLabel, error, buildContext);
+    updatePacketBuildStatus(message);
+    alert(message);
+  }
 }
 
 function resetPacketBuilder() {
@@ -1050,6 +1119,7 @@ function resetPacketBuilder() {
   if (datasheetOrderList) datasheetOrderList.innerHTML = "";
 
   renderUploadedPdfList();
+  updatePacketBuildStatus();
 }
 
 function openWarrantyPromptModal(options = {}) {
@@ -1260,24 +1330,29 @@ async function continueWarrantyPrompt() {
     document.getElementById("warrantyRevisionPreparedBy")?.value.trim() || "";
   const status = document.getElementById("warrantyCreateStatus");
   const continueButton = document.getElementById("continueWarrantyButton");
+  const buildLabel = getPacketBuildLabel();
 
   if (!Number.isInteger(materialYears) || materialYears < 1) {
     if (status) status.textContent = "Enter the material warranty years.";
+    updatePacketBuildStatus("Warranty build paused: enter the material warranty years.");
     return;
   }
 
   if (!Number.isInteger(duration) || duration < 1) {
     if (status) status.textContent = "Enter a whole number greater than zero.";
+    updatePacketBuildStatus("Warranty build paused: enter a whole number greater than zero.");
     return;
   }
 
   if (vehicleType === "transit" && (!commencementDate || !periodEndDate)) {
     if (status) status.textContent = "Select the warranty commencement date.";
+    updatePacketBuildStatus("Warranty build paused: select the warranty commencement date.");
     return;
   }
 
   if (continueButton) continueButton.disabled = true;
   if (status) status.textContent = "Creating warranty sheet...";
+  updatePacketBuildStatus("Creating warranty sheet...");
 
   try {
     const warrantyFile = vehicleType === "car"
@@ -1321,18 +1396,22 @@ async function continueWarrantyPrompt() {
     sortLibraryBySection();
     renderUploadedPdfList();
     if (status) status.textContent = "Warranty sheet added.";
+    updatePacketBuildStatus("Warranty sheet added. Continuing build...");
     closeWarrantyPromptModal();
     await buildPacket();
   } catch (error) {
     console.error("Could not continue warranty build:", error);
+    const reason = error?.message || "Please try again.";
 
     if (warrantyAdded) {
-      alert(
-        "The warranty sheet was added, but the PDF packet could not be built. " +
-        "Click Build PDF Packet to try again."
-      );
+      const message =
+        `The warranty sheet was added, but the ${buildLabel} could not be built. ${reason}`;
+      updatePacketBuildStatus(message);
+      alert(message);
     } else if (status) {
-      status.textContent = "The warranty sheet could not be created. Try again.";
+      const message = `The warranty sheet could not be created. ${reason}`;
+      status.textContent = message;
+      updatePacketBuildStatus(message);
     }
   } finally {
     if (continueButton) continueButton.disabled = false;
