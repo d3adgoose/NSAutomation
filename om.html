@@ -41,28 +41,37 @@
         <div class="instructions-box">
           <ol>
             <li>
-              Upload PDFs using the <strong>Choose Files</strong> button or by
-              <strong>dragging and dropping</strong> files into the upload area. Do not include a cover page or table of contents - these will be generated automatically. 
-              PDFs should be named according to the conventions outlined in the documentation.
+              Upload PDFs using <strong>Choose Files</strong> or by
+              <strong>dragging and dropping</strong> files into the upload area.
+              You can also use <strong>Import Submittal PDF</strong> to pull sections from a completed submittal.
+              Do not include a cover page or table of contents - these are generated automatically.
             </li>
 
             <li>
-              Verify each PDF is assigned to the correct section
-              (Warranty, Datasheets, Control Panel Components, Shop Drawings, etc.).
+              Name files with section keywords so they are detected automatically:
+              <strong>warranty</strong>, <strong>warning</strong>, <strong>safety</strong>,
+              <strong>emergency shutdown</strong>, <strong>maintenance</strong>,
+              <strong>sequence of operations</strong>, <strong>testing checklist</strong>,
+              <strong>parts list</strong>, <strong>datasheet</strong> or <strong>spec</strong>,
+              <strong>control panel</strong>, <strong>electrical schematic</strong>,
+              <strong>shop drawing</strong>, <strong>manual</strong>, and <strong>appendix</strong>.
             </li>
 
             <li>
-              Use <strong>Edit TOC Sections</strong> to rename how a document appears
-              in the Table of Contents.
+              Verify each PDF is assigned to the correct section, then use
+              <strong>Rename File</strong> to change how it appears in the Table of Contents.
             </li>
 
             <li>
-              Use <strong>Format TOC</strong> to add individual tabs from
-              Datasheets or Control Panel Components into the TOC.
+              Use <strong>Format TOC</strong> for Datasheets, Control Panel Components,
+              Electrical Schematics, and Shop Drawings. Section rows become main TOC entries;
+              subsection rows appear indented under them.
             </li>
 
             <li>
               Enter the Project Number, Project Name, Project Address, System Name, and Revision.
+              The warranty prompt appears before every build so you can use an uploaded warranty
+              or generate a new warranty sheet.
             </li>
 
             <li>
@@ -74,10 +83,10 @@
           </p>
 
           <ul>
-            <li>Files are detected based on pdf naming conventions.</li>
-            <li>Revision Remarks are not numbered and do not appear in the TOC.</li>
-            <li>Warranty can be generated before building the PDF.</li>
+            <li>Imported submittal TOCs can use bullet rows for sections and dash rows for subsections.</li>
+            <li>Use <strong>Manage PDF</strong> to remove pages from non-subsection documents.</li>
             <li>Datasheets can be reordered before building the PDF.</li>
+            <li>Files without a recognized keyword default to Datasheets.</li>
           </ul>
         </div>
       </details>
@@ -197,11 +206,11 @@
   <div id="warrantyPromptModal" class="modal hidden">
     <div class="modal-content warranty-modal-content">
       <h2>Warranty Sheet</h2>
-      <p>No warranty PDF is included in this packet.</p>
+      <p id="warrantyPromptText">No warranty PDF is included in this packet.</p>
 
       <label class="checkbox-row warranty-create-toggle">
         <input type="checkbox" id="createWarrantySheet" onchange="toggleWarrantyCreator()" />
-        <span>Do you want to create a warranty sheet?</span>
+        <span id="warrantyCreatePromptText">Do you want to create a warranty sheet?</span>
       </label>
 
       <div id="warrantyCreatorFields" class="warranty-creator-fields hidden">

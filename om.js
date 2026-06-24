@@ -4,9 +4,9 @@ const OM_PACKET_CONFIG = {
   sections: [
     "Warranty",
     "Safety Procedures",
+    "Sequence of Operations",
     "Maintenance",
     "Testing Checklist and Testing Procedures",
-    "Sequence of Operations",
     "Parts List",
     "Datasheets",
     "Control Panel Components",
@@ -20,9 +20,9 @@ const OM_PACKET_CONFIG = {
 const OM_SECTION_ORDER = [
   "Warranty",
   "Safety Procedures",
+  "Sequence of Operations",
   "Maintenance",
   "Testing Checklist and Testing Procedures",
-  "Sequence of Operations",
   "Parts List",
   "Datasheets",
   "Control Panel Components",

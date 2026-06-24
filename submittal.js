@@ -49,8 +49,20 @@ function handlePDFUpload(event) {
 function handleDroppedFiles(fileList) {
   const files = Array.from(fileList)
     .filter(file => file.type === "application/pdf");
+  const existingFileSignatures = new Set(
+    pdfLibrary.map(item =>
+      `${item.fileName || item.file?.name}|${item.file?.size}|${item.file?.lastModified}`
+    )
+  );
+  let addedFileCount = 0;
 
   files.forEach(file => {
+    const fileSignature = `${file.name}|${file.size}|${file.lastModified}`;
+
+    if (existingFileSignatures.has(fileSignature)) return;
+    existingFileSignatures.add(fileSignature);
+    addedFileCount += 1;
+
     const cleanName = file.name.replace(/\.pdf$/i, "");
 
     pdfLibrary.push({
@@ -68,6 +80,10 @@ function handleDroppedFiles(fileList) {
       hideParentTOC: false
     });
   });
+
+  if (addedFileCount > 0) {
+    warrantyPromptHandled = false;
+  }
 
   sortLibraryBySection();
   renderUploadedPdfList();
@@ -807,8 +823,8 @@ async function buildPacket() {
 
   const warrantyModal = document.getElementById("warrantyPromptModal");
 
-  if (!hasIncludedWarranty && !warrantyPromptHandled && warrantyModal) {
-    openWarrantyPromptModal();
+  if (!warrantyPromptHandled && warrantyModal) {
+    openWarrantyPromptModal({ hasIncludedWarranty });
     return;
   }
 
@@ -973,6 +989,7 @@ async function buildPacket() {
 
   downloadFile(pdfBytes, outputName, "application/pdf");
   console.log("Download function ran.");
+  warrantyPromptHandled = false;
 
   if (
     typeof supabaseClient !== "undefined" &&
@@ -1035,7 +1052,7 @@ function resetPacketBuilder() {
   renderUploadedPdfList();
 }
 
-function openWarrantyPromptModal() {
+function openWarrantyPromptModal(options = {}) {
   const modal = document.getElementById("warrantyPromptModal");
   const createCheckbox = document.getElementById("createWarrantySheet");
   const vehicleType = document.getElementById("warrantyVehicleType");
@@ -1049,10 +1066,24 @@ function openWarrantyPromptModal() {
   const representativeDate = document.getElementById("warrantyRepresentativeDate");
   const revisionPreparedBy = document.getElementById("warrantyRevisionPreparedBy");
   const status = document.getElementById("warrantyCreateStatus");
+  const promptText = document.getElementById("warrantyPromptText");
+  const createLabel = document.getElementById("warrantyCreatePromptText");
+  const continueButton = document.getElementById("continueWarrantyButton");
 
   if (!modal || !createCheckbox) return;
 
+  modal.dataset.hasIncludedWarranty = options.hasIncludedWarranty ? "true" : "false";
   createCheckbox.checked = false;
+  if (promptText) {
+    promptText.textContent = options.hasIncludedWarranty
+      ? "A warranty PDF is included in this packet."
+      : "No warranty PDF is included in this packet.";
+  }
+  if (createLabel) {
+    createLabel.textContent = options.hasIncludedWarranty
+      ? "Do you want to create a new warranty sheet instead?"
+      : "Do you want to create a warranty sheet?";
+  }
   if (vehicleType) {
     vehicleType.value = washType === "Car Wash" ? "car" : "transit";
   }
@@ -1071,6 +1102,11 @@ function openWarrantyPromptModal() {
   updateWarrantyPeriodEnd();
   updateWarrantyVehicleFields();
   toggleWarrantyCreator();
+  if (continueButton && !createCheckbox.checked) {
+    continueButton.textContent = options.hasIncludedWarranty
+      ? "Continue With Included Warranty"
+      : "Continue Without Warranty";
+  }
   modal.classList.remove("hidden");
 }
 
@@ -1086,10 +1122,15 @@ function toggleWarrantyCreator() {
 
   if (!createCheckbox || !fields || !continueButton) return;
 
+  const hasIncludedWarranty =
+    document.getElementById("warrantyPromptModal")?.dataset.hasIncludedWarranty === "true";
+
   fields.classList.toggle("hidden", !createCheckbox.checked);
   continueButton.textContent = createCheckbox.checked
     ? "Add Warranty & Continue"
-    : "Continue Without Warranty";
+    : hasIncludedWarranty
+      ? "Continue With Included Warranty"
+      : "Continue Without Warranty";
 }
 
 function updateWarrantyVehicleFields() {

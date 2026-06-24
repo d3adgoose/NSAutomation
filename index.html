@@ -25,16 +25,50 @@
 
 <header>
   <h1>Engineering Internal Tool</h1>
+  <p>Choose a tool below or open ESR for project lookup.</p>
+  <div class="header-actions">
+    <a
+      class="login-btn header-link-btn"
+      href="https://www.getesr.com/?sort=project_number_asc"
+      target="_blank"
+      rel="noopener">
+      Open ESR
+    </a>
+  </div>
 </header>
 
 <main>
-  <section class="card">
-    <h2>Welcome</h2>
+  <section class="card home-overview">
+    <div class="home-heading">
+      <div>
+        <h2>N/S Corporation Engineering Tools</h2>
+        <p>
+          Maintain the PDF library, update documents, and build submittal and O&M packets from one place.
+        </p>
+      </div>
+    </div>
 
-    <p>
-      This application helps maintain a datasheet database
-      and generate PDF submittal/O&M packets.
-    </p>
+    <div class="home-grid">
+      <a class="home-feature" href="database.html">
+        <h3>Database</h3>
+        <p>Store reusable PDFs, search by part details, and keep datasheets ready for packet builds.</p>
+      </a>
+
+      <a class="home-feature" href="converter.html">
+        <h3>Converter</h3>
+        <p>Review part-number changes and generate updated PDFs for revised documentation.</p>
+      </a>
+
+      <a class="home-feature" href="submittal.html">
+        <h3>Submittals</h3>
+        <p>Create cover pages, TOCs, dividers, warranties, datasheets, control panel sections, and shop drawings.</p>
+      </a>
+
+      <a class="home-feature" href="om.html">
+        <h3>O&M Manuals</h3>
+        <p>Import completed submittals, reuse detected sections, add manuals, and build final O&M packets.</p>
+      </a>
+    </div>
   </section>
 </main>
 <script src="navigation.js"></script>
