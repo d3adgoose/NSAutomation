@@ -84,6 +84,16 @@ button:hover {
   background: #17476f;
 }
 
+.delete-btn,
+.remove-pdf-btn {
+  background: #b42318;
+}
+
+.delete-btn:hover,
+.remove-pdf-btn:hover {
+  background: #8f1b13;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -447,15 +457,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-.subsection-page-actions .remove-pdf-btn {
-  padding: 10px 14px;
-  background: #b42318;
-}
-
-.subsection-page-actions .remove-pdf-btn:hover {
-  background: #8f1b13;
-}
-
 .subsection-page-selection-status {
   margin: 0 0 10px;
   color: #4c5661;
@@ -674,6 +675,49 @@ button:disabled {
   margin-top: 6px;
   font-size: 12px;
   color: #555;
+}
+
+.pdf-attachment-card {
+  display: grid;
+  gap: 10px;
+  min-width: 260px;
+  padding: 10px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.pdf-attachment-card.empty {
+  background: #fff;
+  border-style: dashed;
+}
+
+.pdf-attachment-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.pdf-attachment-status {
+  color: #0b2d4d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pdf-attachment-card .attachment-name {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.attachment-actions {
+  gap: 6px;
+}
+
+.attachment-actions button,
+.attachment-upload-btn {
+  min-height: 34px;
+  padding: 8px 10px;
+  font-size: 13px;
 }
 
 .selected-library-pdf {
@@ -927,30 +971,38 @@ button:disabled {
   background: white;
 }
 
-.converter-upload-grid {
+.converter-upload-grid,
+.tool-upload-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 24px;
   margin-top: 16px;
 }
 
+.upload-panel h3 {
+  margin-top: 0;
+}
+
+.count-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #e8eef4;
+  color: #0b2d4d;
+  font-size: 13px;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .converter-drop-zone {
   min-height: 190px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-align: center;
 }
 
 .converter-drop-zone p {
   margin: 4px 0;
-}
-
-.converter-drop-zone.dragover {
-  border-color: #0b2d4d;
-  background: #eef5fb;
 }
 
 .converter-section-heading {
@@ -1042,7 +1094,7 @@ button:disabled {
   margin-left: auto;
   display: flex;
   justify-content: flex-end;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   flex-wrap: nowrap;
 }
@@ -1052,7 +1104,13 @@ button:disabled {
   min-width: 220px;
 }
 
-.library-merge-actions button {
+.library-merge-buttons {
+  display: grid;
+  gap: 8px;
+}
+
+.library-merge-actions button,
+.library-merge-buttons button {
   white-space: nowrap;
 }
 

@@ -50,8 +50,8 @@
             <li>Drop in or choose an Excel file with <strong>Old Part #</strong> and either <strong>Item Code</strong> or <strong>New Part #</strong>.</li>
             <li>Click <strong>Preview Changes</strong> to scan the PDF.</li>
             <li>Drawing-style pages are OCR scanned when normal PDF text is not available.</li>
-            <li>Click <strong>Preview PDF Before / After</strong> to visually compare the original and converted PDF.</li>
-            <li>Click <strong>Generate Converted PDF</strong> to download the updated PDF.</li>
+            <li>Click <strong>Preview PDF</strong> to visually compare the original and converted PDF.</li>
+            <li>Click <strong>Build Converted PDF</strong> to download the updated PDF.</li>
           </ol>
         </div>
       </details>
@@ -60,11 +60,11 @@
     <section class="card">
       <h2>Part Number Converter</h2>
 
-      <div class="converter-upload-grid">
-        <div>
+      <div class="tool-upload-grid">
+        <div class="upload-panel">
           <h3>1. Upload PDF</h3>
 
-          <div id="converterPdfDropZone" class="drop-zone converter-drop-zone">
+          <div id="converterPdfDropZone" class="drop-zone upload-drop-zone">
             <p><strong>Drag & Drop PDF Here</strong></p>
             <p>Submittal, O&M manual, or datasheet</p>
 
@@ -84,10 +84,10 @@
           </p>
         </div>
 
-        <div>
+        <div class="upload-panel">
           <h3>2. Upload Excel Cross-Reference</h3>
 
-          <div id="converterExcelDropZone" class="drop-zone converter-drop-zone">
+          <div id="converterExcelDropZone" class="drop-zone upload-drop-zone">
             <p><strong>Drag & Drop Excel Here</strong></p>
             <p>Must include Old Part # plus Item Code or New Part #</p>
 
@@ -109,9 +109,9 @@
       </div>
 
       <div class="button-row">
-        <button onclick="openConverterPdfPreview()">Preview PDF Before / After</button>
-        <button onclick="generateConvertedPDF()">Generate Converted PDF</button>
-        <button class="secondary" onclick="clearConverterFiles()">Clear</button>
+        <button onclick="openConverterPdfPreview()">Preview PDF</button>
+        <button onclick="generateConvertedPDF()">Build Converted PDF</button>
+        <button class="delete-btn" onclick="clearConverterFiles()">Clear</button>
       </div>
 
       <p id="converterStatus" class="warranty-status">No files selected yet.</p>

@@ -106,7 +106,7 @@
           Import Submittal PDF
         </button>
         <button onclick="renameTOCSections()">Rename Roman Numerals</button>
-        <button onclick="clearUploadedPDFs()">
+        <button class="delete-btn" onclick="clearUploadedPDFs()">
           Clear PDFs
         </button>
       </div>
@@ -130,6 +130,9 @@
       </div>
 
       <div id="uploadedPdfList"></div>
+      <p id="uploadedPdfCount" class="warranty-status" aria-live="polite">
+        0 PDFs uploaded.
+      </p>
     </section>
 
     <section class="card">
@@ -340,9 +343,9 @@
         <div class="subsection-preview-panel">
           <div class="subsection-page-actions">
             <button onclick="selectAllSubsectionPages()">Select All</button>
-            <button class="secondary" onclick="clearSubsectionPageSelection()">Clear</button>
-            <button onclick="extractSelectedPages()">Extract</button>
-            <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete</button>
+            <button class="secondary" onclick="clearSubsectionPageSelection()">Clear Selection</button>
+            <button onclick="extractSelectedPages()">Extract Selected</button>
+            <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
           </div>
           <div id="subsectionPageSelectionStatus" class="subsection-page-selection-status"></div>
           <div id="subsectionPagePreviewList"></div>

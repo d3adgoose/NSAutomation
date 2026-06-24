@@ -143,7 +143,14 @@ function updateConverterStatus(message = "") {
     ? `Excel: ${converterExcelFile.name}`
     : "No Excel selected";
 
-  status.textContent = `${pdfText} | ${excelText}`;
+  const foundCount = converterMatches.filter(match => match.found).length;
+  const changeCount = converterMatches.length;
+  const pageCount = converterChangedPages.length;
+  const changeText = changeCount > 0
+    ? `Changes: ${foundCount}/${changeCount} found on ${pageCount} page(s)`
+    : "Changes: 0";
+
+  status.textContent = `${pdfText} | ${excelText} | ${changeText}`;
 }
 
 function runConverterTask(task, failureMessage) {

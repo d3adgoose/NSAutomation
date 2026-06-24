@@ -87,6 +87,12 @@ function handleDroppedFiles(fileList) {
 
   sortLibraryBySection();
   renderUploadedPdfList();
+
+  if (addedFileCount > 0) {
+    updateUploadedPdfCount(`${addedFileCount} PDF(s) added. ${pdfLibrary.length} total.`);
+  } else if (files.length > 0) {
+    updateUploadedPdfCount("No new PDFs added. Duplicate files were skipped.");
+  }
 }
 
 function guessDocumentType(fileName) {
@@ -263,6 +269,39 @@ function renderUploadedPdfList() {
 
     container.appendChild(row);
   });
+
+  updateUploadedPdfCount();
+}
+
+function updateUploadedPdfCount(message = "") {
+  const countEl = document.getElementById("uploadedPdfCount");
+  if (!countEl) return;
+
+  if (message) {
+    countEl.textContent = message;
+    return;
+  }
+
+  const total = pdfLibrary.length;
+
+  if (total === 0) {
+    countEl.textContent = "0 PDFs uploaded.";
+    return;
+  }
+
+  const included = pdfLibrary.filter(item => item.include !== false).length;
+  const tocCounts = pdfLibrary.reduce(
+    (counts, item) => {
+      const itemCounts = getTOCEntryCounts(item.tocEntries || []);
+      counts.sections += itemCounts.sections;
+      counts.subsections += itemCounts.subsections;
+      return counts;
+    },
+    { sections: 0, subsections: 0 }
+  );
+
+  countEl.textContent =
+    `${total} PDF(s) uploaded | ${included} included | ${tocCounts.sections} section(s) | ${tocCounts.subsections} subsection(s)`;
 }
 
 function getTOCEntryCounts(entries = []) {
@@ -568,6 +607,7 @@ function removeUploadedPDF(id) {
   }
 
   renderUploadedPdfList();
+  updateUploadedPdfCount(`Removed 1 PDF. ${pdfLibrary.length} total.`);
 }
 
 function clearUploadedPDFs() {
@@ -3545,7 +3585,7 @@ function renderCurrentSubsectionList() {
           ${entry.title}
         </div>
 
-        <button onclick="removeSubsectionEntry('${entry.id}')">
+        <button class="remove-pdf-btn" onclick="removeSubsectionEntry('${entry.id}')">
           Remove
         </button>
       `;
