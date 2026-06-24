@@ -505,6 +505,7 @@ function renderConverterPreview() {
   tbody.innerHTML = "";
 
   const detectedRows = getDetectedChangeRows();
+  updateDetectedChangeCount(detectedRows.length);
 
   if (detectedRows.length) {
     detectedRows.forEach(change => {
@@ -1338,6 +1339,14 @@ function resetConverterPreview() {
         <td colspan="3">No changes previewed yet.</td>
       </tr>
     `;
+  }
+  updateDetectedChangeCount(0);
+}
+
+function updateDetectedChangeCount(count = 0) {
+  const countLabel = document.getElementById("detectedChangeCount");
+  if (countLabel) {
+    countLabel.textContent = `(${count})`;
   }
 }
 

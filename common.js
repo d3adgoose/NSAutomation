@@ -89,7 +89,7 @@ function getMatchedFileRule(fileName = "") {
 }
 
 function guessDocumentTypeFromName(fileName = "") {
-  return getMatchedFileRule(fileName)?.documentType || "Datasheet";
+  return getMatchedFileRule(fileName)?.documentType || "Datasheets";
 }
 
 function guessPacketSectionFromName(fileName = "") {

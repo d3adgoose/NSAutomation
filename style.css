@@ -205,6 +205,43 @@ button:hover {
   flex: 0 0 auto;
 }
 
+.build-summary {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.build-summary-heading {
+  margin: 4px 0 0;
+  color: #1f2933;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.build-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 14px;
+}
+
+.build-summary-row span:first-child {
+  color: #4c5661;
+}
+
+.build-summary-row strong {
+  color: #1f2933;
+}
+
+.build-summary-row.is-missing strong {
+  color: #8a2d20;
+}
+
 .warranty-creator-fields {
   display: grid;
   gap: 8px;

@@ -1098,6 +1098,7 @@ function openWarrantyPromptModal(options = {}) {
   }
   if (revisionPreparedBy) revisionPreparedBy.value = "";
   if (status) status.textContent = "";
+  renderBuildSummary("buildSummary", { createWarranty: false });
 
   updateWarrantyPeriodEnd();
   updateWarrantyVehicleFields();
@@ -1131,6 +1132,76 @@ function toggleWarrantyCreator() {
     : hasIncludedWarranty
       ? "Continue With Included Warranty"
       : "Continue Without Warranty";
+
+  renderBuildSummary("buildSummary", { createWarranty: createCheckbox.checked });
+}
+
+function getBuildSummary(options = {}) {
+  const included = pdfLibrary.filter(item => item.include);
+  const createWarranty = Boolean(options.createWarranty);
+  const revisionRemarksCount = included.filter(
+    item => item.packetSection === "Revision Remarks"
+  ).length;
+  const romanSections = getBuildRomanSections().map(section => {
+    const count =
+      included.filter(item => item.packetSection === section).length +
+      (section === "Warranty" && createWarranty ? 1 : 0);
+
+    return {
+      section,
+      label: getSectionLabel(section),
+      count,
+      included: count > 0
+    };
+  });
+
+  return {
+    includedPdfCount: included.length + (createWarranty ? 1 : 0),
+    revisionRemarksIncluded: revisionRemarksCount > 0,
+    romanSections
+  };
+}
+
+function getBuildRomanSections() {
+  if (typeof isOMPacket === "function" && isOMPacket()) {
+    return OM_SECTION_ORDER;
+  }
+
+  return [
+    "Warranty",
+    "Datasheets",
+    "Control Panel Components",
+    "Shop Drawings",
+    "Appendix"
+  ];
+}
+
+function renderBuildSummary(targetId, options = {}) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+
+  const summary = getBuildSummary(options);
+  const romanSectionRows = summary.romanSections
+    .map(item => `
+      <div class="build-summary-row ${item.included ? "" : "is-missing"}">
+        <span>${item.label}</span>
+        <strong>${item.included ? `Yes (${item.count})` : "No"}</strong>
+      </div>
+    `)
+    .join("");
+
+  target.innerHTML = `
+    <div class="build-summary-row">
+      <span>Included PDFs</span>
+      <strong>${summary.includedPdfCount}</strong>
+    </div>
+    <div class="build-summary-row">
+      <span>Revision Remarks</span>
+      <strong>${summary.revisionRemarksIncluded ? "Yes" : "No"}</strong>
+    </div>
+    <div class="build-summary-heading">Roman Numeral Sections</div>
+    ${romanSectionRows}
+  `;
 }
 
 function updateWarrantyVehicleFields() {
@@ -1636,6 +1707,7 @@ function openDatasheetOrderModal(datasheets) {
 
   if (!modal || !list) return;
 
+  renderBuildSummary("datasheetBuildSummary");
   list.innerHTML = "";
 
   datasheets

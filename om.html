@@ -207,6 +207,7 @@
     <div class="modal-content warranty-modal-content">
       <h2>Warranty Sheet</h2>
       <p id="warrantyPromptText">No warranty PDF is included in this packet.</p>
+      <div id="buildSummary" class="build-summary" aria-live="polite"></div>
 
       <label class="checkbox-row warranty-create-toggle">
         <input type="checkbox" id="createWarrantySheet" onchange="toggleWarrantyCreator()" />
@@ -289,6 +290,7 @@
   <div id="datasheetOrderModal" class="modal hidden">
     <div class="modal-content">
       <h2>Organize Datasheets</h2>
+      <div id="datasheetBuildSummary" class="build-summary" aria-live="polite"></div>
       <div id="datasheetOrderList"></div>
 
       <div class="button-row">
