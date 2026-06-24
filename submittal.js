@@ -211,7 +211,7 @@ function renderUploadedPdfList() {
     const subsectionCount = canHaveSubsections
       ? `
         <div class="subsection-count">
-          ${(item.tocEntries || []).length} subsection(s)
+          ${formatTOCEntryCount(item.tocEntries || [])}
         </div>
       `
       : "";
@@ -247,6 +247,32 @@ function renderUploadedPdfList() {
 
     container.appendChild(row);
   });
+}
+
+function getTOCEntryCounts(entries = []) {
+  return entries.reduce(
+    (counts, entry) => {
+      if (entry.entryType === "section") {
+        counts.sections += 1;
+      } else {
+        counts.subsections += 1;
+      }
+      return counts;
+    },
+    { sections: 0, subsections: 0 }
+  );
+}
+
+function formatTOCEntryCount(entries = []) {
+  const counts = getTOCEntryCounts(entries);
+  const parts = [];
+
+  if (counts.sections > 0) {
+    parts.push(`${counts.sections} section(s)`);
+  }
+
+  parts.push(`${counts.subsections} subsection(s)`);
+  return parts.join(", ");
 }
 
 async function openPageManager(id) {
@@ -1916,7 +1942,22 @@ function renderSubmittalImportSummary(summary) {
       const list = document.createElement("ul");
       subsections.forEach((subsection, index) => {
         const listItem = document.createElement("li");
-        listItem.textContent = subsection.title || `${item.section} ${index + 1}`;
+        const title = subsection.title || `${item.section} ${index + 1}`;
+        const nestedEntries = subsection.tocEntries || [];
+        listItem.textContent = nestedEntries.length > 0
+          ? `${title} (${formatTOCEntryCount(nestedEntries)})`
+          : title;
+
+        if (nestedEntries.length > 0) {
+          const nestedList = document.createElement("ul");
+          nestedEntries.forEach(entry => {
+            const nestedItem = document.createElement("li");
+            nestedItem.textContent = entry.title;
+            nestedList.appendChild(nestedItem);
+          });
+          listItem.appendChild(nestedList);
+        }
+
         list.appendChild(listItem);
       });
       sectionBlock.appendChild(list);
@@ -2075,6 +2116,7 @@ async function importSubmittalFile(file, options = {}) {
     if (modalStatus) {
       modalStatus.textContent = importSummary;
     }
+    closeSubmittalImportModal();
   } catch (error) {
     console.error("Could not import Submittal PDF:", error);
     if (status) {
@@ -2098,7 +2140,8 @@ function createImportedLibraryItem({
   documentType,
   packetSection,
   hideParentTOC,
-  datasheetOrder
+  datasheetOrder,
+  tocEntries = []
 }) {
   return {
     id: crypto.randomUUID(),
@@ -2111,7 +2154,7 @@ function createImportedLibraryItem({
     include: true,
     notes: `Imported from ${sourceName}`,
     datasheetOrder,
-    tocEntries: [],
+    tocEntries,
     hideParentTOC,
     importedFromSubmittal: true
   };
@@ -2148,7 +2191,8 @@ async function createImportedDatasheetItems({
         documentType: "Datasheet",
         packetSection: "Datasheets",
         hideParentTOC: false,
-        datasheetOrder: -1000 + index
+        datasheetOrder: -1000 + index,
+        tocEntries: range.tocEntries || []
       }));
     }
 
@@ -2272,11 +2316,19 @@ function getImportedDatasheetMetadataRanges(sourcePdf, datasheetRange) {
 }
 
 async function detectImportedDatasheetRangesFromCompleteTOC(bytes, datasheetRange) {
-  return detectImportedSubsectionRangesFromCompleteTOC(
-    bytes,
-    datasheetRange,
-    "Datasheets"
-  );
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  const tocItems = await detectImportedTOCEntries(pdf);
+  const datasheetItems = tocItems
+    .filter(item =>
+      item.section === "Datasheets" &&
+      !item.isSectionHeading
+    )
+    .filter(item =>
+      item.pageIndex >= datasheetRange.startPageIndex &&
+      item.pageIndex < datasheetRange.endPageIndex
+    );
+
+  return buildHierarchicalImportedRanges(datasheetItems, datasheetRange);
 }
 
 async function detectImportedSubsectionRangesFromCompleteTOC(
@@ -2425,6 +2477,46 @@ function buildRangesFromImportedMarkers(markers, parentRange) {
     .filter(range => range.startPageIndex < range.endPageIndex);
 }
 
+function buildHierarchicalImportedRanges(markers, parentRange) {
+  const sortedMarkers = [...markers]
+    .filter(marker => marker.pageIndex != null)
+    .sort((a, b) => a.pageIndex - b.pageIndex);
+  const sectionMarkers = sortedMarkers.filter(marker =>
+    marker.tocLevel !== "subsection"
+  );
+
+  if (sectionMarkers.length === 0) {
+    return buildRangesFromImportedMarkers(sortedMarkers, parentRange);
+  }
+
+  return sectionMarkers
+    .map((marker, index) => {
+      const nextSection = sectionMarkers[index + 1];
+      const startPageIndex = marker.pageIndex;
+      const endPageIndex = nextSection?.pageIndex ?? parentRange.endPageIndex;
+      const tocEntries = sortedMarkers
+        .filter(child =>
+          child.tocLevel === "subsection" &&
+          child.pageIndex >= startPageIndex &&
+          child.pageIndex < endPageIndex
+        )
+        .map(child => ({
+          id: crypto.randomUUID(),
+          title: child.title,
+          sourcePage: child.pageIndex - startPageIndex + 1,
+          entryType: "subsection"
+        }));
+
+      return {
+        startPageIndex,
+        endPageIndex,
+        title: marker.title,
+        tocEntries
+      };
+    })
+    .filter(range => range.startPageIndex < range.endPageIndex);
+}
+
 function sanitizeImportedFileName(fileName) {
   return String(fileName || "Imported Datasheet.pdf")
     .replace(/[<>:"/\\|?*]+/g, "-")
@@ -2442,6 +2534,13 @@ function cleanImportedTOCTitle(title) {
     .replace(/^[\s*\-]+/g, "")
     .replace(/[\s.\-]+$/g, "")
     .trim();
+}
+
+function getImportedTOCLevel(title) {
+  const value = String(title || "");
+  if (/^\s*[-–—]/.test(value)) return "subsection";
+  if (/^\s*(?:\u2022|\*)/.test(value)) return "section";
+  return "section";
 }
 
 function isKnownImportedSectionHeading(title) {
@@ -2576,6 +2675,7 @@ async function detectImportedTOCEntries(pdf) {
       title: entry.title,
       section: entry.section,
       pageIndex: entry.pageIndex,
+      tocLevel: entry.tocLevel,
       isSectionHeading: entry.isSectionHeading
     })));
   }
@@ -2651,14 +2751,20 @@ async function getImportedTOCSectionRanges(bytes, totalPages) {
 }
 
 function parseImportedTOCLine(line, printedPageOffset) {
-  const cleanedLine = String(line || "")
+  const rawLine = String(line || "");
+  const cleanedLine = rawLine
     .replace(/[^\x20-\x7E]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   const match = cleanedLine.match(/^(.+?)\s+(\d+)$/);
+  const rawMatch = rawLine
+    .replace(/\s+/g, " ")
+    .trim()
+    .match(/^(.+?)\s+(\d+)$/);
 
   if (!match) return null;
 
+  const rawTitle = rawMatch?.[1] ?? match[1];
   let title = cleanImportedTOCTitle(match[1]);
   const printedPage = Number(match[2]);
   const pageIndex = printedPage + printedPageOffset - 1;
@@ -2675,6 +2781,7 @@ function parseImportedTOCLine(line, printedPageOffset) {
     title,
     pageIndex,
     section,
+    tocLevel: getImportedTOCLevel(rawTitle),
     isSectionHeading:
       !!section &&
       (!!sectionMatch || isKnownImportedSectionHeading(title))
@@ -2705,6 +2812,7 @@ function parseImportedTOCHeadingLine(line) {
     title,
     pageIndex: null,
     section,
+    tocLevel: "heading",
     isSectionHeading: true
   };
 }
@@ -2727,9 +2835,9 @@ function parseImportedTOCRow(row, printedPageOffset) {
   const embeddedTitle = numberPart.text
     .replace(/(\d+)\s*$/, "")
     .trim();
-  const title = cleanImportedTOCTitle(titleParts || embeddedTitle);
+  const title = titleParts || embeddedTitle;
 
-  if (!title || /^page no\.?$/i.test(title)) return null;
+  if (!cleanImportedTOCTitle(title) || /^page no\.?$/i.test(title)) return null;
 
   return parseImportedTOCLine(
     `${title} ${pageNumberText}`,
