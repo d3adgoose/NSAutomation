@@ -117,13 +117,15 @@ async function sendLoginLink() {
 
 const DOCUMENTS_TABLE = "documents";
 const DOCUMENTS_BUCKET = "document-library";
+const DATABASE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
 function guessPacketSectionForLibrary(fileName = "") {
   return guessPacketSectionFromName(fileName);
 }
 
 async function loadLibraryDB() {
-  if (typeof supabaseClient === "undefined" || !supabaseClient) {
+  if (!useRemoteDatabase || typeof supabaseClient === "undefined" || !supabaseClient) {
+    await updateDatabaseStorageUsage();
     return;
   }
 
@@ -138,12 +140,14 @@ async function loadLibraryDB() {
     alert("Could not load library from Supabase.");
     libraryDB = [];
     renderLibraryDB();
+    await updateDatabaseStorageUsage();
     return;
   }
 
   libraryDB = (data || []).map(fromSupabaseDocument);
   sortLibraryDB();
   renderLibraryDB();
+  await updateDatabaseStorageUsage();
 }
 
 function saveLibraryDB() {
@@ -330,6 +334,117 @@ function renderLibraryDB() {
 
     tbody.appendChild(row);
   });
+}
+
+function formatStorageBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+async function updateDatabaseStorageUsage() {
+  const usageCard = document.getElementById("databaseStorageUsage");
+  if (!usageCard) return;
+
+  const label = usageCard.querySelector(".storage-usage-label span");
+  const bar = usageCard.querySelector(".storage-usage-bar span");
+  const detail = usageCard.querySelector("p");
+  const attachedCount = libraryDB.filter(item => item.storagePath).length;
+
+  usageCard.classList.remove("warning", "danger");
+
+  if (!useRemoteDatabase || typeof supabaseClient === "undefined" || !supabaseClient) {
+    if (label) label.textContent = "Log in to view shared storage.";
+    if (bar) bar.style.width = "0%";
+    if (detail) detail.textContent = `PDF attachments: ${attachedCount}`;
+    return;
+  }
+
+  if (label) label.textContent = "Checking...";
+  if (detail) detail.textContent = `PDF attachments: ${attachedCount}`;
+
+  try {
+    const usedBytes = await getStorageFolderUsageBytes("");
+    const percentUsed = DATABASE_STORAGE_LIMIT_BYTES > 0
+      ? Math.min(100, (usedBytes / DATABASE_STORAGE_LIMIT_BYTES) * 100)
+      : 0;
+
+    if (label) {
+      label.textContent =
+        `${formatStorageBytes(usedBytes)} of ${formatStorageBytes(DATABASE_STORAGE_LIMIT_BYTES)} used`;
+    }
+
+    if (bar) {
+      bar.style.width = `${percentUsed.toFixed(1)}%`;
+    }
+
+    if (detail) {
+      detail.textContent =
+        `PDF attachments: ${attachedCount} · ${percentUsed.toFixed(1)}% used`;
+    }
+
+    if (detail) {
+      detail.textContent =
+        `PDF attachments: ${attachedCount} - ${percentUsed.toFixed(1)}% used`;
+    }
+
+    usageCard.classList.toggle("warning", percentUsed >= 75 && percentUsed < 90);
+    usageCard.classList.toggle("danger", percentUsed >= 90);
+  } catch (error) {
+    console.warn("Could not calculate storage usage:", error);
+    if (label) label.textContent = "Storage usage unavailable.";
+    if (bar) bar.style.width = "0%";
+    if (detail) detail.textContent = `PDF attachments: ${attachedCount}`;
+  }
+}
+
+async function getStorageFolderUsageBytes(path) {
+  let totalBytes = 0;
+  let offset = 0;
+  const limit = 1000;
+
+  while (true) {
+    const { data, error } = await supabaseClient.storage
+      .from(DOCUMENTS_BUCKET)
+      .list(path, {
+        limit,
+        offset,
+        sortBy: {
+          column: "name",
+          order: "asc"
+        }
+      });
+
+    if (error) throw error;
+
+    const entries = data || [];
+
+    for (const entry of entries) {
+      const entryPath = path ? `${path}/${entry.name}` : entry.name;
+      const size = entry.metadata?.size;
+
+      if (typeof size === "number") {
+        totalBytes += size;
+      } else {
+        totalBytes += await getStorageFolderUsageBytes(entryPath);
+      }
+    }
+
+    if (entries.length < limit) break;
+    offset += limit;
+  }
+
+  return totalBytes;
 }
 
 function setPendingLibraryPdf(file) {

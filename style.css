@@ -682,6 +682,61 @@ button:disabled {
   color: #555;
 }
 
+.storage-usage-card {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.storage-usage-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  font-size: 14px;
+}
+
+.storage-usage-label strong {
+  color: #0b2d4d;
+}
+
+.storage-usage-label span,
+.storage-usage-card p {
+  color: #536170;
+}
+
+.storage-usage-card p {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.storage-usage-bar {
+  height: 10px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce6ef;
+}
+
+.storage-usage-bar span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: #0b2d4d;
+  transition: width 0.2s ease;
+}
+
+.storage-usage-card.warning .storage-usage-bar span {
+  background: #a76600;
+}
+
+.storage-usage-card.danger .storage-usage-bar span {
+  background: #a92727;
+}
+
 .login-modal-content {
   max-width: 420px;
 }
