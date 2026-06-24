@@ -184,8 +184,14 @@ async function readExcelConverterMap() {
       const itemCode =
         row["Item Code"] ||
         row["ItemCode"] ||
+        row["Item #"] ||
+        row["Item Number"] ||
         row["New Part #"] ||
+        row["New Part#"] ||
         row["New Part Number"] ||
+        row["New Part"] ||
+        row["Part #"] ||
+        row["Part Number"] ||
         "";
 
       return {
@@ -407,8 +413,8 @@ async function previewPartNumberChangesScan() {
   const map = await readExcelConverterMap();
 
   if (!map.length) {
-    updateConverterStatus("No Old Part # / Item Code rows found in the Excel file.");
-    alert("No valid rows found. Make sure the Excel columns are named Old Part # and Item Code.");
+    updateConverterStatus("No Old Part # / Item Code or New Part # rows found in the Excel file.");
+    alert("No valid rows found. Make sure the Excel columns include Old Part # and either Item Code or New Part #.");
     return;
   }
 
@@ -633,7 +639,7 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
     : await readExcelConverterMap();
 
   if (!map.length) {
-    alert("No valid Old Part # / Item Code rows were found.");
+    alert("No valid Old Part # / Item Code or New Part # rows were found.");
     updateConverterStatus("Could not generate PDF because no valid Excel rows were found.");
     return null;
   }

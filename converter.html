@@ -47,7 +47,7 @@
         <div class="instructions-box">
           <ol>
             <li>Drop in or choose a PDF such as a submittal, O&M manual, or datasheet.</li>
-            <li>Drop in or choose an Excel file with columns named <strong>Old Part #</strong> and <strong>Item Code</strong>.</li>
+            <li>Drop in or choose an Excel file with <strong>Old Part #</strong> and either <strong>Item Code</strong> or <strong>New Part #</strong>.</li>
             <li>Click <strong>Preview Changes</strong> to scan the PDF.</li>
             <li>Drawing-style pages are OCR scanned when normal PDF text is not available.</li>
             <li>Click <strong>Preview PDF Before / After</strong> to visually compare the original and converted PDF.</li>
@@ -89,7 +89,7 @@
 
           <div id="converterExcelDropZone" class="drop-zone converter-drop-zone">
             <p><strong>Drag & Drop Excel Here</strong></p>
-            <p>Must include Old Part # and Item Code columns</p>
+            <p>Must include Old Part # plus Item Code or New Part #</p>
 
             <label class="attach-pdf-btn">
               Choose Excel
@@ -127,7 +127,7 @@
         <thead>
           <tr>
             <th>Old Part #</th>
-            <th>New Part #</th>
+            <th>Item Code / New Part #</th>
             <th>Detected Page</th>
           </tr>
         </thead>
