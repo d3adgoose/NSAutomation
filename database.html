@@ -128,9 +128,18 @@
 
     <section class="card">
       <h2>Library</h2>
-      <div class="button-row">
-        <input id="mergedLibraryFileName" placeholder="Merged PDF name" />
-        <button onclick="openLibraryMergeOrderModal()">Merge</button>
+
+      <div class="merge-toolbar">
+        <input
+          id="mergedLibraryFileName"
+          placeholder="Merged PDF name"
+        />
+
+        <button
+          class="merge-btn"
+          onclick="openLibraryMergeOrderModal()">
+          Merge
+        </button>
       </div>
 
       <div class="library-search-row">

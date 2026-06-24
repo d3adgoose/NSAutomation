@@ -839,3 +839,19 @@ button:disabled {
   border-color: #0b2d4d;
   background: #eef5fb;
 }
+
+.merge-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.merge-toolbar input {
+  flex: 1;
+}
+
+.merge-btn {
+  margin-left: auto;
+  white-space: nowrap;
+}
