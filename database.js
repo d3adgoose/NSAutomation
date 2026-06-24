@@ -205,9 +205,14 @@ function renderLibraryDB() {
   const search = searchEl && searchEl.value
     ? searchEl.value.trim().toLowerCase()
     : "";
+  const typeFilter = document.getElementById("libraryTypeFilter")?.value || "";
 
-  const list = search
-    ? libraryDB.filter(item => {
+  const list = libraryDB.filter(item => {
+    if (typeFilter && item.documentType !== typeFilter) {
+      return false;
+    }
+
+    if (search) {
         const hay = [
           item.fileName,
           item.displayTitle,
@@ -220,8 +225,10 @@ function renderLibraryDB() {
         ].join(" ").toLowerCase();
 
         return hay.includes(search);
-      })
-    : libraryDB;
+    }
+
+    return true;
+  });
 
   list.forEach(item => {
     const row = document.createElement("tr");
@@ -288,7 +295,7 @@ function renderLibraryDB() {
                 </button>
 
                 <button onclick="previewLibraryPDF('${item.id}')">
-                  Preview
+                  Manage PDF
                 </button>
 
                 <button onclick="downloadLibraryPDF('${item.id}')">
@@ -787,6 +794,8 @@ async function getLibraryPDFBlob(item) {
 }
 
 let activePreviewLibraryItem = null;
+let selectedLibraryPreviewPages = new Set();
+let activeLibraryPreviewPageCount = 0;
 
 async function previewLibraryPDF(id) {
   try {
@@ -798,48 +807,84 @@ async function previewLibraryPDF(id) {
     }
 
     activePreviewLibraryItem = item;
+    selectedLibraryPreviewPages = new Set();
+    activeLibraryPreviewPageCount = 0;
 
     document.getElementById("libraryPreviewTitle").textContent =
       item.fileName || "PDF Preview";
 
     const modal = document.getElementById("libraryPreviewModal");
     const list = document.getElementById("libraryPreviewPageList");
+    const status = document.getElementById("libraryPreviewStatus");
 
     list.innerHTML = "Loading preview...";
+    if (status) status.textContent = "Loading pages...";
     modal.classList.remove("hidden");
 
     const blob = await getLibraryPDFBlob(item);
     const bytes = await blob.arrayBuffer();
 
-    const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+    activeLibraryPreviewPageCount = pdf.numPages;
 
     list.innerHTML = "";
 
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 0.35 });
+      const viewport = page.getViewport({ scale: 1 });
 
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
+      const pageCard = document.createElement("div");
+      const header = document.createElement("label");
+      const checkbox = document.createElement("input");
+      const label = document.createElement("span");
+
+      pageCard.className = "page-manager-card";
+      pageCard.dataset.pageNumber = String(pageNumber);
+      header.className = "page-manager-card-header";
+      checkbox.type = "checkbox";
+      checkbox.value = String(pageNumber);
+      label.textContent = `Page ${pageNumber}`;
 
       canvas.width = viewport.width;
       canvas.height = viewport.height;
+
+      const updateSelection = checked => {
+        checkbox.checked = checked;
+        pageCard.classList.toggle("selected", checked);
+
+        if (checked) {
+          selectedLibraryPreviewPages.add(pageNumber);
+        } else {
+          selectedLibraryPreviewPages.delete(pageNumber);
+        }
+
+        updateLibraryPreviewStatus();
+      };
+
+      checkbox.addEventListener("change", () => {
+        updateSelection(checkbox.checked);
+      });
+
+      pageCard.addEventListener("click", event => {
+        if (event.target === checkbox) return;
+        updateSelection(!checkbox.checked);
+      });
+
+      header.appendChild(checkbox);
+      header.appendChild(label);
+      pageCard.appendChild(header);
+      pageCard.appendChild(canvas);
+      list.appendChild(pageCard);
 
       await page.render({
         canvasContext: context,
         viewport
       }).promise;
-
-      const pageCard = document.createElement("div");
-      pageCard.className = "page-preview-card";
-
-      pageCard.innerHTML = `
-        <div class="page-preview-label">Page ${pageNumber}</div>
-      `;
-
-      pageCard.appendChild(canvas);
-      list.appendChild(pageCard);
     }
+
+    updateLibraryPreviewStatus();
   } catch (error) {
     console.error("Preview failed:", error);
     alert("Could not preview PDF.");
@@ -849,6 +894,56 @@ async function previewLibraryPDF(id) {
 function closeLibraryPreviewModal() {
   document.getElementById("libraryPreviewModal").classList.add("hidden");
   activePreviewLibraryItem = null;
+  selectedLibraryPreviewPages = new Set();
+  activeLibraryPreviewPageCount = 0;
+}
+
+function updateLibraryPreviewStatus() {
+  const status = document.getElementById("libraryPreviewStatus");
+  if (!status) return;
+
+  status.textContent =
+    `${selectedLibraryPreviewPages.size} of ${activeLibraryPreviewPageCount} page(s) selected`;
+}
+
+function setLibraryPreviewPageSelection(pageNumbers) {
+  selectedLibraryPreviewPages = new Set(pageNumbers);
+
+  document.querySelectorAll("#libraryPreviewPageList .page-manager-card").forEach(card => {
+    const pageNumber = Number(card.dataset.pageNumber);
+    const selected = selectedLibraryPreviewPages.has(pageNumber);
+    const checkbox = card.querySelector("input[type='checkbox']");
+
+    card.classList.toggle("selected", selected);
+    if (checkbox) checkbox.checked = selected;
+  });
+
+  updateLibraryPreviewStatus();
+}
+
+function selectAllLibraryPreviewPages() {
+  const cards = Array.from(
+    document.querySelectorAll("#libraryPreviewPageList .page-manager-card")
+  );
+  setLibraryPreviewPageSelection(
+    cards.map(card => Number(card.dataset.pageNumber))
+  );
+}
+
+function clearLibraryPreviewPageSelection() {
+  setLibraryPreviewPageSelection([]);
+}
+
+function populateLibraryTypeFilter() {
+  const typeFilter = document.getElementById("libraryTypeFilter");
+  if (!typeFilter) return;
+
+  const currentValue = typeFilter.value;
+  typeFilter.replaceChildren(
+    new Option("All Document Types", ""),
+    ...documentTypes.map(type => new Option(type, type))
+  );
+  typeFilter.value = currentValue;
 }
 
 function closeLibraryMergeOrderModal() {
@@ -864,6 +959,148 @@ async function downloadPreviewedLibraryPDF() {
   }
 
   await downloadLibraryPDF(activePreviewLibraryItem.id);
+}
+
+async function extractSelectedLibraryPreviewPages() {
+  if (!activePreviewLibraryItem) {
+    alert("No PDF selected.");
+    return;
+  }
+
+  const selectedPages = Array.from(selectedLibraryPreviewPages).sort((a, b) => a - b);
+
+  if (selectedPages.length === 0) {
+    alert("Select at least one page to extract.");
+    return;
+  }
+
+  try {
+    const blob = await getLibraryPDFBlob(activePreviewLibraryItem);
+    const bytes = await blob.arrayBuffer();
+    const sourcePdf = await PDFLib.PDFDocument.load(bytes);
+    const extractedPdf = await PDFLib.PDFDocument.create();
+    const copiedPages = await extractedPdf.copyPages(
+      sourcePdf,
+      selectedPages.map(pageNumber => pageNumber - 1)
+    );
+
+    copiedPages.forEach(page => extractedPdf.addPage(page));
+
+    const outputBytes = await extractedPdf.save();
+    const baseName =
+      (activePreviewLibraryItem.attachmentFileName || activePreviewLibraryItem.fileName || "library-pdf")
+        .replace(/\.pdf$/i, "");
+
+    downloadFile(outputBytes, `${baseName}-selected-pages.pdf`, "application/pdf");
+  } catch (error) {
+    console.error("Could not extract selected library pages:", error);
+    alert("The selected pages could not be extracted.");
+  }
+}
+
+async function deleteSelectedLibraryPreviewPages() {
+  if (!activePreviewLibraryItem) {
+    alert("No PDF selected.");
+    return;
+  }
+
+  const selectedPages = Array.from(selectedLibraryPreviewPages).sort((a, b) => a - b);
+
+  if (selectedPages.length === 0) {
+    alert("Select at least one page to delete.");
+    return;
+  }
+
+  try {
+    const blob = await getLibraryPDFBlob(activePreviewLibraryItem);
+    const bytes = await blob.arrayBuffer();
+    const sourcePdf = await PDFLib.PDFDocument.load(bytes);
+    const totalPages = sourcePdf.getPageCount();
+
+    if (selectedPages.length >= totalPages) {
+      alert("A PDF must keep at least one page.");
+      return;
+    }
+
+    if (!confirm(`Delete ${selectedPages.length} selected page(s) from this library PDF?`)) {
+      return;
+    }
+
+    const deletedPageSet = new Set(selectedPages);
+    const keptPageIndexes = sourcePdf
+      .getPageIndices()
+      .filter(pageIndex => !deletedPageSet.has(pageIndex + 1));
+    const editedPdf = await PDFLib.PDFDocument.create();
+    const copiedPages = await editedPdf.copyPages(sourcePdf, keptPageIndexes);
+
+    copiedPages.forEach(page => editedPdf.addPage(page));
+
+    const editedBytes = await editedPdf.save();
+    await replaceLibraryPDFAttachment(
+      activePreviewLibraryItem,
+      editedBytes,
+      activePreviewLibraryItem.attachmentFileName || activePreviewLibraryItem.fileName || "edited-library.pdf"
+    );
+
+    selectedLibraryPreviewPages = new Set();
+    await previewLibraryPDF(activePreviewLibraryItem.id);
+  } catch (error) {
+    console.error("Could not delete selected library pages:", error);
+    alert("The selected pages could not be deleted.");
+  }
+}
+
+async function replaceLibraryPDFAttachment(item, pdfBytes, fileName) {
+  if (!item) throw new Error("No library item selected.");
+
+  const cleanFileName = fileName.toLowerCase().endsWith(".pdf")
+    ? fileName
+    : `${fileName}.pdf`;
+  const safeFileName = cleanFileName.replace(/[^\w.\- ]+/g, "_");
+  const previousStoragePath = item.storagePath;
+  const storagePath = `${item.id}/${Date.now()}-${safeFileName}`;
+  const blob = new Blob([pdfBytes], { type: "application/pdf" });
+
+  const { error: uploadError } = await supabaseClient.storage
+    .from(DOCUMENTS_BUCKET)
+    .upload(storagePath, blob, {
+      cacheControl: "3600",
+      upsert: true
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  const { error: updateError } = await supabaseClient
+    .from(DOCUMENTS_TABLE)
+    .update({
+      storage_path: storagePath,
+      file_name: item.fileName || cleanFileName
+    })
+    .eq("id", item.id);
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  if (previousStoragePath && previousStoragePath !== storagePath) {
+    const { error: removeError } = await supabaseClient.storage
+      .from(DOCUMENTS_BUCKET)
+      .remove([previousStoragePath]);
+
+    if (removeError) {
+      console.warn("Previous PDF could not be removed after replacement:", removeError);
+    }
+  }
+
+  item.storagePath = storagePath;
+  item.attachmentFileName = cleanFileName;
+  libraryPDFBlobCache.delete(item.id);
+  await loadLibraryDB();
+
+  activePreviewLibraryItem =
+    libraryDB.find(entry => entry.id === item.id) || item;
 }
 async function mergeSelectedLibraryPDFs() {
   const selectedItems = Array.from(selectedLibraryPDFIds)
@@ -1048,6 +1285,7 @@ async function confirmLibraryMergeOrder() {
 
 window.addEventListener("load", async () => {
   await checkDatabaseLogin();
+  populateLibraryTypeFilter();
   await loadLibraryDB();
   setupLibraryDropZone();
 
@@ -1059,4 +1297,7 @@ window.addEventListener("load", async () => {
 
   const searchEl = document.getElementById("librarySearch");
   if (searchEl) searchEl.addEventListener("input", renderLibraryDB);
+
+  const typeFilter = document.getElementById("libraryTypeFilter");
+  if (typeFilter) typeFilter.addEventListener("change", renderLibraryDB);
 });

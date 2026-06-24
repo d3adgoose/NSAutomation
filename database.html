@@ -60,8 +60,11 @@
       </div>
     </div>
   </div>
-    <section class="card">
+    <section class="card database-upload-card">
       <h2>Database</h2>
+      <p class="card-intro">
+        Add a reusable PDF to the shared library, then manage attachments from the table below.
+      </p>
 
       <div class="button-row upload-toolbar">
         <button onclick="clearLibraryUpload()">
@@ -126,62 +129,72 @@
       </div>
     </section>
 
-    <section class="card">
-      <h2>Library</h2>
+    <section class="card library-card">
+      <div class="library-card-header">
+        <div>
+          <h2>Library</h2>
+          <p class="card-intro">
+            Search, filter, merge, download, or manage stored PDF attachments.
+          </p>
+        </div>
 
-      <div class="merge-toolbar">
-        <input
-          id="mergedLibraryFileName"
-          placeholder="Merged PDF name"
-        />
-
-        <button
-          class="merge-btn"
-          onclick="openLibraryMergeOrderModal()">
-          Merge
-        </button>
+        <div class="library-merge-actions">
+          <input id="mergedLibraryFileName" placeholder="Merged PDF name" />
+          <button onclick="openLibraryMergeOrderModal()">Merge Selected</button>
+        </div>
       </div>
 
-      <div class="library-search-row">
+      <div class="library-filters">
         <input
           id="librarySearch"
           placeholder="Search library (file, title, type, notes)"
         />
+
+        <select id="libraryTypeFilter">
+          <option value="">All Document Types</option>
+        </select>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Select</th>
-            <th>Actions</th>
-            <th>Date</th>
-            <th>File Name</th>
-            <th>File Location</th>
-            <th>Document Type</th>
-            <th>Notes</th>
-            <th>PDF Attachment</th>
-          </tr>
-        </thead>
+      <div class="library-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Select</th>
+              <th>Actions</th>
+              <th>Date</th>
+              <th>File Name</th>
+              <th>File Location</th>
+              <th>Document Type</th>
+              <th>Notes</th>
+              <th>PDF Attachment</th>
+            </tr>
+          </thead>
 
-        <tbody id="libraryDBBody"></tbody>
-      </table>
+          <tbody id="libraryDBBody"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 
   <div id="libraryPreviewModal" class="modal hidden">
-    <div class="modal-content large-modal">
-      <h2 id="libraryPreviewTitle">PDF Preview</h2>
+    <div class="modal-content page-manager-modal-content library-page-manager-modal">
+      <div class="page-manager-header">
+        <div>
+          <h2 id="libraryPreviewTitle">Manage PDF</h2>
+          <p id="libraryPreviewStatus" class="warranty-status">No pages loaded.</p>
+        </div>
 
-      <div class="preview-modal-actions">
-        <button onclick="downloadPreviewedLibraryPDF()">Download PDF</button>
-        <button class="secondary" onclick="closeLibraryPreviewModal()">Close</button>
-      </div>
-
-      <div class="subsection-layout">
-        <div class="subsection-preview-panel">
-          <div id="libraryPreviewPageList"></div>
+        <div class="page-manager-actions">
+          <button onclick="selectAllLibraryPreviewPages()">Select All</button>
+          <button onclick="clearLibraryPreviewPageSelection()">Clear Selection</button>
+          <button onclick="extractSelectedLibraryPreviewPages()">Extract Selected</button>
+          <button class="delete-btn" onclick="deleteSelectedLibraryPreviewPages()">Delete Selected</button>
+          <button onclick="downloadPreviewedLibraryPDF()">Download PDF</button>
+          <button class="secondary" onclick="closeLibraryPreviewModal()">Close</button>
         </div>
       </div>
+
+      <div id="libraryPreviewPageList" class="page-manager-grid library-page-manager-grid"></div>
     </div>
   </div>
 

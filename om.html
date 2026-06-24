@@ -301,18 +301,20 @@
   <div id="pageManagerModal" class="modal hidden">
     <div class="modal-content page-manager-modal-content">
       <div class="page-manager-header">
-        <h2 id="pageManagerTitle">Manage PDF Pages</h2>
-        <button class="secondary" onclick="closePageManager()">Close</button>
+        <div>
+          <h2 id="pageManagerTitle">Manage PDF Pages</h2>
+          <p id="pageManagerStatus" class="warranty-status" aria-live="polite">No pages loaded.</p>
+        </div>
+        <div class="page-manager-actions">
+          <button onclick="selectAllManagedPages()">Select All</button>
+          <button class="secondary" onclick="clearManagedPageSelection()">Clear Selection</button>
+          <button onclick="extractSelectedPages()">Extract Selected</button>
+          <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
+          <button class="secondary" onclick="closePageManager()">Close</button>
+        </div>
       </div>
 
       <input type="hidden" id="activePageManagerPdfId" />
-      <div class="button-row page-manager-actions">
-        <button onclick="selectAllManagedPages()">Select All</button>
-        <button class="secondary" onclick="clearManagedPageSelection()">Clear Selection</button>
-        <button onclick="extractSelectedPages()">Extract Selected</button>
-        <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
-      </div>
-      <p id="pageManagerStatus" class="warranty-status" aria-live="polite"></p>
       <div id="pageManagerPreviewList" class="page-manager-grid"></div>
     </div>
   </div>

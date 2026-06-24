@@ -338,7 +338,7 @@ async function renderPageManagerPreviews(item) {
 
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 0.42 });
+      const viewport = page.getViewport({ scale: 1 });
       const card = document.createElement("div");
       const header = document.createElement("label");
       const checkbox = document.createElement("input");
@@ -3231,7 +3231,7 @@ async function renderPDFPagePreviews(item) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
 
-    const viewport = page.getViewport({ scale: 0.45 });
+    const viewport = page.getViewport({ scale: 0.8 });
 
     const wrapper = document.createElement("div");
     wrapper.className = "pdf-page-preview";
