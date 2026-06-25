@@ -1049,14 +1049,20 @@ async function restorePacketBuilderState(builderState) {
     throw new Error("This history item does not include editable source files.");
   }
 
-  pdfLibrary = builderState.pdfLibrary.map(item => ({
+  pdfLibrary = builderState.pdfLibrary.map(item => {
+  const detectionName = item.displayTitle || item.fileName || "";
+
+  return {
     ...item,
     id: item.id || crypto.randomUUID(),
     file: restoreFileFromHistory(item),
+    documentType: guessDocumentType(detectionName),
+    packetSection: guessPacketSection(detectionName),
     tocEntries: Array.isArray(item.tocEntries) ? item.tocEntries : [],
     include: item.include !== false,
     hideParentTOC: !!item.hideParentTOC
-  }));
+  };
+});
 
   customSectionLabels = { ...(builderState.customSectionLabels || {}) };
   pendingBuild = false;
