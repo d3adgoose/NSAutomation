@@ -60,23 +60,115 @@ const sectionOrder = {
 };
 
 const fileTypeRules = [
-  { documentType: "Revision Remarks", packetSection: "Revision Remarks", patterns: ["revision", "remarks"] },
-  { documentType: "Cover Page", packetSection: "Cover Page", patterns: ["cover"] },
-  { documentType: "Table of Contents", packetSection: "Table of Contents", patterns: ["table of contents", "toc"] },
-  { documentType: "Warranty", packetSection: "Warranty", patterns: ["warranty"] },
-  { documentType: "Maintenance", packetSection: "Maintenance", patterns: ["maintenance"] },
-  { documentType: "Safety Procedures", packetSection: "Safety Procedures", patterns: ["warning", "emergency shutdown", "emergency", "shutdown", "safety"] },
-  { documentType: "Sequence of Operations", packetSection: "Sequence of Operations", patterns: ["sequence of operations", "sequence of operation", "operations sequence"] },
-  { documentType: "Testing Checklist and Testing Procedures", packetSection: "Testing Checklist and Testing Procedures", patterns: ["testing checklist", "testing procedure", "testing procedures", "test checklist", "test procedure", "testing"] },
-  { documentType: "Datasheet", packetSection: "Datasheets", patterns: ["manual"] },
-  { documentType: "Parts List", packetSection: "Parts List", patterns: ["parts list", "part list", "parts", "part"] },
-  { documentType: "Electrical Schematics", packetSection: "Electrical Schematics", patterns: ["electrical schematic", "electrical schematics", "electrical diagram", "schematic", "diagram"] },
-  { documentType: "Control Panel Components", packetSection: "Control Panel Components", patterns: ["control", "panel"] },
-  { documentType: "Shop Drawing", packetSection: "Shop Drawings", patterns: ["shop drawing", "shop drawings", "shop", "drawing", "drawings"] },
-  { documentType: "Certification", packetSection: "Appendix", patterns: ["cert"] },
-  { documentType: "Spec Sheet", packetSection: "Datasheets", patterns: ["spec"] },
-  { documentType: "Testing Checklist and Testing Procedures", packetSection: "Testing Checklist and Testing Procedures", patterns: ["test"] },
-  { documentType: "Appendix", packetSection: "Appendix", patterns: ["appendix"] }
+  {
+    documentType: "Revision Remarks",
+    packetSection: "Revision Remarks",
+    patterns: ["revision remarks"]
+  },
+  {
+    documentType: "Cover Page",
+    packetSection: "Cover Page",
+    patterns: ["cover page"]
+  },
+  {
+    documentType: "Table of Contents",
+    packetSection: "Table of Contents",
+    patterns: ["table of contents", "toc"]
+  },
+  {
+    documentType: "Warranty",
+    packetSection: "Warranty",
+    patterns: ["warranty"]
+  },
+  {
+    documentType: "Safety Procedure",
+    packetSection: "Safety Procedures",
+    patterns: [
+      "warning / safety / emergency shutdown",
+      "safety procedures",
+      "safety procedure",
+      "emergency shutdown",
+      "warning"
+    ]
+  },
+  {
+    documentType: "Sequence of Operations",
+    packetSection: "Sequence of Operations",
+    patterns: [
+      "sequence of operations",
+      "sequence of operation"
+    ]
+  },
+  {
+    documentType: "Maintenance",
+    packetSection: "Maintenance",
+    patterns: ["maintenance"]
+  },
+  {
+    documentType: "Testing Checklist and Testing Procedures",
+    packetSection: "Testing Checklist and Testing Procedures",
+    patterns: [
+      "testing checklist and testing procedures",
+      "testing checklist",
+      "testing procedures",
+      "testing procedure"
+    ]
+  },
+  {
+    documentType: "Parts List",
+    packetSection: "Parts List",
+    patterns: [
+      "parts list",
+      "part list"
+    ]
+  },
+  {
+    documentType: "Datasheet",
+    packetSection: "Datasheets",
+    patterns: [
+      "equipment datasheet",
+      "equipment datasheets",
+      "datasheet",
+      "datasheets",
+      "spec sheet",
+      "specification",
+      "manual"
+    ]
+  },
+  {
+    documentType: "Control Panel Components",
+    packetSection: "Control Panel Components",
+    patterns: [
+      "control panel components",
+      "control panel"
+    ]
+  },
+  {
+    documentType: "Electrical Schematic",
+    packetSection: "Electrical Schematics",
+    patterns: [
+      "electrical schematics",
+      "electrical schematic"
+    ]
+  },
+  {
+    documentType: "Shop Drawing",
+    packetSection: "Shop Drawings",
+    patterns: [
+      "shop drawings",
+      "shop drawing"
+    ]
+  },
+  {
+    documentType: "Appendix",
+    packetSection: "Appendix",
+    patterns: ["appendix"]
+  },
+  {
+    documentType: "Other",
+    packetSection: "Datasheets",
+    patterns: []
+  }
 ];
 
 function getMatchedFileRule(fileName = "") {
