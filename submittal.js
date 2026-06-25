@@ -21,6 +21,7 @@ if (submittalImport) {
 document.addEventListener("DOMContentLoaded", () => {
   const dropZone = document.getElementById("dropZone");
   setupSubmittalImportDropZone();
+  renderPacketHistory();
 
   if (!dropZone) return;
 
@@ -208,13 +209,9 @@ function renderUploadedPdfList() {
     const row = document.createElement("div");
     row.className = "uploaded-pdf-row";
 
-    const canHaveSubsections =
-      item.packetSection === "Datasheets" ||
-      item.packetSection === "Control Panel Components" ||
-      item.packetSection === "Electrical Schematics" ||
-      item.packetSection === "Shop Drawings";
+    const canFormatTOC = item.packetSection !== "Warranty";
 
-    const subsectionButton = canHaveSubsections
+    const subsectionButton = canFormatTOC
       ? `
         <button onclick="openSubsectionModal('${item.id}')">
           Format TOC
@@ -222,7 +219,7 @@ function renderUploadedPdfList() {
       `
       : "";
 
-    const managePdfButton = !canHaveSubsections
+    const managePdfButton = !canFormatTOC
       ? `
         <button onclick="openPageManager('${item.id}')">
           Manage PDF
@@ -230,7 +227,7 @@ function renderUploadedPdfList() {
       `
       : "";
 
-    const subsectionCount = canHaveSubsections
+    const subsectionCount = canFormatTOC
       ? `
         <div class="subsection-count">
           ${formatTOCEntryCount(item.tocEntries || [])}
@@ -877,6 +874,395 @@ function getBuildErrorMessage(buildLabel, error, context = "") {
     : `${buildLabel} could not be built. ${reason}`;
 }
 
+const PACKET_HISTORY_DB_NAME = "ns-packet-history";
+const PACKET_HISTORY_STORE_NAME = "packets";
+const PACKET_HISTORY_LIMIT = 3;
+
+function getPacketHistoryType() {
+  return typeof isOMPacket === "function" && isOMPacket()
+    ? "om"
+    : "submittal";
+}
+
+function getPacketHistoryTitle() {
+  return getPacketHistoryType() === "om"
+    ? "O&M manual"
+    : "submittal";
+}
+
+function getPacketHistoryStatusElement() {
+  return document.getElementById("packetHistoryStatus");
+}
+
+function updatePacketHistoryStatus(message = "") {
+  const status = getPacketHistoryStatusElement();
+  if (status) status.textContent = message;
+}
+
+function openPacketHistoryDB() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("Local browser history is not supported in this browser."));
+      return;
+    }
+
+    const request = indexedDB.open(PACKET_HISTORY_DB_NAME, 1);
+
+    request.onupgradeneeded = event => {
+      const db = event.target.result;
+
+      if (!db.objectStoreNames.contains(PACKET_HISTORY_STORE_NAME)) {
+        const store = db.createObjectStore(PACKET_HISTORY_STORE_NAME, {
+          keyPath: "id"
+        });
+        store.createIndex("type", "type", { unique: false });
+        store.createIndex("createdAt", "createdAt", { unique: false });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open local history."));
+  });
+}
+
+function runPacketHistoryTransaction(mode, callback) {
+  return openPacketHistoryDB().then(db =>
+    new Promise((resolve, reject) => {
+      const transaction = db.transaction(PACKET_HISTORY_STORE_NAME, mode);
+      const store = transaction.objectStore(PACKET_HISTORY_STORE_NAME);
+      const result = callback(store);
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(result);
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error || new Error("Local history update failed."));
+      };
+    })
+  );
+}
+
+async function getPacketHistoryItems() {
+  const type = getPacketHistoryType();
+
+  const items = await runPacketHistoryTransaction("readonly", store =>
+    new Promise((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    })
+  );
+
+  return items
+    .filter(item => item.type === type)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+async function getPacketHistoryItem(id) {
+  return runPacketHistoryTransaction("readonly", store =>
+    new Promise((resolve, reject) => {
+      const request = store.get(id);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    })
+  );
+}
+
+function getPacketBuilderState(includedCount = 0) {
+  const fieldIds = [
+    "projectNumber",
+    "projectName",
+    "projectLocation",
+    "projectAddress",
+    "washType",
+    "systemName",
+    "revision"
+  ];
+  const fields = {};
+
+  fieldIds.forEach(id => {
+    const field = document.getElementById(id);
+    if (field) fields[id] = field.value || "";
+  });
+
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    includedCount,
+    fields,
+    customSectionLabels: { ...customSectionLabels },
+    pdfLibrary: pdfLibrary.map(item => ({
+      ...item,
+      file: item.file || null
+    }))
+  };
+}
+
+function hasActivePacketBuilderState() {
+  const hasFiles = pdfLibrary.length > 0;
+  const hasFields = [
+    "projectNumber",
+    "projectName",
+    "projectLocation",
+    "projectAddress",
+    "systemName",
+    "revision"
+  ].some(id => {
+    const field = document.getElementById(id);
+    return field && field.value.trim();
+  });
+
+  return hasFiles || hasFields;
+}
+
+function restoreFileFromHistory(item) {
+  if (!item?.file) return null;
+
+  if (item.file instanceof File) return item.file;
+
+  const fileName = item.fileName || item.file?.name || "history-file.pdf";
+  const fileType = item.file?.type || "application/pdf";
+  const lastModified = item.file?.lastModified || Date.now();
+
+  return new File([item.file], fileName, {
+    type: fileType,
+    lastModified
+  });
+}
+
+async function restorePacketBuilderState(builderState) {
+  if (!builderState || !Array.isArray(builderState.pdfLibrary)) {
+    throw new Error("This history item does not include editable source files.");
+  }
+
+  pdfLibrary = builderState.pdfLibrary.map(item => ({
+    ...item,
+    id: item.id || crypto.randomUUID(),
+    file: restoreFileFromHistory(item),
+    tocEntries: Array.isArray(item.tocEntries) ? item.tocEntries : [],
+    include: item.include !== false,
+    hideParentTOC: !!item.hideParentTOC
+  }));
+
+  customSectionLabels = { ...(builderState.customSectionLabels || {}) };
+  pendingBuild = false;
+  warrantyPromptHandled = false;
+  selectedManagedPages = new Set();
+  pendingSubmittalImportFile = null;
+
+  Object.entries(builderState.fields || {}).forEach(([id, value]) => {
+    const field = document.getElementById(id);
+    if (field) field.value = value || "";
+  });
+
+  const pdfUpload = document.getElementById("pdfUpload");
+  if (pdfUpload) pdfUpload.value = "";
+  const importInput = document.getElementById("submittalImport");
+  if (importInput) importInput.value = "";
+  const importStatus = document.getElementById("submittalImportStatus");
+  if (importStatus) importStatus.textContent = "";
+  const importModalStatus = document.getElementById("submittalImportModalStatus");
+  if (importModalStatus) importModalStatus.textContent = "No PDF selected.";
+
+  [
+    "warrantyPromptModal",
+    "datasheetOrderModal",
+    "subsectionModal",
+    "pageManagerModal",
+    "submittalImportModal"
+  ].forEach(id => {
+    document.getElementById(id)?.classList.add("hidden");
+  });
+
+  sortLibraryBySection();
+  renderUploadedPdfList();
+  updatePacketBuildStatus("History restored. You can edit and build again.");
+}
+
+async function savePacketHistoryEntry({ pdfBytes, fileName, includedCount }) {
+  const type = getPacketHistoryType();
+  const entry = {
+    id: crypto.randomUUID(),
+    type,
+    fileName,
+    projectNumber: document.getElementById("projectNumber")?.value || "",
+    projectName: document.getElementById("projectName")?.value || "",
+    revision: document.getElementById("revision")?.value || "",
+    includedCount,
+    createdAt: Date.now(),
+    blob: new Blob([pdfBytes], { type: "application/pdf" }),
+    builderState: getPacketBuilderState(includedCount)
+  };
+
+  await runPacketHistoryTransaction("readwrite", store => {
+    store.put(entry);
+  });
+
+  const items = await getPacketHistoryItems();
+  const oldItems = items.slice(PACKET_HISTORY_LIMIT);
+
+  if (oldItems.length > 0) {
+    await runPacketHistoryTransaction("readwrite", store => {
+      oldItems.forEach(item => store.delete(item.id));
+    });
+  }
+
+  await renderPacketHistory();
+}
+
+async function renderPacketHistory() {
+  const list = document.getElementById("packetHistoryList");
+  if (!list) return;
+
+  list.innerHTML = "";
+  updatePacketHistoryStatus("Loading local history...");
+
+  try {
+    const items = await getPacketHistoryItems();
+    const label = getPacketHistoryTitle();
+
+    if (items.length === 0) {
+      updatePacketHistoryStatus(`No local ${label} history yet.`);
+      return;
+    }
+
+    items.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "packet-history-row";
+
+      const createdAt = new Date(item.createdAt).toLocaleString();
+      const meta = [
+        item.projectNumber,
+        item.projectName,
+        item.revision ? `Rev ${item.revision}` : "",
+        item.includedCount ? `${item.includedCount} PDF(s)` : ""
+      ].filter(Boolean).join(" | ");
+
+      row.innerHTML = `
+        <div class="packet-history-info">
+          <strong>${item.fileName}</strong>
+          <span>${createdAt}</span>
+          <span>${meta || "No project details saved."}</span>
+        </div>
+
+        <div class="button-row packet-history-actions">
+          <button onclick="editPacketHistoryEntry('${item.id}')">Edit</button>
+          <button onclick="downloadPacketHistoryEntry('${item.id}')">Download</button>
+          <button onclick="renamePacketHistoryEntry('${item.id}')">Rename</button>
+          <button class="delete-btn" onclick="removePacketHistoryEntry('${item.id}')">Remove</button>
+        </div>
+      `;
+
+      list.appendChild(row);
+    });
+
+    updatePacketHistoryStatus(`Showing ${items.length} saved ${label}(s).`);
+  } catch (error) {
+    console.error("Could not render packet history:", error);
+    updatePacketHistoryStatus(error.message || "Could not load local history.");
+  }
+}
+
+async function downloadPacketHistoryEntry(id) {
+  try {
+    const item = await getPacketHistoryItem(id);
+
+    if (!item || !item.blob) {
+      alert("This saved PDF was not found.");
+      await renderPacketHistory();
+      return;
+    }
+
+    downloadFile(item.blob, item.fileName || "packet-history.pdf", "application/pdf");
+    updatePacketHistoryStatus(`Downloaded ${item.fileName}.`);
+  } catch (error) {
+    console.error("Could not download packet history item:", error);
+    alert("Could not download this saved PDF.");
+  }
+}
+
+async function editPacketHistoryEntry(id) {
+  try {
+    const item = await getPacketHistoryItem(id);
+
+    if (!item?.builderState) {
+      alert("This saved PDF was created before editable history was added. Build it once more to save an editable version.");
+      return;
+    }
+
+    if (
+      hasActivePacketBuilderState() &&
+      !confirm("Replace the current builder with this saved history item?")
+    ) {
+      return;
+    }
+
+    await restorePacketBuilderState(item.builderState);
+    updatePacketHistoryStatus(`Loaded ${item.fileName} for editing.`);
+
+    document.getElementById("dropZone")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  } catch (error) {
+    console.error("Could not edit packet history item:", error);
+    alert(error.message || "Could not load this history item for editing.");
+  }
+}
+
+async function renamePacketHistoryEntry(id) {
+  try {
+    const item = await getPacketHistoryItem(id);
+    if (!item) return;
+
+    let newName = prompt("Rename saved PDF:", item.fileName || "");
+    if (newName === null) return;
+
+    newName = newName.trim();
+    if (!newName) {
+      alert("History name cannot be blank.");
+      return;
+    }
+
+    if (!newName.toLowerCase().endsWith(".pdf")) {
+      newName += ".pdf";
+    }
+
+    item.fileName = newName;
+
+    await runPacketHistoryTransaction("readwrite", store => {
+      store.put(item);
+    });
+
+    await renderPacketHistory();
+    updatePacketHistoryStatus(`Renamed saved PDF to ${newName}.`);
+  } catch (error) {
+    console.error("Could not rename packet history item:", error);
+    alert("Could not rename this saved PDF.");
+  }
+}
+
+async function removePacketHistoryEntry(id) {
+  const item = await getPacketHistoryItem(id);
+  const name = item?.fileName || "this saved PDF";
+
+  if (!confirm(`Remove ${name} from local history?`)) return;
+
+  try {
+    await runPacketHistoryTransaction("readwrite", store => {
+      store.delete(id);
+    });
+
+    await renderPacketHistory();
+    updatePacketHistoryStatus(`Removed ${name} from local history.`);
+  } catch (error) {
+    console.error("Could not remove packet history item:", error);
+    alert("Could not remove this saved PDF.");
+  }
+}
+
 async function buildPacket() {
   const buildLabel = getPacketBuildLabel();
   let buildContext = "starting the build";
@@ -1022,12 +1408,7 @@ async function buildPacket() {
       });
     }
 
-    if (
-      item.packetSection === "Datasheets" ||
-      item.packetSection === "Control Panel Components" ||
-      item.packetSection === "Electrical Schematics" ||
-      item.packetSection === "Shop Drawings"
-    ) {
+    if ((item.tocEntries || []).length > 0) {
       const manualEntries = (item.tocEntries || [])
         .sort((a, b) => a.sourcePage - b.sourcePage)
         .map(entry => ({
@@ -1084,6 +1465,21 @@ async function buildPacket() {
     typeof getOMOutputFileName === "function"
       ? getOMOutputFileName()
       : getOutputFileName();
+
+  buildContext = "saving the local history copy";
+  updatePacketBuildStatus("Saving local history copy...");
+  try {
+    await savePacketHistoryEntry({
+      pdfBytes,
+      fileName: outputName,
+      includedCount: included.length
+    });
+  } catch (historyError) {
+    console.warn("Could not save packet history:", historyError);
+    updatePacketHistoryStatus(
+      historyError.message || "Could not save this PDF to local history."
+    );
+  }
 
   updatePacketBuildStatus("Downloading final PDF...");
   downloadFile(pdfBytes, outputName, "application/pdf");

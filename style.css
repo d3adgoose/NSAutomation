@@ -1125,6 +1125,66 @@ button:disabled {
   line-height: 1.45;
 }
 
+.history-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.history-card-header h2 {
+  margin-top: 0;
+}
+
+.packet-history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.packet-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.packet-history-info {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.packet-history-info strong {
+  color: #0b2d4d;
+  overflow-wrap: anywhere;
+}
+
+.packet-history-info span {
+  color: #536170;
+  font-size: 13px;
+}
+
+.packet-history-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .history-card-header,
+  .packet-history-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .packet-history-actions {
+    justify-content: flex-start;
+  }
+}
 
 .library-filters {
   display: grid;

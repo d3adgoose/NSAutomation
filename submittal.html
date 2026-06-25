@@ -59,9 +59,9 @@
             </li>
 
             <li>
-              Use <strong>Format TOC</strong> for Datasheets, Control Panel Components,
-              Electrical Schematics, and Shop Drawings. Section rows become main TOC entries;
-              subsection rows appear indented under them.
+              Use <strong>Format TOC</strong> on any non-warranty PDF to add sections
+              and subsections. Section rows become main TOC entries; subsection rows
+              appear indented under them.
             </li>
 
             <li>
@@ -79,7 +79,7 @@
           </p>
 
           <ul>
-            <li>Use <strong>Manage PDF</strong> to remove pages from non-subsection documents.</li>
+            <li>Use <strong>Manage PDF</strong> to remove pages from warranty documents.</li>
             <li>Revision Remarks are not numbered and do not appear in the TOC.</li>
             <li>Datasheets can be reordered before building the PDF.</li>
             <li>Imported submittal TOCs can use bullet rows for sections and dash rows for subsections.</li>
@@ -157,6 +157,23 @@
 
       <p id="packetBuildStatus" class="warranty-status" aria-live="polite">
         Ready to build.
+      </p>
+    </section>
+
+    <section class="card">
+      <div class="history-card-header">
+        <div>
+          <h2>Local History</h2>
+          <p class="card-intro">
+            Last 3 submittals built on this device.
+          </p>
+        </div>
+        <button class="secondary" onclick="renderPacketHistory()">Refresh</button>
+      </div>
+
+      <div id="packetHistoryList" class="packet-history-list"></div>
+      <p id="packetHistoryStatus" class="warranty-status" aria-live="polite">
+        Loading local history...
       </p>
     </section>
   </main>
