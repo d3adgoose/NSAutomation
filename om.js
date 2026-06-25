@@ -12,7 +12,6 @@ const OM_PACKET_CONFIG = {
     "Control Panel Components",
     "Electrical Schematics",
     "Shop Drawings",
-    "Manuals",
     "Appendix"
   ]
 };
@@ -28,7 +27,6 @@ const OM_SECTION_ORDER = [
   "Control Panel Components",
   "Electrical Schematics",
   "Shop Drawings",
-  "Manuals",
   "Appendix"
 ];
 
@@ -43,7 +41,6 @@ const OM_SECTION_LABELS = {
   "Control Panel Components": "Control Panel Components",
   "Electrical Schematics": "Electrical Schematics",
   "Shop Drawings": "Shop Drawings",
-  "Manuals": "Manuals",
   "Appendix": "Appendix"
 };
 

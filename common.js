@@ -68,6 +68,7 @@ const fileTypeRules = [
   { documentType: "Safety Procedures", packetSection: "Safety Procedures", patterns: ["warning", "emergency shutdown", "emergency", "shutdown", "safety"] },
   { documentType: "Sequence of Operations", packetSection: "Sequence of Operations", patterns: ["sequence of operations", "sequence of operation", "operations sequence"] },
   { documentType: "Testing Checklist and Testing Procedures", packetSection: "Testing Checklist and Testing Procedures", patterns: ["testing checklist", "testing procedure", "testing procedures", "test checklist", "test procedure", "testing"] },
+  { documentType: "Datasheet", packetSection: "Datasheets", patterns: ["manual"] },
   { documentType: "Parts List", packetSection: "Parts List", patterns: ["parts list", "part list", "parts", "part"] },
   { documentType: "Electrical Schematics", packetSection: "Electrical Schematics", patterns: ["electrical schematic", "electrical schematics", "electrical diagram", "schematic", "diagram"] },
   { documentType: "Control Panel Components", packetSection: "Control Panel Components", patterns: ["control", "panel"] },

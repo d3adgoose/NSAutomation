@@ -195,8 +195,20 @@ function renamePdfTitle(id) {
     return;
   }
 
-  item.displayTitle = cleanTitle;
-  renderUploadedPdfList();
+    item.displayTitle = cleanTitle;
+
+    const detectedSection = guessPacketSection(cleanTitle);
+    const detectedType = guessDocumentType(cleanTitle);
+
+    item.packetSection = detectedSection;
+    item.documentType = detectedType;
+
+    if (detectedSection !== "Datasheets") {
+      item.datasheetOrder = null;
+    }
+
+    sortLibraryBySection();
+    renderUploadedPdfList();
 }
 
 function renderUploadedPdfList() {
@@ -4073,6 +4085,25 @@ function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPage
   sourcePage.node.addAnnot(annotationRef);
 }
 
+function truncateTextToWidth(text, font, size, maxWidth) {
+  const value = String(text || "");
+
+  if (font.widthOfTextAtSize(value, size) <= maxWidth) {
+    return value;
+  }
+
+  let shortened = value;
+
+  while (
+    shortened.length > 0 &&
+    font.widthOfTextAtSize(`${shortened}...`, size) > maxWidth
+  ) {
+    shortened = shortened.slice(0, -1);
+  }
+
+  return `${shortened.trim()}...`;
+}
+
 async function drawTOCOnExistingPage(
   pdfDoc,
   page,
@@ -4335,14 +4366,17 @@ async function drawTOCOnExistingPage(
         font: times
       });
 
-      page.drawText(item.title, {
+      const maxTitleWidth = pageNumX - titleX - 34;
+      const safeTitle = truncateTextToWidth(item.title, times, 12, maxTitleWidth);
+
+      page.drawText(safeTitle, {
         x: titleX,
         y,
         size: 12,
         font: times
       });
 
-      const titleWidth = times.widthOfTextAtSize(item.title, 12);
+      const titleWidth = times.widthOfTextAtSize(safeTitle, 12);
 
       if (showPageNumber) {
         drawDottedLeader(titleX + titleWidth + 6, pageNumX - 8, y);
