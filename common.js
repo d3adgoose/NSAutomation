@@ -39,7 +39,6 @@ const packetSections = [
   "Control Panel Components",
   "Electrical Schematics",
   "Shop Drawings",
-  "Manuals",
   "Appendix"
 ];
 
@@ -57,8 +56,7 @@ const sectionOrder = {
   "Control Panel Components": 11,
   "Electrical Schematics": 12,
   "Shop Drawings": 13,
-  "Manuals": 14,
-  "Appendix": 15
+  "Appendix": 14
 };
 
 const fileTypeRules = [
@@ -74,7 +72,6 @@ const fileTypeRules = [
   { documentType: "Electrical Schematics", packetSection: "Electrical Schematics", patterns: ["electrical schematic", "electrical schematics", "electrical diagram", "schematic", "diagram"] },
   { documentType: "Control Panel Components", packetSection: "Control Panel Components", patterns: ["control", "panel"] },
   { documentType: "Shop Drawing", packetSection: "Shop Drawings", patterns: ["shop drawing", "shop drawings", "shop", "drawing", "drawings"] },
-  { documentType: "Manual", packetSection: "Manuals", patterns: ["manual"] },
   { documentType: "Certification", packetSection: "Appendix", patterns: ["cert"] },
   { documentType: "Spec Sheet", packetSection: "Datasheets", patterns: ["spec"] },
   { documentType: "Testing Checklist and Testing Procedures", packetSection: "Testing Checklist and Testing Procedures", patterns: ["test"] },
