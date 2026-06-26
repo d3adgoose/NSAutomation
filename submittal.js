@@ -788,16 +788,23 @@ async function drawGeneratedCoverPage(pdfDoc) {
 }
 
 async function drawSectionDividerPage(pdfDoc, sectionTitle, packetSection = "") {
-  if (!romanCoverPageBytesPromise) {
-    romanCoverPageBytesPromise = loadCoverPageAsset("RomanCoverPage.pdf");
+  let page;
+
+  try {
+    if (!romanCoverPageBytesPromise) {
+      romanCoverPageBytesPromise = loadCoverPageAsset("RomanCoverPage.pdf");
+    }
+
+    const templateBytes = await romanCoverPageBytesPromise;
+    const templatePdf = await PDFDocument.load(templateBytes);
+    const [templatePage] = await pdfDoc.copyPages(templatePdf, [0]);
+
+    page = pdfDoc.addPage(templatePage);
+  } catch (error) {
+    console.warn("Roman cover divider missing. Using plain divider page.", error);
+    romanCoverPageBytesPromise = null;
+    page = pdfDoc.addPage([612, 792]);
   }
-
-  const templateBytes = await romanCoverPageBytesPromise;
-
-  const templatePdf = await PDFDocument.load(templateBytes);
-  const [templatePage] = await pdfDoc.copyPages(templatePdf, [0]);
-
-  const page = pdfDoc.addPage(templatePage);
 
   if (packetSection) {
     const PDFName = window.PDFLib.PDFName;
@@ -1427,18 +1434,15 @@ async function buildPacket() {
     }
 
     if ((item.tocEntries || []).length > 0) {
-      const manualEntries = (item.tocEntries || [])
-        .sort((a, b) => a.sourcePage - b.sourcePage)
+      const manualEntries = orderTOCEntriesForDisplay(item.tocEntries || [])
         .map(entry => ({
           title: entry.title,
           section: item.packetSection,
           startPage: startPage + entry.sourcePage - 1,
           targetPageIndex:
             finalPdf.getPageCount() + entry.sourcePage - 1,
-          tocLevel:
-            entry.entryType === "section"
-              ? 0
-              : 1
+          tocLevel: Number(entry.tocLevel || 0),
+          parentId: entry.parentId || ""
         }));
 
       tocItems.push(...manualEntries);
@@ -2375,7 +2379,17 @@ async function openSubsectionModal(id) {
 
   previewList.innerHTML = "Loading page previews...";
 
+  const tocEntryLevel = document.getElementById("tocEntryLevel");
+  const tocEntryParent = document.getElementById("tocEntryParent");
+
+  if (tocEntryLevel) tocEntryLevel.value = "0";
+  if (tocEntryParent) {
+    tocEntryParent.innerHTML = `<option value="">N/A</option>`;
+    tocEntryParent.disabled = true;
+  }
+
   renderCurrentSubsectionList();
+  updateTOCParentDropdown();
 
   modal.classList.remove("hidden");
 
@@ -3899,12 +3913,105 @@ async function renderPDFPagePreviews(item) {
   updateSubsectionPageSelectionStatus(pdf.numPages);
 }
 
-function addTOCEntry(entryType) {
+function getActiveSubsectionItem() {
+  const activeId = document.getElementById("activeSubsectionPdfId")?.value;
+  return pdfLibrary.find(item => item.id === activeId);
+}
+
+function getTOCParentTitle(item, parentId) {
+  if (!parentId) return "N/A";
+
+  const parent = (item.tocEntries || []).find(entry => entry.id === parentId);
+  return parent ? parent.title : "N/A";
+}
+
+function updateTOCParentDropdown() {
+  const item = getActiveSubsectionItem();
+  const levelSelect = document.getElementById("tocEntryLevel");
+  const parentSelect = document.getElementById("tocEntryParent");
+
+  if (!item || !levelSelect || !parentSelect) return;
+
+  const level = Number(levelSelect.value || 0);
+
+  parentSelect.innerHTML = "";
+
+  if (level === 0) {
+    parentSelect.disabled = true;
+    parentSelect.innerHTML = `<option value="">N/A</option>`;
+    return;
+  }
+
+  const parentLevel = level - 1;
+  const parentOptions = (item.tocEntries || [])
+    .filter(entry => Number(entry.tocLevel || 0) === parentLevel);
+
+  parentSelect.disabled = false;
+
+  if (parentOptions.length === 0) {
+    parentSelect.innerHTML = `<option value="">No Level ${parentLevel} parent yet</option>`;
+    return;
+  }
+
+  parentSelect.innerHTML = parentOptions
+    .map(entry => `
+      <option value="${entry.id}">
+        ${entry.title}
+      </option>
+    `)
+    .join("");
+}
+
+function getLevelTwoLetter(item, entry) {
+  const siblings = (item.tocEntries || []).filter(other =>
+    Number(other.tocLevel || 0) === 2 &&
+    other.parentId === entry.parentId
+  );
+
+  const index = siblings.findIndex(other => other.id === entry.id);
+  return `${String.fromCharCode(97 + Math.max(index, 0))}.`;
+}
+
+function orderTOCEntriesForDisplay(entries = []) {
+  const sorted = [...entries].sort((a, b) =>
+    a.sourcePage - b.sourcePage ||
+    Number(a.tocLevel || 0) - Number(b.tocLevel || 0)
+  );
+
+  const childrenByParent = new Map();
+
+  sorted.forEach(entry => {
+    const parentKey = entry.parentId || "";
+    if (!childrenByParent.has(parentKey)) {
+      childrenByParent.set(parentKey, []);
+    }
+
+    childrenByParent.get(parentKey).push(entry);
+  });
+
+  const ordered = [];
+
+  function addChildren(parentId = "") {
+    const children = childrenByParent.get(parentId) || [];
+
+    children.forEach(child => {
+      ordered.push(child);
+      addChildren(child.id);
+    });
+  }
+
+  addChildren("");
+  return ordered;
+}
+
+function addTOCEntry() {
   const activeIdInput = document.getElementById("activeSubsectionPdfId");
   const pageInput = document.getElementById("subsectionPageNumber");
   const titleInput = document.getElementById("subsectionTitle");
+  const levelSelect = document.getElementById("tocEntryLevel");
+  const parentSelect = document.getElementById("tocEntryParent");
 
-  if (!activeIdInput || !pageInput || !titleInput) {
+  if (!activeIdInput || !pageInput || !titleInput || !levelSelect || !parentSelect) {
     alert("TOC modal is missing required HTML fields. Check the modal IDs.");
     return;
   }
@@ -3912,14 +4019,14 @@ function addTOCEntry(entryType) {
   const activeId = activeIdInput.value;
   const pageNumber = Number(pageInput.value);
   const title = titleInput.value.trim();
+  const tocLevel = Number(levelSelect.value || 0);
+  const parentId = parentSelect.value || "";
 
   const item = pdfLibrary.find(x => x.id === activeId);
-    if (!item) return;
-    const hideParent =
-    document.getElementById("hideParentTOC");
+  if (!item) return;
 
-  item.hideParentTOC =
-    hideParent ? hideParent.checked : false;
+  const hideParent = document.getElementById("hideParentTOC");
+  item.hideParentTOC = hideParent ? hideParent.checked : false;
 
   if (!pageNumber || pageNumber < 1) {
     alert("Select a page.");
@@ -3931,6 +4038,11 @@ function addTOCEntry(entryType) {
     return;
   }
 
+  if (tocLevel > 0 && !parentId) {
+    alert(`Select a Level ${tocLevel - 1} parent first.`);
+    return;
+  }
+
   if (!item.tocEntries) {
     item.tocEntries = [];
   }
@@ -3939,11 +4051,15 @@ function addTOCEntry(entryType) {
     id: crypto.randomUUID(),
     title,
     sourcePage: pageNumber,
-    entryType,
-    tocLevel: entryType === "section" ? 0 : 1
+    entryType: tocLevel === 0 ? "section" : "subsection",
+    tocLevel,
+    parentId: tocLevel === 0 ? "" : parentId
   });
 
-  item.tocEntries.sort((a, b) => a.sourcePage - b.sourcePage);
+  item.tocEntries.sort((a, b) =>
+    a.sourcePage - b.sourcePage ||
+    Number(a.tocLevel || 0) - Number(b.tocLevel || 0)
+  );
 
   pageInput.value = "";
   titleInput.value = "";
@@ -3953,6 +4069,7 @@ function addTOCEntry(entryType) {
   });
 
   renderCurrentSubsectionList();
+  updateTOCParentDropdown();
 }
 
 function removeSubsectionEntry(entryId) {
@@ -3980,8 +4097,7 @@ function renderCurrentSubsectionList() {
 
   list.innerHTML = "";
 
-  item.tocEntries
-    .sort((a, b) => a.sourcePage - b.sourcePage)
+  orderTOCEntriesForDisplay(item.tocEntries)
     .forEach(entry => {
       const row = document.createElement("div");
       row.className = "subsection-entry-row";
@@ -3989,10 +4105,14 @@ function renderCurrentSubsectionList() {
       row.innerHTML = `
         <div class="subsection-entry-info">
           <strong>
-            ${entry.entryType === "section"
-                ? "Section"
-                : "Subsection"}
+            ${Number(entry.tocLevel || 0) === 2
+              ? `${getLevelTwoLetter(item, entry)} Level 2`
+              : `Level ${entry.tocLevel ?? 0}`}
           </strong>
+
+          <div>
+            Parent: ${getTOCParentTitle(item, entry.parentId)}
+          </div>
           <br>
           Page ${entry.sourcePage}
           <br>
@@ -4129,9 +4249,11 @@ async function drawTOCOnExistingPage(
   const leftMargin = 0.7 * 72;
   const topMargin = 0.44 * 72;
   const rightMargin = 0.38 * 72;
+  const footerMargin = 65;
 
   const pageRight = width - rightMargin;
   const startY = height - topMargin;
+  let tocInsertIndex = pdfDoc.getPages().indexOf(page) + 1;
 
   function centerText(text, y, size, font) {
     const textWidth = font.widthOfTextAtSize(text, size);
@@ -4285,7 +4407,21 @@ async function drawTOCOnExistingPage(
 
     const sectionLabel = getSectionLabel(section);
     const sectionText = `${roman}. ${sectionLabel}`;
+    if (y < footerMargin + 25) {
+      page = pdfDoc.insertPage(tocInsertIndex, [612, 792]);
+      tocInsertIndex++;
 
+      y = height - topMargin - 30;
+
+      page.drawText("Table of Contents (Continued)", {
+        x: leftMargin,
+        y,
+        size: 16,
+        font: timesBold
+      });
+
+      y -= 28;
+    }
     page.drawText(sectionText, {
       x: leftMargin,
       y,
@@ -4347,17 +4483,44 @@ async function drawTOCOnExistingPage(
       return itemTitle !== sectionTitle;
     });
 
-    filteredItems.forEach(item => {
-      const level = item.tocLevel || 0;
+        filteredItems.forEach(item => {
+        // Move to a new TOC page before drawing into the footer
+        if (y < footerMargin) {
+          page = pdfDoc.insertPage(tocInsertIndex, [612, 792]);
+          tocInsertIndex++;
+
+          y = height - topMargin - 30;
+
+          page.drawText("Table of Contents (Continued)", {
+            x: leftMargin,
+            y,
+            size: 16,
+            font: timesBold
+          });
+
+          y -= 28;
+        }
+
+        const level = Number(item.tocLevel || 0);
       const levelSettings = {
         0: { bullet: "•", bulletX: leftMargin + 18, titleX: leftMargin + 32 },
         1: { bullet: "-", bulletX: leftMargin + 48, titleX: leftMargin + 62 },
-        2: { bullet: "*", bulletX: leftMargin + 78, titleX: leftMargin + 92 }
+        2: { bullet: "", bulletX: leftMargin + 84, titleX: leftMargin + 104 }
       };
 
       const settings = levelSettings[level] || levelSettings[0];
 
-      const bullet = settings.bullet;
+      let bullet = settings.bullet;
+
+      if (level === 2) {        const levelTwoSiblings = filteredItems.filter(other =>
+          Number(other.tocLevel || 0) === 2 &&
+          (other.parentId || "") === (item.parentId || "")
+        );
+
+        const siblingIndex = levelTwoSiblings.findIndex(other => other === item);
+        bullet = `${String.fromCharCode(97 + Math.max(siblingIndex, 0))}.`;
+      }
+
       const bulletX = settings.bulletX;
       const titleX = settings.titleX;
       const pageNum = `${item.startPage}`;
