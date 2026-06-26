@@ -216,6 +216,21 @@ function renamePdfTitle(id) {
     renderUploadedPdfList();
 }
 
+function updateUploadedPDFSection(id, newSection) {
+  const item = pdfLibrary.find(x => x.id === id);
+  if (!item) return;
+
+  item.packetSection = newSection;
+  item.documentType = guessDocumentType(newSection);
+
+  if (newSection !== "Datasheets") {
+    item.datasheetOrder = null;
+  }
+
+  sortLibraryBySection();
+  renderUploadedPdfList();
+}
+
 function renderUploadedPdfList() {
   const container = document.getElementById("uploadedPdfList");
   if (!container) return;
@@ -227,6 +242,16 @@ function renderUploadedPdfList() {
     row.className = "uploaded-pdf-row";
 
     const canFormatTOC = item.packetSection !== "Warranty";
+    const sectionOptions = packetSections
+      .filter(section =>
+        !["Cover Page", "Table of Contents"].includes(section)
+      )
+      .map(section => `
+        <option value="${section}" ${section === item.packetSection ? "selected" : ""}>
+          ${getSectionLabel(section)}
+        </option>
+      `)
+      .join("");
 
     const subsectionButton = canFormatTOC
       ? `
@@ -261,6 +286,13 @@ function renderUploadedPdfList() {
         <div class="uploaded-pdf-title">
           TOC Name: ${item.displayTitle}
         </div>
+
+        <label class="uploaded-pdf-section">
+          Roman Section:
+          <select onchange="updateUploadedPDFSection('${item.id}', this.value)">
+            ${sectionOptions}
+          </select>
+        </label>
 
         ${subsectionCount}
       </div>

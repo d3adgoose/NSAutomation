@@ -1292,3 +1292,15 @@ details summary:hover {
   margin-top: 3px;
   color: #4c5661;
 }
+
+.uploaded-pdf-section {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #4c5661;
+}
+
+.uploaded-pdf-section select {
+  max-width: 320px;
+}
