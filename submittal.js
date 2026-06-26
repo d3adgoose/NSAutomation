@@ -1376,19 +1376,16 @@ async function buildPacket() {
 
   const warrantyModal = document.getElementById("warrantyPromptModal");
 
-  if (!warrantyPromptHandled && warrantyModal) {
-    updatePacketBuildStatus("Review warranty options to continue building.");
-    openWarrantyPromptModal({ hasIncludedWarranty });
+  const sectionsToOrganize = getSectionsNeedingOrganization();
+  if (sectionsToOrganize.length > 0 && !pendingBuild) {
+    updatePacketBuildStatus("Organize section PDF order to continue building.");
+    openSectionOrderModal(sectionsToOrganize);
     return;
   }
 
-  const includedDatasheets = pdfLibrary.filter(item =>
-    item.include && item.packetSection === "Datasheets"
-  );
-
-  if (includedDatasheets.length > 1 && !pendingBuild) {
-    updatePacketBuildStatus("Organize datasheets to continue building.");
-    openDatasheetOrderModal(includedDatasheets);
+  if (!warrantyPromptHandled && warrantyModal) {
+    updatePacketBuildStatus("Review warranty options to continue building.");
+    openWarrantyPromptModal({ hasIncludedWarranty });
     return;
   }
 
@@ -2416,17 +2413,113 @@ function closeDatasheetOrderModal() {
   if (modal) modal.classList.add("hidden");
 }
 
+function getSectionsNeedingOrganization() {
+  const included = pdfLibrary.filter(item => item.include);
+
+  const romanSections =
+    typeof isOMPacket === "function" && isOMPacket()
+      ? OM_SECTION_ORDER
+      : [
+          "Warranty",
+          "Datasheets",
+          "Control Panel Components",
+          "Shop Drawings",
+          "Appendix"
+        ];
+
+  return romanSections
+    .map(section => ({
+      section,
+      files: included.filter(item => item.packetSection === section)
+    }))
+    .filter(group => group.files.length > 1);
+}
+
+function openSectionOrderModal(sectionGroups) {
+  const modal = document.getElementById("datasheetOrderModal");
+  const list = document.getElementById("datasheetOrderList");
+
+  if (!modal || !list) return;
+
+  renderBuildSummary("datasheetBuildSummary");
+  list.innerHTML = "";
+
+  sectionGroups.forEach(group => {
+    const details = document.createElement("details");
+    details.className = "section-order-group";
+
+    const summary = document.createElement("summary");
+    summary.innerHTML = `
+      <strong>${getSectionLabel(group.section)}</strong>
+      <span>${group.files.length} PDF(s)</span>
+    `;
+
+    const sectionList = document.createElement("div");
+    sectionList.className = "section-order-list";
+    sectionList.dataset.section = group.section;
+
+    group.files
+      .sort((a, b) => (a.datasheetOrder ?? 999) - (b.datasheetOrder ?? 999))
+      .forEach(item => {
+        const row = document.createElement("div");
+        row.className = "order-row";
+        row.draggable = true;
+        row.dataset.id = item.id;
+
+        row.innerHTML = `
+          <span class="drag-handle">☰</span>
+          <span>${item.displayTitle}</span>
+        `;
+
+        row.addEventListener("dragstart", () => {
+          row.classList.add("dragging");
+        });
+
+        row.addEventListener("dragend", () => {
+          row.classList.remove("dragging");
+        });
+
+        sectionList.appendChild(row);
+      });
+
+    sectionList.addEventListener("dragover", e => {
+      e.preventDefault();
+
+      const dragging = sectionList.querySelector(".dragging");
+      const afterElement = getDragAfterElement(sectionList, e.clientY);
+
+      if (!dragging) return;
+
+      if (afterElement == null) {
+        sectionList.appendChild(dragging);
+      } else {
+        sectionList.insertBefore(dragging, afterElement);
+      }
+    });
+
+    details.appendChild(summary);
+    details.appendChild(sectionList);
+    list.appendChild(details);
+  });
+
+  modal.classList.remove("hidden");
+}
+
 function confirmDatasheetOrder() {
-  const rows = Array.from(
-    document.querySelectorAll("#datasheetOrderList .order-row")
+  const groups = Array.from(
+    document.querySelectorAll("#datasheetOrderList .section-order-list")
   );
 
-  rows.forEach((row, index) => {
-    const item = pdfLibrary.find(x => x.id === row.dataset.id);
+  groups.forEach(group => {
+    const rows = Array.from(group.querySelectorAll(".order-row"));
 
-    if (item) {
-      item.datasheetOrder = index + 1;
-    }
+    rows.forEach((row, index) => {
+      const item = pdfLibrary.find(x => x.id === row.dataset.id);
+
+      if (item) {
+        item.datasheetOrder = index + 1;
+      }
+    });
   });
 
   sortLibraryBySection();

@@ -1304,3 +1304,24 @@ details summary:hover {
 .uploaded-pdf-section select {
   max-width: 320px;
 }
+
+.section-order-group {
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: #f8fbff;
+}
+
+.section-order-group summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.section-order-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
