@@ -33,7 +33,7 @@ const OM_SECTION_ORDER = [
 const OM_SECTION_LABELS = {
   "Warranty": "Warranty",
   "Safety Procedures": "Warning / Safety / Emergency Shutdown",
-  "Maintenance": "Safety Procedures & Maintenance",
+  "Maintenance": "Maintenance & Safety Procedures",
   "Testing Checklist and Testing Procedures": "Testing Checklist and Testing Procedures",
   "Sequence of Operations": "Sequence of Operations",
   "Parts List": "Parts List",

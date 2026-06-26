@@ -87,7 +87,10 @@ const fileTypeRules = [
       "warning / safety / emergency shutdown",
       "safety procedures",
       "safety procedure",
+      "safety procedurs",
+      "safety procedur",
       "emergency shutdown",
+      "emergency shut down",
       "warning"
     ]
   },
@@ -102,8 +105,18 @@ const fileTypeRules = [
   {
     documentType: "Maintenance",
     packetSection: "Maintenance",
-    patterns: ["maintenance"]
-  },
+    patterns: [
+      "maintenance",
+      "maintenace",
+      "maintenence",
+      "matienance",
+      "matinence",
+      "maint",
+      "maintenance and safety procedures",
+      "safety procedures and maintenance",
+      "safety maintenance"
+    ]
+},
   {
     documentType: "Testing Checklist and Testing Procedures",
     packetSection: "Testing Checklist and Testing Procedures",
@@ -178,11 +191,41 @@ function getMatchedFileRule(fileName = "") {
   );
 }
 
+function normalizeFileRuleText(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/[_\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isMaintenanceName(fileName = "") {
+  const name = normalizeFileRuleText(fileName);
+
+  return (
+    name.includes("maintenance") ||
+    name.includes("maintenace") ||
+    name.includes("maintenence") ||
+    name.includes("matienance") ||
+    name.includes("matinence") ||
+    name.includes("maint ") ||
+    name.includes("safety procedures and maintenance") ||
+    name.includes("maintenance and safety procedures") ||
+    name.includes("safety maintenance")
+  );
+}
+
 function guessDocumentTypeFromName(fileName = "") {
+  if (isMaintenanceName(fileName)) {
+    return "Maintenance";
+  }
   return getMatchedFileRule(fileName)?.documentType || "Datasheets";
 }
 
 function guessPacketSectionFromName(fileName = "") {
+  if (isMaintenanceName(fileName)) {
+    return "Maintenance";
+  }
   return getMatchedFileRule(fileName)?.packetSection || "Datasheets";
 }
 
