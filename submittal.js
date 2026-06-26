@@ -7,6 +7,7 @@ let warrantyPromptHandled = false;
 let selectedManagedPages = new Set();
 let pendingSubmittalImportFile = null;
 let submittalImportPreviewToken = 0;
+let currentBuildPdfDoc = null;
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -175,6 +176,10 @@ function toRoman(value) {
   });
 
   return result;
+}
+
+function toLowerRoman(value) {
+  return toRoman(value).toLowerCase();
 }
 
 function renamePdfTitle(id) {
@@ -1288,6 +1293,48 @@ async function removePacketHistoryEntry(id) {
   }
 }
 
+function getPageNumberMode() {
+  const selected = document.querySelector('input[name="pageNumberMode"]:checked');
+  return selected?.value === "book" ? "book" : "normal";
+}
+
+function getNoNumberPageIndexesForMode(revisionRemarkIndexes = [], coverPageIndex = null) {
+  const mode = getPageNumberMode();
+  const noNumberIndexes = [...revisionRemarkIndexes];
+
+  // Book format: cover is not numbered.
+  // Normal format: cover is numbered as page 1.
+  if (mode === "book" && coverPageIndex !== null) {
+    noNumberIndexes.push(coverPageIndex);
+  }
+
+  return noNumberIndexes;
+}
+
+function getPrintedPageNumber(pageIndex, noNumberPageIndexes = []) {
+  if (noNumberPageIndexes.includes(pageIndex)) return null;
+
+  const mode = getPageNumberMode();
+
+  if (mode === "book" && currentBuildPdfDoc) {
+    let printedPageNumber = 0;
+    const pageCount = currentBuildPdfDoc.getPageCount();
+
+    for (let index = 0; index < pageIndex; index++) {
+      if (index >= pageCount) continue;
+      if (noNumberPageIndexes.includes(index)) continue;
+      if (pageIndexIsTOCPage(currentBuildPdfDoc, index)) continue;
+
+      printedPageNumber++;
+    }
+
+    return printedPageNumber + 1;
+  }
+
+  const skippedBefore = noNumberPageIndexes.filter(index => index < pageIndex).length;
+  return pageIndex + 1 - skippedBefore;
+}
+
 async function buildPacket() {
   const buildLabel = getPacketBuildLabel();
   let buildContext = "starting the build";
@@ -1319,6 +1366,7 @@ async function buildPacket() {
   try {
   buildContext = "creating a new PDF";
   const finalPdf = await PDFDocument.create();
+  currentBuildPdfDoc = finalPdf;
   const noNumberPageIndexes = [];
 
   const included = pdfLibrary.filter(item => item.include);
@@ -1380,12 +1428,21 @@ async function buildPacket() {
   // Generated Cover Page comes after Revision Remarks
   buildContext = "creating the cover page";
   updatePacketBuildStatus("Creating cover page...");
-  await drawGeneratedCoverPage(finalPdf);
+  const coverPageIndex = finalPdf.getPageCount();
+    await drawGeneratedCoverPage(finalPdf);
+
+    const finalNoNumberPageIndexes = getNoNumberPageIndexesForMode(
+    noNumberPageIndexes,
+    coverPageIndex
+  );
 
   buildContext = "creating the table of contents page";
   updatePacketBuildStatus("Creating table of contents...");
   const tocPage = finalPdf.addPage([612, 792]);
-
+  tocPage.node.set(
+    window.PDFLib.PDFName.of("PacketSection"),
+    window.PDFLib.PDFString.of("Table of Contents")
+  );
   const tocItems = [];
   const sectionTargets = {};
 
@@ -1414,13 +1471,17 @@ async function buildPacket() {
         roman: romanNumber,
         title: sectionLabel,
         targetPageIndex,
-        pageNumber:
-          targetPageIndex + 1 - noNumberPageIndexes.length
+        pageNumber: getPrintedPageNumber(
+          targetPageIndex,
+          finalNoNumberPageIndexes
+        )
       };
     }
 
-    const startPage =
-      finalPdf.getPageCount() + 1 - noNumberPageIndexes.length;
+    const startPage = getPrintedPageNumber(
+      finalPdf.getPageCount(),
+      finalNoNumberPageIndexes
+    );
 
     // Warranty document titles are added only when tocDetection finds them.
     if (!item.hideParentTOC && item.packetSection !== "Warranty") {
@@ -1476,7 +1537,7 @@ async function buildPacket() {
   );
   buildContext = "adding page numbers";
   updatePacketBuildStatus("Adding page numbers...");
-  await addPageNumbers(finalPdf, noNumberPageIndexes);
+  await addPageNumbers(finalPdf, finalNoNumberPageIndexes);
 
   buildContext = "saving the final PDF";
   updatePacketBuildStatus("Saving final PDF...");
@@ -1575,6 +1636,9 @@ function resetPacketBuilder() {
 
   const datasheetOrderList = document.getElementById("datasheetOrderList");
   if (datasheetOrderList) datasheetOrderList.innerHTML = "";
+
+  const normalMode = document.querySelector('input[name="pageNumberMode"][value="normal"]');
+  if (normalMode) normalMode.checked = true;
 
   renderUploadedPdfList();
   updatePacketBuildStatus();
@@ -4411,6 +4475,11 @@ async function drawTOCOnExistingPage(
       page = pdfDoc.insertPage(tocInsertIndex, [612, 792]);
       tocInsertIndex++;
 
+      page.node.set(
+        window.PDFLib.PDFName.of("PacketSection"),
+        window.PDFLib.PDFString.of("Table of Contents")
+      );
+
       y = height - topMargin - 30;
 
       page.drawText("Table of Contents (Continued)", {
@@ -4592,6 +4661,14 @@ async function drawTOCOnExistingPage(
   });
 }
 
+function pageIndexIsTOCPage(pdfDoc, pageIndex) {
+  const page = pdfDoc.getPage(pageIndex);
+  const PDFName = window.PDFLib.PDFName;
+  const sectionKey = PDFName.of("PacketSection");
+
+  return page.node.get(sectionKey)?.decodeText?.() === "Table of Contents";
+}
+
 async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
   const pages = pdfDoc.getPages();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -4600,20 +4677,30 @@ async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
   const dateMade = new Date().toLocaleDateString();
 
   let printedPageNumber = 1;
+  let tocPrintedPageNumber = 1;
 
   pages.forEach((page, index) => {
     if (skipPageIndexes.includes(index)) return;
 
     const { width, height } = page.getSize();
+    const mode = getPageNumberMode();
+    const isTOCPage = pageIndexIsTOCPage(pdfDoc, index);
 
-    const pageNumber = `${printedPageNumber}`;
-    printedPageNumber++;
+    let pageNumber;
+
+    if (mode === "book" && isTOCPage) {
+      pageNumber = toLowerRoman(tocPrintedPageNumber);
+      tocPrintedPageNumber++;
+    } else {
+      pageNumber = `${printedPageNumber}`;
+      printedPageNumber++;
+    }
 
     const pageFontSize = 11;
     const revFontSize = 9;
 
-    const bottomMargin = 3; // lower on page
-    const sideSafeMargin = 30; // keeps revision from clipping right edge
+    const bottomMargin = 3;
+    const sideSafeMargin = 30;
 
     const rotation = page.getRotation().angle;
 
@@ -4687,6 +4774,17 @@ async function addPageNumbers(pdfDoc, skipPageIndexes = []) {
       color: rgb(0, 0, 0)
     });
   });
+}
+
+function pageIndexIsTOCPage(pdfDoc, pageIndex) {
+  if (!pdfDoc) return false;
+  if (pageIndex < 0 || pageIndex >= pdfDoc.getPageCount()) return false;
+
+  const page = pdfDoc.getPage(pageIndex);
+  const PDFName = window.PDFLib.PDFName;
+  const sectionKey = PDFName.of("PacketSection");
+
+  return page.node.get(sectionKey)?.decodeText?.() === "Table of Contents";
 }
 
 function exportCSV() {

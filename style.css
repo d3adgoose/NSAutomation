@@ -1246,3 +1246,49 @@ details summary {
 details summary:hover {
   color: #17476f;
 }
+
+.build-options-card {
+  margin: 14px 0 18px;
+  padding: 14px;
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.build-options-header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.build-options-header span {
+  color: #4c5661;
+  font-size: 14px;
+}
+
+.export-options {
+  display: grid;
+  gap: 10px;
+}
+
+.export-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #ccd5df;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+}
+
+.export-option input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.export-option small {
+  display: block;
+  margin-top: 3px;
+  color: #4c5661;
+}

@@ -167,9 +167,44 @@
     <section class="card">
       <h2>Packet Builder</h2>
 
-      <div class="button-row">
-        <button onclick="buildPacket()">Build PDF</button>
-        <button onclick="exportCSV()">Export CSV</button>
+      <div class="build-options-card">
+      <div class="build-options-header">
+        <strong>Page Number Format</strong>
+        <span>Select how page numbers should be generated.</span>
+      </div>
+
+      <div class="export-options">
+        <label class="export-option">
+          <input
+            type="radio"
+            name="pageNumberMode"
+            value="normal"
+            checked
+          >
+          <div>
+            <strong>Normal PDF</strong>
+            <small>Cover page and Revision Remarks are not numbered.</small>
+          </div>
+        </label>
+
+        <label class="export-option">
+          <input
+            type="radio"
+            name="pageNumberMode"
+            value="book"
+          >
+          <div>
+            <strong>Book Format</strong>
+            <small>Cover page starts as page 1. Revision Remarks are not numbered.</small>
+          </div>
+        </label>
+      </div>
+    </div>
+
+<div class="button-row">
+  <button onclick="buildPacket()">Build PDF</button>
+  <button onclick="exportCSV()">Export CSV</button>
+</div>
       </div>
 
       <p id="packetBuildStatus" class="warranty-status" aria-live="polite">
