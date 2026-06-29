@@ -11,6 +11,148 @@ let currentBuildPdfDoc = null;
 let editingTOCEntryId = "";
 const PDF_PARENT_TOC_ID = "__pdf_parent__";
 
+function normalizeDuplicateName(value = "") {
+  return String(value)
+    .trim()
+    .replace(/\.pdf$/i, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+async function promptDuplicatePDFAction(fileName, existingItem) {
+  const existingName = existingItem?.displayTitle || existingItem?.fileName || "existing PDF";
+  return await showChoiceModal({
+    title: "Duplicate PDF",
+    message: `A PDF named "${fileName}" already exists as "${existingName}".`,
+    actions: [
+      { label: "Replace Existing", value: "replace" },
+      { label: "Add Both", value: "add", className: "secondary" },
+      { label: "Skip", value: "skip", className: "remove-pdf-btn" }
+    ]
+  }) || "skip";
+}
+
+async function promptDuplicateTOCEntryAction(title, existingEntry) {
+  const existingName = existingEntry?.title || "existing TOC entry";
+  return await showChoiceModal({
+    title: "Duplicate TOC Entry",
+    message: `A TOC entry named "${title}" already exists as "${existingName}".`,
+    actions: [
+      { label: "Replace Existing", value: "replace" },
+      { label: "Add Both", value: "add", className: "secondary" },
+      { label: "Skip", value: "skip", className: "remove-pdf-btn" }
+    ]
+  }) || "skip";
+}
+
+function openAppModal({
+  title = "Action Needed",
+  message = "",
+  input = null,
+  actions = []
+} = {}) {
+  return new Promise(resolve => {
+    const modal = document.getElementById("appPromptModal");
+    const titleEl = document.getElementById("appPromptTitle");
+    const messageEl = document.getElementById("appPromptMessage");
+    const inputGroup = document.getElementById("appPromptInputGroup");
+    const inputLabel = document.getElementById("appPromptInputLabel");
+    const inputEl = document.getElementById("appPromptInput");
+    const actionsEl = document.getElementById("appPromptActions");
+
+    if (!modal || !titleEl || !messageEl || !inputGroup || !inputLabel || !inputEl || !actionsEl) {
+      resolve(null);
+      return;
+    }
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    actionsEl.innerHTML = "";
+
+    inputGroup.classList.toggle("hidden", !input);
+    if (input) {
+      inputLabel.textContent = input.label || "Value";
+      inputEl.type = input.type || "text";
+      inputEl.value = input.value || "";
+      inputEl.placeholder = input.placeholder || "";
+    } else {
+      inputEl.value = "";
+    }
+
+    const close = result => {
+      modal.classList.add("hidden");
+      actionsEl.innerHTML = "";
+      resolve(result);
+    };
+
+    actions.forEach(action => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = action.label;
+      if (action.className) button.className = action.className;
+      button.addEventListener("click", () => {
+        close({
+          action: action.value,
+          value: input ? inputEl.value : ""
+        });
+      });
+      actionsEl.appendChild(button);
+    });
+
+    modal.classList.remove("hidden");
+    if (input) {
+      inputEl.focus();
+      inputEl.select();
+      inputEl.onkeydown = event => {
+        if (event.key === "Enter" && actions[0]) {
+          close({ action: actions[0].value, value: inputEl.value });
+        }
+      };
+    } else {
+      inputEl.onkeydown = null;
+    }
+  });
+}
+
+async function showTextModal({ title, message, label, value = "", placeholder = "", confirmLabel = "Save" }) {
+  const result = await openAppModal({
+    title,
+    message,
+    input: { label, value, placeholder },
+    actions: [
+      { label: confirmLabel, value: "confirm" },
+      { label: "Cancel", value: "cancel", className: "secondary" }
+    ]
+  });
+
+  return result?.action === "confirm" ? result.value : null;
+}
+
+async function showChoiceModal({ title, message, actions }) {
+  const result = await openAppModal({ title, message, actions });
+  return result?.action || null;
+}
+
+async function showMessageModal(title, message) {
+  await openAppModal({
+    title,
+    message,
+    actions: [{ label: "OK", value: "ok" }]
+  });
+}
+
+async function showConfirmModal(title, message, confirmLabel = "Continue") {
+  const result = await openAppModal({
+    title,
+    message,
+    actions: [
+      { label: confirmLabel, value: "confirm" },
+      { label: "Cancel", value: "cancel", className: "secondary" }
+    ]
+  });
+
+  return result?.action === "confirm";
+}
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
   pdfUpload.addEventListener("change", handlePDFUpload);
@@ -50,26 +192,24 @@ function handlePDFUpload(event) {
   handleDroppedFiles(event.target.files);
 }
 
-function handleDroppedFiles(fileList) {
+async function handleDroppedFiles(fileList) {
   const files = Array.from(fileList)
     .filter(file => file.type === "application/pdf");
-  const existingFileSignatures = new Set(
-    pdfLibrary.map(item =>
-      `${item.fileName || item.file?.name}|${item.file?.size}|${item.file?.lastModified}`
-    )
-  );
   let addedFileCount = 0;
+  let replacedFileCount = 0;
+  let skippedFileCount = 0;
 
-  files.forEach(file => {
-    const fileSignature = `${file.name}|${file.size}|${file.lastModified}`;
-
-    if (existingFileSignatures.has(fileSignature)) return;
-    existingFileSignatures.add(fileSignature);
-    addedFileCount += 1;
-
+  for (const file of files) {
     const cleanName = file.name.replace(/\.pdf$/i, "");
+    const fileSignature = `${file.name}|${file.size}|${file.lastModified}`;
+    const duplicateItem = pdfLibrary.find(item => {
+      const itemSignature = `${item.fileName || item.file?.name}|${item.file?.size}|${item.file?.lastModified}`;
+      const sameSignature = itemSignature === fileSignature;
+      const sameName = normalizeDuplicateName(item.displayTitle || item.fileName) === normalizeDuplicateName(cleanName);
+      return sameSignature || sameName;
+    });
 
-    pdfLibrary.push({
+    const newItem = {
       id: crypto.randomUUID(),
       file,
       fileName: file.name,
@@ -82,20 +222,49 @@ function handleDroppedFiles(fileList) {
       datasheetOrder: null,
       tocEntries: [],
       hideParentTOC: false
-    });
-  });
+    };
 
-  if (addedFileCount > 0) {
+    if (duplicateItem) {
+      const action = await promptDuplicatePDFAction(cleanName, duplicateItem);
+
+      if (action === "skip") {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      if (action === "replace") {
+        Object.assign(duplicateItem, {
+          ...newItem,
+          id: duplicateItem.id,
+          tocEntries: duplicateItem.tocEntries || [],
+          hideParentTOC: !!duplicateItem.hideParentTOC,
+          include: true
+        });
+        replacedFileCount += 1;
+        continue;
+      }
+    }
+
+    pdfLibrary.push(newItem);
+    addedFileCount += 1;
+  }
+
+  if (addedFileCount > 0 || replacedFileCount > 0) {
     warrantyPromptHandled = false;
   }
 
   sortLibraryBySection();
   renderUploadedPdfList();
 
-  if (addedFileCount > 0) {
-    updateUploadedPdfCount(`${addedFileCount} PDF(s) added. ${pdfLibrary.length} total.`);
+  const statusParts = [];
+  if (addedFileCount > 0) statusParts.push(`${addedFileCount} PDF(s) added`);
+  if (replacedFileCount > 0) statusParts.push(`${replacedFileCount} PDF(s) replaced`);
+  if (skippedFileCount > 0) statusParts.push(`${skippedFileCount} duplicate PDF(s) skipped`);
+
+  if (statusParts.length > 0) {
+    updateUploadedPdfCount(`${statusParts.join(". ")}. ${pdfLibrary.length} total.`);
   } else if (files.length > 0) {
-    updateUploadedPdfCount("No new PDFs added. Duplicate files were skipped.");
+    updateUploadedPdfCount("No PDFs added.");
   }
 }
 
@@ -120,7 +289,8 @@ function sortLibraryBySection() {
     return 0;
   });
 }
-function renameTOCSections() {
+
+async function renameTOCSections() {
   const isOM =
     typeof isOMPacket === "function" &&
     isOMPacket();
@@ -135,25 +305,28 @@ function renameTOCSections() {
         "Appendix"
       ];
 
-  sections.forEach(section => {
+  for (const section of sections) {
     const currentName = customSectionLabels[section] || section;
 
-    const newName = prompt(
-      `Rename TOC section "${section}" to:`,
-      currentName
-    );
+    const newName = await showTextModal({
+      title: "Rename Roman Section",
+      message: `Rename TOC section "${section}".`,
+      label: "Section name",
+      value: currentName,
+      confirmLabel: "Save"
+    });
 
-    if (newName === null) return;
+    if (newName === null) continue;
 
     const cleanName = newName.trim();
 
     if (cleanName) {
       customSectionLabels[section] = cleanName;
     }
-  });
+  }
 
   refreshSectionLabelDisplays();
-  alert("Section names updated for this packet.");
+  await showMessageModal("Section Names Updated", "Section names updated for this packet.");
 }
 
 function getSectionLabel(section) {
@@ -206,21 +379,24 @@ function toLowerRoman(value) {
   return toRoman(value).toLowerCase();
 }
 
-function renamePdfTitle(id) {
+async function renamePdfTitle(id) {
   const item = pdfLibrary.find(x => x.id === id);
   if (!item) return;
 
-  const newTitle = prompt(
-    "Enter the name you want shown in the Table of Contents:",
-    item.displayTitle
-  );
+  const newTitle = await showTextModal({
+    title: "Rename TOC Name",
+    message: "Enter the name you want shown in the Table of Contents.",
+    label: "TOC name",
+    value: item.displayTitle,
+    confirmLabel: "Save"
+  });
 
   if (newTitle === null) return;
 
   const cleanTitle = newTitle.trim();
 
   if (!cleanTitle) {
-    alert("The TOC name cannot be blank.");
+    await showMessageModal("TOC Name Required", "The TOC name cannot be blank.");
     return;
   }
 
@@ -578,7 +754,7 @@ async function extractSelectedPages() {
   const selectedPages = Array.from(selectedManagedPages).sort((a, b) => a - b);
 
   if (!item || selectedPages.length === 0) {
-    alert("Select at least one page to extract.");
+    await showMessageModal("Pages Required", "Select at least one page to extract.");
     return;
   }
 
@@ -600,7 +776,7 @@ async function extractSelectedPages() {
     );
   } catch (error) {
     console.error("Could not extract PDF pages:", error);
-    alert("The selected pages could not be extracted.");
+    await showMessageModal("Extract Failed", "The selected pages could not be extracted.");
   }
 }
 
@@ -609,7 +785,7 @@ async function deleteSelectedPages() {
   const selectedPages = Array.from(selectedManagedPages).sort((a, b) => a - b);
 
   if (!item || selectedPages.length === 0) {
-    alert("Select at least one page to delete.");
+    await showMessageModal("Pages Required", "Select at least one page to delete.");
     return;
   }
 
@@ -618,11 +794,11 @@ async function deleteSelectedPages() {
     const sourcePdf = await PDFDocument.load(sourceBytes);
 
     if (selectedPages.length >= sourcePdf.getPageCount()) {
-      alert("A PDF must keep at least one page.");
+      await showMessageModal("Cannot Delete All Pages", "A PDF must keep at least one page.");
       return;
     }
 
-    if (!confirm(`Delete ${selectedPages.length} selected page(s)?`)) return;
+    if (!(await showConfirmModal("Delete Pages", `Delete ${selectedPages.length} selected page(s)?`, "Delete"))) return;
 
     const deletedPageSet = new Set(selectedPages);
     const keptIndexes = sourcePdf.getPageIndices().filter(
@@ -664,7 +840,7 @@ async function deleteSelectedPages() {
     }
   } catch (error) {
     console.error("Could not delete PDF pages:", error);
-    alert("The selected pages could not be deleted.");
+    await showMessageModal("Delete Failed", "The selected pages could not be deleted.");
   }
 }
 
@@ -680,8 +856,8 @@ function removeUploadedPDF(id) {
   updateUploadedPdfCount(`Removed 1 PDF. ${pdfLibrary.length} total.`);
 }
 
-function clearUploadedPDFs() {
-  if (!confirm("Clear all uploaded PDFs from the packet builder?")) return;
+async function clearUploadedPDFs() {
+  if (!(await showConfirmModal("Clear Uploaded PDFs", "Clear all uploaded PDFs from the packet builder?", "Clear"))) return;
 
   pdfLibrary = [];
 
@@ -1256,7 +1432,7 @@ async function downloadPacketHistoryEntry(id) {
     const item = await getPacketHistoryItem(id);
 
     if (!item || !item.blob) {
-      alert("This saved PDF was not found.");
+      await showMessageModal("Saved PDF Not Found", "This saved PDF was not found.");
       await renderPacketHistory();
       return;
     }
@@ -1265,7 +1441,7 @@ async function downloadPacketHistoryEntry(id) {
     updatePacketHistoryStatus(`Downloaded ${item.fileName}.`);
   } catch (error) {
     console.error("Could not download packet history item:", error);
-    alert("Could not download this saved PDF.");
+    await showMessageModal("Download Failed", "Could not download this saved PDF.");
   }
 }
 
@@ -1274,13 +1450,13 @@ async function editPacketHistoryEntry(id) {
     const item = await getPacketHistoryItem(id);
 
     if (!item?.builderState) {
-      alert("This saved PDF was created before editable history was added. Build it once more to save an editable version.");
+      await showMessageModal("Editable History Unavailable", "This saved PDF was created before editable history was added. Build it once more to save an editable version.");
       return;
     }
 
     if (
       hasActivePacketBuilderState() &&
-      !confirm("Replace the current builder with this saved history item?")
+      !(await showConfirmModal("Replace Current Builder", "Replace the current builder with this saved history item?", "Replace"))
     ) {
       return;
     }
@@ -1294,7 +1470,7 @@ async function editPacketHistoryEntry(id) {
     });
   } catch (error) {
     console.error("Could not edit packet history item:", error);
-    alert(error.message || "Could not load this history item for editing.");
+    await showMessageModal("History Load Failed", error.message || "Could not load this history item for editing.");
   }
 }
 
@@ -1303,12 +1479,18 @@ async function renamePacketHistoryEntry(id) {
     const item = await getPacketHistoryItem(id);
     if (!item) return;
 
-    let newName = prompt("Rename saved PDF:", item.fileName || "");
+    let newName = await showTextModal({
+      title: "Rename Saved PDF",
+      message: "Rename saved PDF.",
+      label: "PDF name",
+      value: item.fileName || "",
+      confirmLabel: "Save"
+    });
     if (newName === null) return;
 
     newName = newName.trim();
     if (!newName) {
-      alert("History name cannot be blank.");
+      await showMessageModal("Name Required", "History name cannot be blank.");
       return;
     }
 
@@ -1326,7 +1508,7 @@ async function renamePacketHistoryEntry(id) {
     updatePacketHistoryStatus(`Renamed saved PDF to ${newName}.`);
   } catch (error) {
     console.error("Could not rename packet history item:", error);
-    alert("Could not rename this saved PDF.");
+    await showMessageModal("Rename Failed", "Could not rename this saved PDF.");
   }
 }
 
@@ -1334,7 +1516,7 @@ async function removePacketHistoryEntry(id) {
   const item = await getPacketHistoryItem(id);
   const name = item?.fileName || "this saved PDF";
 
-  if (!confirm(`Remove ${name} from local history?`)) return;
+  if (!(await showConfirmModal("Remove Saved PDF", `Remove ${name} from local history?`, "Remove"))) return;
 
   try {
     await runPacketHistoryTransaction("readwrite", store => {
@@ -1345,7 +1527,7 @@ async function removePacketHistoryEntry(id) {
     updatePacketHistoryStatus(`Removed ${name} from local history.`);
   } catch (error) {
     console.error("Could not remove packet history item:", error);
-    alert("Could not remove this saved PDF.");
+    await showMessageModal("Remove Failed", "Could not remove this saved PDF.");
   }
 }
 
@@ -1643,7 +1825,7 @@ async function buildPacket() {
     warrantyPromptHandled = false;
     const message = getBuildErrorMessage(buildLabel, error, buildContext);
     updatePacketBuildStatus(message);
-    alert(message);
+    await showMessageModal("Build Paused", message);
   }
 }
 
@@ -1983,7 +2165,7 @@ async function continueWarrantyPrompt() {
       const message =
         `The warranty sheet was added, but the ${buildLabel} could not be built. ${reason}`;
       updatePacketBuildStatus(message);
-      alert(message);
+      await showMessageModal("Build Paused", message);
     } else if (status) {
       const message = `The warranty sheet could not be created. ${reason}`;
       status.textContent = message;
@@ -2880,7 +3062,7 @@ async function importSubmittalFile(file, options = {}) {
   const existingImports = pdfLibrary.filter(item => item.importedFromSubmittal);
   if (
     existingImports.length > 0 &&
-    !confirm("Replace the previously imported Submittal sections?")
+    !(await showConfirmModal("Replace Imported Sections", "Replace the previously imported Submittal sections?", "Replace"))
   ) {
     if (input) input.value = "";
     return;
@@ -4289,7 +4471,7 @@ function clearTOCEntryForm() {
   });
 }
 
-function saveTOCEntry() {
+async function saveTOCEntry() {
   const activeIdInput = document.getElementById("activeSubsectionPdfId");
   const pageInput = document.getElementById("subsectionPageNumber");
   const titleInput = document.getElementById("subsectionTitle");
@@ -4297,7 +4479,7 @@ function saveTOCEntry() {
   const parentSelect = document.getElementById("tocEntryParent");
 
   if (!activeIdInput || !pageInput || !titleInput || !levelSelect || !parentSelect) {
-    alert("TOC modal is missing required HTML fields. Check the modal IDs.");
+    await showMessageModal("TOC Form Error", "TOC modal is missing required HTML fields. Check the modal IDs.");
     return;
   }
 
@@ -4314,17 +4496,17 @@ function saveTOCEntry() {
   item.hideParentTOC = hideParent ? hideParent.checked : false;
 
   if (!pageNumber || pageNumber < 1) {
-    alert("Select a page.");
+    await showMessageModal("Page Required", "Select a page.");
     return;
   }
 
   if (!title) {
-    alert("Enter a TOC name.");
+    await showMessageModal("TOC Name Required", "Enter a TOC name.");
     return;
   }
 
   if (tocLevel > 0 && !parentId) {
-    alert(`Select a Level ${tocLevel - 1} parent first.`);
+    await showMessageModal("Parent Required", `Select a Level ${tocLevel - 1} parent first.`);
     return;
   }
 
@@ -4335,6 +4517,39 @@ function saveTOCEntry() {
   const existingEntry = editingTOCEntryId
     ? item.tocEntries.find(entry => entry.id === editingTOCEntryId)
     : null;
+  const duplicateEntry = item.tocEntries.find(entry =>
+    entry.id !== editingTOCEntryId &&
+    normalizeDuplicateName(entry.title) === normalizeDuplicateName(title)
+  );
+
+  if (duplicateEntry) {
+    const duplicateAction = await promptDuplicateTOCEntryAction(title, duplicateEntry);
+
+    if (duplicateAction === "skip") return;
+
+    if (duplicateAction === "replace") {
+      duplicateEntry.title = title;
+      duplicateEntry.sourcePage = pageNumber;
+      duplicateEntry.entryType = tocLevel === 0 ? "section" : "subsection";
+      duplicateEntry.tocLevel = tocLevel;
+      duplicateEntry.parentId = tocLevel === 0 ? "" : parentId;
+
+      if (existingEntry) {
+        promoteTOCChildrenBeforeRemoval(item, existingEntry);
+        item.tocEntries = item.tocEntries.filter(entry => entry.id !== existingEntry.id);
+      }
+
+      cleanInvalidTOCParents(item);
+      item.tocEntries.sort((a, b) =>
+        a.sourcePage - b.sourcePage ||
+        Number(a.tocLevel || 0) - Number(b.tocLevel || 0)
+      );
+      clearTOCEntryForm();
+      renderCurrentSubsectionList();
+      updateTOCParentDropdown();
+      return;
+    }
+  }
 
   if (existingEntry) {
     existingEntry.title = title;

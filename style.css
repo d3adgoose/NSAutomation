@@ -1325,3 +1325,25 @@ details summary:hover {
   gap: 8px;
   padding: 0 12px 12px;
 }
+.app-prompt-modal-content {
+  width: 480px;
+}
+
+.app-prompt-message {
+  white-space: pre-line;
+  color: #334155;
+}
+
+.app-prompt-input-group {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.app-prompt-input-group.hidden {
+  display: none;
+}
+
+.app-prompt-actions {
+  justify-content: flex-end;
+}
