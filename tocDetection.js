@@ -60,7 +60,12 @@ const TOC_DETECTION_RULES = {
 };
 const tocDetectionCache = new WeakMap();
 
-async function detectTOCSubsections(file, section, baseStartPage) {
+async function detectTOCSubsections(
+  file,
+  section,
+  baseStartPage,
+  baseTargetPageIndex = baseStartPage - 1
+) {
   const rules = TOC_DETECTION_RULES[section];
 
   if (!rules || rules.length === 0) {
@@ -72,7 +77,7 @@ async function detectTOCSubsections(file, section, baseStartPage) {
     return cachedBySection.get(section).map(item => ({
       ...item,
       startPage: baseStartPage + item.sourcePage - 1,
-      targetPageIndex: baseStartPage + item.sourcePage - 2
+      targetPageIndex: baseTargetPageIndex + item.sourcePage - 1
     }));
   }
 
@@ -118,7 +123,7 @@ async function detectTOCSubsections(file, section, baseStartPage) {
             section,
             sourcePage: pageNumber,
             startPage: baseStartPage + pageNumber - 1,
-            targetPageIndex: baseStartPage + pageNumber - 2,
+            targetPageIndex: baseTargetPageIndex + pageNumber - 1,
             tocLevel: rule.tocLevel ?? 1
           });
         }

@@ -1542,7 +1542,8 @@ async function buildPacket() {
         await detectTOCSubsections(
           item.file,
           item.packetSection,
-          startPage
+          startPage,
+          finalPdf.getPageCount()
         );
 
       tocItems.push(...detectedSubsections);
@@ -3585,9 +3586,20 @@ async function getImportedTOCSectionRanges(bytes, totalPages) {
     const startPageIndex = firstChildEntry?.pageIndex ??
       sectionEntry.pageIndex + (sectionEntry.isSectionHeading ? 1 : 0);
     const endPageIndex = nextSectionEntry?.pageIndex ?? totalPages;
+    const safeStartPageIndex = Math.max(
+      0,
+      Math.min(totalPages, Number(startPageIndex) || 0)
+    );
+    const safeEndPageIndex = Math.max(
+      safeStartPageIndex,
+      Math.min(totalPages, Number(endPageIndex) || safeStartPageIndex)
+    );
 
-    if (startPageIndex < endPageIndex) {
-      ranges[section] = { startPageIndex, endPageIndex };
+    if (safeStartPageIndex < safeEndPageIndex) {
+      ranges[section] = {
+        startPageIndex: safeStartPageIndex,
+        endPageIndex: safeEndPageIndex
+      };
     }
   });
 
@@ -3982,10 +3994,25 @@ function getImportedSectionRange(markers, section, totalPages) {
 async function extractImportedSection(sourcePdf, range, fileName) {
   const outputPdf = await PDFDocument.create();
   const pageIndexes = [];
+  const totalPages = sourcePdf.getPageCount();
+  const startPageIndex = Math.max(
+    0,
+    Math.min(totalPages, Number(range.startPageIndex) || 0)
+  );
+  const endPageIndex = Math.max(
+    startPageIndex,
+    Math.min(totalPages, Number(range.endPageIndex) || startPageIndex)
+  );
+
+  if (startPageIndex >= endPageIndex) {
+    throw new Error(
+      `Could not extract ${fileName}: detected page range is outside the PDF.`
+    );
+  }
 
   for (
-    let pageIndex = range.startPageIndex;
-    pageIndex < range.endPageIndex;
+    let pageIndex = startPageIndex;
+    pageIndex < endPageIndex;
     pageIndex++
   ) {
     pageIndexes.push(pageIndex);
@@ -4382,7 +4409,18 @@ async function getSourcePDFBytes(file) {
 }
 
 function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPageIndex) {
-  const targetPage = pdfDoc.getPage(targetPageIndex);
+  const resolvedTargetPageIndex = Number(targetPageIndex);
+
+  if (
+    !Number.isInteger(resolvedTargetPageIndex) ||
+    resolvedTargetPageIndex < 0 ||
+    resolvedTargetPageIndex >= pdfDoc.getPageCount()
+  ) {
+    return;
+  }
+
+  const targetPage = pdfDoc.getPage(resolvedTargetPageIndex);
+  if (!targetPage) return;
 
   const annotation = pdfDoc.context.obj({
     Type: "Annot",
@@ -4443,6 +4481,42 @@ async function drawTOCOnExistingPage(
   const pageRight = width - rightMargin;
   const startY = height - topMargin;
   let tocInsertIndex = pdfDoc.getPages().indexOf(page) + 1;
+  const firstInsertedTOCPageIndex = tocInsertIndex;
+  let insertedTOCPageCount = 0;
+  const pendingTOCLinks = [];
+
+  function markTOCPage(tocPage) {
+    tocPage.node.set(
+      window.PDFLib.PDFName.of("PacketSection"),
+      window.PDFLib.PDFString.of("Table of Contents")
+    );
+  }
+
+  function queueInternalPageLink(sourcePage, x, y, width, height, targetPageIndex) {
+    pendingTOCLinks.push({
+      sourcePage,
+      x,
+      y,
+      width,
+      height,
+      targetPageIndex
+    });
+  }
+
+  function getFinalTOCTargetPageIndex(targetPageIndex) {
+    const pageIndex = Number(targetPageIndex);
+    if (!Number.isInteger(pageIndex)) return null;
+
+    const shiftedPageIndex =
+      pageIndex >= firstInsertedTOCPageIndex
+        ? pageIndex + insertedTOCPageCount
+        : pageIndex;
+
+    return Math.max(
+      0,
+      Math.min(pdfDoc.getPageCount() - 1, shiftedPageIndex)
+    );
+  }
 
   function centerText(text, y, size, font) {
     const textWidth = font.widthOfTextAtSize(text, size);
@@ -4599,11 +4673,9 @@ async function drawTOCOnExistingPage(
     if (y < footerMargin + 25) {
       page = pdfDoc.insertPage(tocInsertIndex, [612, 792]);
       tocInsertIndex++;
+      insertedTOCPageCount++;
 
-      page.node.set(
-        window.PDFLib.PDFName.of("PacketSection"),
-        window.PDFLib.PDFString.of("Table of Contents")
-      );
+      markTOCPage(page);
 
       y = height - topMargin - 30;
 
@@ -4645,8 +4717,7 @@ async function drawTOCOnExistingPage(
       });
       displayedPageNumbers.add(sectionPageNumber);
 
-      addInternalPageLink(
-        pdfDoc,
+      queueInternalPageLink(
         page,
         leftMargin,
         y - 2,
@@ -4655,8 +4726,7 @@ async function drawTOCOnExistingPage(
         sectionTarget.targetPageIndex
       );
 
-      addInternalPageLink(
-        pdfDoc,
+      queueInternalPageLink(
         page,
         sectionPageX,
         y - 2,
@@ -4682,6 +4752,8 @@ async function drawTOCOnExistingPage(
         if (y < footerMargin) {
           page = pdfDoc.insertPage(tocInsertIndex, [612, 792]);
           tocInsertIndex++;
+          insertedTOCPageCount++;
+          markTOCPage(page);
 
           y = height - topMargin - 30;
 
@@ -4746,8 +4818,7 @@ async function drawTOCOnExistingPage(
       }
 
       if (item.targetPageIndex !== undefined) {
-        addInternalPageLink(
-          pdfDoc,
+        queueInternalPageLink(
           page,
           titleX,
           y - 2,
@@ -4757,8 +4828,7 @@ async function drawTOCOnExistingPage(
         );
 
         if (showPageNumber) {
-          addInternalPageLink(
-            pdfDoc,
+          queueInternalPageLink(
             page,
             pageNumX,
             y - 2,
@@ -4783,6 +4853,21 @@ async function drawTOCOnExistingPage(
     });
 
     y -= 4;
+  });
+
+  pendingTOCLinks.forEach(link => {
+    const targetPageIndex = getFinalTOCTargetPageIndex(link.targetPageIndex);
+    if (targetPageIndex == null) return;
+
+    addInternalPageLink(
+      pdfDoc,
+      link.sourcePage,
+      link.x,
+      link.y,
+      link.width,
+      link.height,
+      targetPageIndex
+    );
   });
 }
 
