@@ -53,7 +53,7 @@ function getPacketTitle() {
 }
 
 function getSectionLabel(section) {
-  return OM_SECTION_LABELS[section] || section;
+  return customSectionLabels[section] || OM_SECTION_LABELS[section] || section;
 }
 
 function getPacketSubtitle() {

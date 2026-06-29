@@ -8,6 +8,8 @@ let selectedManagedPages = new Set();
 let pendingSubmittalImportFile = null;
 let submittalImportPreviewToken = 0;
 let currentBuildPdfDoc = null;
+let editingTOCEntryId = "";
+const PDF_PARENT_TOC_ID = "__pdf_parent__";
 
 const pdfUpload = document.getElementById("pdfUpload");
 if (pdfUpload) {
@@ -150,11 +152,33 @@ function renameTOCSections() {
     }
   });
 
+  refreshSectionLabelDisplays();
   alert("Section names updated for this packet.");
 }
 
 function getSectionLabel(section) {
   return customSectionLabels[section] || section;
+}
+
+function refreshSectionLabelDisplays() {
+  renderUploadedPdfList();
+
+  const warrantyPrompt = document.getElementById("warrantyPromptModal");
+  if (warrantyPrompt && !warrantyPrompt.classList.contains("hidden")) {
+    const createWarranty =
+      document.getElementById("createWarrantySheet")?.checked || false;
+    renderBuildSummary("buildSummary", { createWarranty });
+  }
+
+  const orderModal = document.getElementById("datasheetOrderModal");
+  if (orderModal && !orderModal.classList.contains("hidden")) {
+    const sectionGroups = getSectionsNeedingOrganization();
+    if (sectionGroups.length > 0) {
+      openSectionOrderModal(sectionGroups);
+    } else {
+      renderBuildSummary("datasheetBuildSummary");
+    }
+  }
 }
 
 function toRoman(value) {
@@ -2551,8 +2575,7 @@ async function openSubsectionModal(id) {
   const subsectionTitle = document.getElementById("subsectionTitle");
   const tocEntryType = document.getElementById("tocEntryType");
 
-  if (subsectionPageNumber) subsectionPageNumber.value = "";
-  if (subsectionTitle) subsectionTitle.value = "";
+  clearTOCEntryForm();
 
   const hideParent =
     document.getElementById("hideParentTOC");
@@ -2563,6 +2586,9 @@ async function openSubsectionModal(id) {
   if (hideParent) {
     hideParent.onchange = () => {
       item.hideParentTOC = hideParent.checked;
+      cleanInvalidTOCParents(item);
+      renderCurrentSubsectionList();
+      updateTOCParentDropdown();
     };
   }
   if (tocEntryType) tocEntryType.value = "section";
@@ -2591,6 +2617,7 @@ function closeSubsectionModal() {
   if (modal) modal.classList.add("hidden");
 
   selectedManagedPages = new Set();
+  clearTOCEntryForm();
   renderUploadedPdfList();
 }
 
@@ -4136,12 +4163,15 @@ function getActiveSubsectionItem() {
 
 function getTOCParentTitle(item, parentId) {
   if (!parentId) return "N/A";
+  if (parentId === PDF_PARENT_TOC_ID) {
+    return item.hideParentTOC ? "N/A" : item.displayTitle || item.fileName || "PDF Name";
+  }
 
   const parent = (item.tocEntries || []).find(entry => entry.id === parentId);
   return parent ? parent.title : "N/A";
 }
 
-function updateTOCParentDropdown() {
+function updateTOCParentDropdown(selectedParentId = "") {
   const item = getActiveSubsectionItem();
   const levelSelect = document.getElementById("tocEntryLevel");
   const parentSelect = document.getElementById("tocEntryParent");
@@ -4149,6 +4179,7 @@ function updateTOCParentDropdown() {
   if (!item || !levelSelect || !parentSelect) return;
 
   const level = Number(levelSelect.value || 0);
+  const currentParentId = selectedParentId || parentSelect.value || "";
 
   parentSelect.innerHTML = "";
 
@@ -4159,8 +4190,22 @@ function updateTOCParentDropdown() {
   }
 
   const parentLevel = level - 1;
-  const parentOptions = (item.tocEntries || [])
-    .filter(entry => Number(entry.tocLevel || 0) === parentLevel);
+  const parentOptions = [];
+
+  if (parentLevel === 0 && !item.hideParentTOC) {
+    parentOptions.push({
+      id: PDF_PARENT_TOC_ID,
+      title: item.displayTitle || item.fileName || "PDF Name"
+    });
+  }
+
+  parentOptions.push(
+    ...(item.tocEntries || [])
+      .filter(entry =>
+        Number(entry.tocLevel || 0) === parentLevel &&
+        entry.id !== editingTOCEntryId
+      )
+  );
 
   parentSelect.disabled = false;
 
@@ -4171,8 +4216,8 @@ function updateTOCParentDropdown() {
 
   parentSelect.innerHTML = parentOptions
     .map(entry => `
-      <option value="${entry.id}">
-        ${entry.title}
+      <option value="${entry.id}" ${entry.id === currentParentId ? "selected" : ""}>
+        ${entry.id === PDF_PARENT_TOC_ID ? `PDF Name: ${entry.title}` : entry.title}
       </option>
     `)
     .join("");
@@ -4216,11 +4261,35 @@ function orderTOCEntriesForDisplay(entries = []) {
     });
   }
 
+  addChildren(PDF_PARENT_TOC_ID);
   addChildren("");
   return ordered;
 }
 
-function addTOCEntry() {
+function clearTOCEntryForm() {
+  editingTOCEntryId = "";
+
+  const pageInput = document.getElementById("subsectionPageNumber");
+  const titleInput = document.getElementById("subsectionTitle");
+  const levelSelect = document.getElementById("tocEntryLevel");
+  const parentSelect = document.getElementById("tocEntryParent");
+  const actionButton = document.getElementById("tocEntryActionButton");
+
+  if (pageInput) pageInput.value = "";
+  if (titleInput) titleInput.value = "";
+  if (levelSelect) levelSelect.value = "0";
+  if (parentSelect) {
+    parentSelect.innerHTML = `<option value="">N/A</option>`;
+    parentSelect.disabled = true;
+  }
+  if (actionButton) actionButton.textContent = "Add TOC Entry";
+
+  document.querySelectorAll(".pdf-page-preview").forEach(el => {
+    el.classList.remove("selected");
+  });
+}
+
+function saveTOCEntry() {
   const activeIdInput = document.getElementById("activeSubsectionPdfId");
   const pageInput = document.getElementById("subsectionPageNumber");
   const titleInput = document.getElementById("subsectionTitle");
@@ -4263,29 +4332,136 @@ function addTOCEntry() {
     item.tocEntries = [];
   }
 
-  item.tocEntries.push({
-    id: crypto.randomUUID(),
-    title,
-    sourcePage: pageNumber,
-    entryType: tocLevel === 0 ? "section" : "subsection",
-    tocLevel,
-    parentId: tocLevel === 0 ? "" : parentId
-  });
+  const existingEntry = editingTOCEntryId
+    ? item.tocEntries.find(entry => entry.id === editingTOCEntryId)
+    : null;
+
+  if (existingEntry) {
+    existingEntry.title = title;
+    existingEntry.sourcePage = pageNumber;
+    existingEntry.entryType = tocLevel === 0 ? "section" : "subsection";
+    existingEntry.tocLevel = tocLevel;
+    existingEntry.parentId = tocLevel === 0 ? "" : parentId;
+    cleanInvalidTOCParents(item);
+  } else {
+    item.tocEntries.push({
+      id: crypto.randomUUID(),
+      title,
+      sourcePage: pageNumber,
+      entryType: tocLevel === 0 ? "section" : "subsection",
+      tocLevel,
+      parentId: tocLevel === 0 ? "" : parentId
+    });
+  }
 
   item.tocEntries.sort((a, b) =>
     a.sourcePage - b.sourcePage ||
     Number(a.tocLevel || 0) - Number(b.tocLevel || 0)
   );
 
-  pageInput.value = "";
-  titleInput.value = "";
-
-  document.querySelectorAll(".pdf-page-preview").forEach(el => {
-    el.classList.remove("selected");
-  });
-
+  clearTOCEntryForm();
   renderCurrentSubsectionList();
   updateTOCParentDropdown();
+}
+
+function addTOCEntry() {
+  saveTOCEntry();
+}
+
+function editSubsectionEntry(entryId) {
+  const item = getActiveSubsectionItem();
+  const entry = (item?.tocEntries || []).find(candidate => candidate.id === entryId);
+
+  if (!item || !entry) return;
+
+  editingTOCEntryId = entry.id;
+
+  const pageInput = document.getElementById("subsectionPageNumber");
+  const titleInput = document.getElementById("subsectionTitle");
+  const levelSelect = document.getElementById("tocEntryLevel");
+  const actionButton = document.getElementById("tocEntryActionButton");
+
+  if (pageInput) pageInput.value = entry.sourcePage || "";
+  if (titleInput) {
+    titleInput.value = entry.title || "";
+    titleInput.focus();
+  }
+  if (levelSelect) levelSelect.value = String(Number(entry.tocLevel || 0));
+  if (actionButton) actionButton.textContent = "Save TOC Entry";
+
+  updateTOCParentDropdown(entry.parentId || "");
+}
+
+function cleanInvalidTOCParents(item) {
+  const entries = item.tocEntries || [];
+  const validIds = new Set(entries.map(entry => entry.id));
+
+  entries.forEach(entry => {
+    const level = Number(entry.tocLevel || 0);
+
+    if (level === 0) {
+      entry.parentId = "";
+      return;
+    }
+
+    const usesVisiblePdfParent =
+      level === 1 &&
+      entry.parentId === PDF_PARENT_TOC_ID &&
+      !item.hideParentTOC;
+
+    if (usesVisiblePdfParent) return;
+
+    const parent = entries.find(candidate => candidate.id === entry.parentId);
+    const expectedParentLevel = level - 1;
+
+    if (!entry.parentId || !validIds.has(entry.parentId) || Number(parent?.tocLevel || 0) !== expectedParentLevel) {
+      entry.parentId = "";
+    }
+  });
+}
+
+function promoteTOCChildrenBeforeRemoval(item, removedEntry) {
+  if (!item || !removedEntry) return;
+
+  const entries = item.tocEntries || [];
+  const childrenByParent = new Map();
+
+  entries.forEach(entry => {
+    const parentKey = entry.parentId || "";
+    if (!childrenByParent.has(parentKey)) {
+      childrenByParent.set(parentKey, []);
+    }
+    childrenByParent.get(parentKey).push(entry);
+  });
+
+  function promoteBranch(parentId, replacementParentId = "") {
+    const children = childrenByParent.get(parentId) || [];
+
+    children.forEach(child => {
+      const currentLevel = Number(child.tocLevel || 0);
+      const promotedLevel = Math.max(0, currentLevel - 1);
+
+      child.tocLevel = promotedLevel;
+      child.entryType = promotedLevel === 0 ? "section" : "subsection";
+      child.parentId = promotedLevel === 0 ? "" : replacementParentId;
+
+      promoteDescendants(child.id);
+    });
+  }
+
+  function promoteDescendants(parentId) {
+    const children = childrenByParent.get(parentId) || [];
+
+    children.forEach(child => {
+      const promotedLevel = Math.max(0, Number(child.tocLevel || 0) - 1);
+      child.tocLevel = promotedLevel;
+      child.entryType = promotedLevel === 0 ? "section" : "subsection";
+      if (promotedLevel === 0) child.parentId = "";
+      promoteDescendants(child.id);
+    });
+  }
+
+  promoteBranch(removedEntry.id, removedEntry.parentId || "");
 }
 
 function removeSubsectionEntry(entryId) {
@@ -4293,9 +4469,17 @@ function removeSubsectionEntry(entryId) {
   const item = pdfLibrary.find(x => x.id === activeId);
   if (!item) return;
 
+  const removedEntry = (item.tocEntries || []).find(entry => entry.id === entryId);
+  promoteTOCChildrenBeforeRemoval(item, removedEntry);
   item.tocEntries = (item.tocEntries || []).filter(entry => entry.id !== entryId);
+  cleanInvalidTOCParents(item);
+
+  if (editingTOCEntryId === entryId) {
+    clearTOCEntryForm();
+  }
 
   renderCurrentSubsectionList();
+  updateTOCParentDropdown();
 }
 
 function renderCurrentSubsectionList() {
@@ -4308,6 +4492,7 @@ function renderCurrentSubsectionList() {
 
   if (!item || !item.tocEntries || item.tocEntries.length === 0) {
     list.innerHTML = "<p>No subsections added yet.</p>";
+    updateTOCParentDropdown();
     return;
   }
 
@@ -4335,9 +4520,14 @@ function renderCurrentSubsectionList() {
           ${entry.title}
         </div>
 
-        <button class="remove-pdf-btn" onclick="removeSubsectionEntry('${entry.id}')">
-          Remove
-        </button>
+        <div class="button-row">
+          <button onclick="editSubsectionEntry('${entry.id}')">
+            Edit
+          </button>
+          <button class="remove-pdf-btn" onclick="removeSubsectionEntry('${entry.id}')">
+            Remove
+          </button>
+        </div>
       `;
 
       list.appendChild(row);
