@@ -8,6 +8,9 @@ let converterBuildCache = null;
 let converterScanPromise = null;
 let converterBuildPromise = null;
 let converterRenderedPreviewKey = "";
+let converterManualOverrides = [];
+let converterLastScannedPages = [];
+let converterLastOcrPages = [];
 
 const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
@@ -81,6 +84,9 @@ function setConverterPdfFile(file) {
   converterScanPromise = null;
   converterBuildPromise = null;
   converterRenderedPreviewKey = "";
+  converterManualOverrides = [];
+  converterLastScannedPages = [];
+  converterLastOcrPages = [];
 
   const selected = document.getElementById("selectedConverterPdf");
   if (selected) {
@@ -116,6 +122,9 @@ function setConverterExcelFile(file) {
   converterScanPromise = null;
   converterBuildPromise = null;
   converterRenderedPreviewKey = "";
+  converterManualOverrides = [];
+  converterLastScannedPages = [];
+  converterLastOcrPages = [];
 
   const selected = document.getElementById("selectedConverterExcel");
   if (selected) {
@@ -143,7 +152,7 @@ function updateConverterStatus(message = "") {
     ? `Excel: ${converterExcelFile.name}`
     : "No Excel selected";
 
-  const foundCount = converterMatches.filter(match => match.found).length;
+  const foundCount = converterMatches.filter(match => (match.foundPages || []).length || (match.ocrFoundPages || []).length).length;
   const changeCount = converterMatches.length;
   const pageCount = converterChangedPages.length;
   const changeText = changeCount > 0
@@ -385,6 +394,87 @@ function normalizeOCRText(text) {
     .trim();
 }
 
+function getManualConverterValue(oldPart) {
+  return converterManualOverrides.find(item => item.oldPart === oldPart)?.itemCode || "";
+}
+
+function getEffectiveConverterMap(baseMap = converterMap) {
+  return baseMap.map(item => {
+    const manualValue = getManualConverterValue(item.oldPart);
+    return manualValue ? { ...item, itemCode: manualValue } : item;
+  });
+}
+
+function updateConverterManualPart(oldPart, value) {
+  const itemCode = String(value || "").trim();
+  converterManualOverrides = converterManualOverrides.filter(item => item.oldPart !== oldPart);
+  if (itemCode) converterManualOverrides.push({ oldPart, itemCode });
+
+  converterBuildCache = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
+  converterMatches = buildConverterMatches(
+    getEffectiveConverterMap(),
+    converterMatches.length ? converterLastScannedPages : [],
+    converterMatches.length ? converterLastOcrPages : []
+  );
+  renderConverterPreview();
+  renderConverterAfterEditPanel();
+  refreshOpenConverterAfterPreview().catch(error => {
+    console.error("After preview refresh failed:", error);
+  });
+  updateConverterStatus("Manual new part number saved. Build and preview will use the edited value.");
+}
+
+
+function getConverterChangeDetails(match) {
+  const details = [];
+  (match.foundPageCounts || []).forEach(page => {
+    details.push(`Page ${page.pageNumber}: ${page.count} PDF text mention(s)`);
+  });
+  (match.ocrFoundPageCounts || [])
+    .filter(page => !(match.foundPages || []).includes(page.pageNumber))
+    .forEach(page => {
+      details.push(`Page ${page.pageNumber}: drawing OCR review`);
+    });
+  return details;
+}
+
+function getConverterPageText(match) {
+  const pages = Array.from(new Set([
+    ...(match.foundPages || []),
+    ...(match.ocrFoundPages || [])
+  ])).sort((a, b) => a - b);
+  return pages.length ? pages.join(", ") : "Not detected";
+}
+
+function renderConverterAfterEditPanel() {
+  const panel = document.getElementById("converterAfterEditPanel");
+  if (!panel) return;
+  const foundMatches = converterMatches.filter(match => (match.foundPages || []).length || (match.ocrFoundPages || []).length);
+  if (!foundMatches.length) {
+    panel.innerHTML = `<p class="converter-muted">Preview changes first to edit new part numbers here.</p>`;
+    return;
+  }
+  panel.innerHTML = `
+    <div class="converter-after-edit-header">Manual New Part # Edits</div>
+    <div class="converter-after-edit-list">
+      ${foundMatches.map(match => {
+        const value = getManualConverterValue(match.oldPart) || match.itemCode;
+        return `
+          <label class="converter-after-edit-row">
+            <span>${escapeConverterHTML(match.oldPart)}</span>
+            <input
+              value="${escapeConverterHTML(value)}"
+              onchange="updateConverterManualPart('${escapeConverterHTML(match.oldPart)}', this.value)"
+            />
+          </label>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function previewPartNumberChanges() {
   return runConverterTask(
     previewPartNumberChangesImpl,
@@ -427,7 +517,9 @@ async function previewPartNumberChangesScan() {
 
   const pages = await extractPDFTextByPage(converterPdfFile);
   converterBuildCache = null;
-  converterMatches = buildConverterMatches(map, pages);
+  converterLastScannedPages = pages;
+  converterLastOcrPages = [];
+  converterMatches = buildConverterMatches(getEffectiveConverterMap(map), pages);
   renderConverterPreview();
 
   let ocrPages = [];
@@ -442,7 +534,8 @@ async function previewPartNumberChangesScan() {
   }
 
   if (ocrPages.length) {
-    converterMatches = buildConverterMatches(map, pages, ocrPages);
+    converterLastOcrPages = ocrPages;
+    converterMatches = buildConverterMatches(getEffectiveConverterMap(map), pages, ocrPages);
     renderConverterPreview();
   }
 
@@ -505,56 +598,128 @@ function buildConverterMatches(map, pages, ocrPages = []) {
   });
 }
 
+function getConverterPageRows() {
+  const pageNumbers = converterLastScannedPages.length
+    ? converterLastScannedPages.map(page => page.pageNumber)
+    : Array.from(new Set(getDetectedChangeRows().map(row => row.pageNumber))).sort((a, b) => a - b);
+
+  return pageNumbers.map(pageNumber => {
+    const changes = [];
+
+    converterMatches.forEach(match => {
+      const pdfPage = (match.foundPageCounts || []).find(page => page.pageNumber === pageNumber);
+      if (pdfPage) {
+        changes.push({
+          pageNumber,
+          oldPart: match.oldPart,
+          itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
+          count: pdfPage.count,
+          source: "PDF text",
+          locationText: `${pdfPage.count} PDF text mention(s)`
+        });
+      }
+
+      const hasPdfMatch = Boolean(pdfPage);
+      const ocrPage = (match.ocrFoundPageCounts || []).find(page => page.pageNumber === pageNumber);
+      if (ocrPage && !hasPdfMatch) {
+        changes.push({
+          pageNumber,
+          oldPart: match.oldPart,
+          itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
+          count: ocrPage.count,
+          source: "Drawing OCR",
+          locationText: "drawing OCR review"
+        });
+      }
+    });
+
+    return { pageNumber, changes };
+  });
+}
+
 function renderConverterPreview() {
   const tbody = document.getElementById("converterPreviewBody");
   if (!tbody) return;
-
   tbody.innerHTML = "";
 
-  const detectedRows = getDetectedChangeRows();
-  updateDetectedChangeCount(detectedRows.length);
+  const pageRows = getConverterPageRows();
+  const changedPageCount = pageRows.filter(row => row.changes.length).length;
+  updateDetectedChangeCount(changedPageCount);
 
-  if (detectedRows.length) {
-    detectedRows.forEach(change => {
-      const row = document.createElement("tr");
-
-      row.innerHTML = `
-        <td>${escapeConverterHTML(change.oldPart)}</td>
-        <td>${escapeConverterHTML(change.itemCode)}</td>
-        <td>${escapeConverterHTML(change.locationText)}</td>
-      `;
-
-      tbody.appendChild(row);
-    });
-
-    return;
-  }
-
-  if (!converterMatches.length) {
+  if (!pageRows.length) {
     resetConverterPreview();
+    renderConverterAfterEditPanel();
     return;
   }
 
-  converterMatches.forEach(match => {
+  pageRows.forEach(pageRow => {
     const row = document.createElement("tr");
 
+    if (!pageRow.changes.length) {
+      row.innerHTML = `
+        <td>${pageRow.pageNumber}</td>
+        <td><span class="converter-muted">No old part # found</span></td>
+        <td><span class="converter-muted">No change</span></td>
+        <td><span class="converter-muted">No detected changes</span></td>
+      `;
+      tbody.appendChild(row);
+      return;
+    }
+
+    const detailId = `converter-page-details-${pageRow.pageNumber}`;
+    const oldSummary = pageRow.changes.map(change => change.oldPart).join(", ");
+    const newSummary = pageRow.changes.map(change => change.itemCode).join(", ");
+
+    row.className = "converter-page-change-row";
     row.innerHTML = `
-      <td>${escapeConverterHTML(match.oldPart)}</td>
-      <td>${escapeConverterHTML(match.itemCode)}</td>
+      <td>${pageRow.pageNumber}</td>
+      <td>${escapeConverterHTML(oldSummary)}</td>
+      <td>${escapeConverterHTML(newSummary)}</td>
       <td>
-        ${
-          match.foundPages.length
-            ? `Yes — Page(s): ${match.foundPages.join(", ")}`
-            : "No"
-        }
+        <button class="converter-row-toggle" type="button" onclick="toggleConverterPageDetails('${detailId}', this)">
+          <span>${pageRow.changes.length} change${pageRow.changes.length === 1 ? "" : "s"}</span>
+          <span class="converter-row-toggle-arrow" aria-hidden="true"></span>
+        </button>
       </td>
     `;
-
-    row.innerHTML = row.innerHTML.replace(/Yes .+ Page\(s\):/, "Yes - Page(s):");
-    row.cells[2].textContent = getConverterFoundText(match);
-
     tbody.appendChild(row);
+
+    const detailRow = document.createElement("tr");
+    detailRow.id = detailId;
+    detailRow.className = "converter-page-detail-row hidden";
+    detailRow.innerHTML = `
+      <td colspan="4">
+        <div class="converter-page-change-list">
+          <div class="converter-page-change-heading">
+            <span>Old Part #</span>
+            <span>New Part #</span>
+            <span>Detected Change</span>
+          </div>
+          ${pageRow.changes.map(change => `
+            <label class="converter-page-change-edit">
+              <span>${escapeConverterHTML(change.oldPart)}</span>
+              <input
+                class="converter-part-edit-input"
+                value="${escapeConverterHTML(change.itemCode)}"
+                onchange="updateConverterManualPart('${escapeConverterHTML(change.oldPart)}', this.value)"
+              />
+              <span>${escapeConverterHTML(change.locationText)}</span>
+            </label>
+          `).join("")}
+        </div>
+      </td>
+    `;
+    tbody.appendChild(detailRow);
   });
+
+  renderConverterAfterEditPanel();
+}
+
+function toggleConverterPageDetails(detailId, button) {
+  const detail = document.getElementById(detailId);
+  if (!detail) return;
+  const isOpen = detail.classList.toggle("hidden") === false;
+  button?.classList.toggle("open", isOpen);
 }
 
 function getDetectedChangeRows() {
@@ -642,9 +807,10 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
 
   updateConverterStatus("Generating converted PDF...");
 
-  const map = converterMap.length
+  const baseMap = converterMap.length
     ? converterMap
     : await readExcelConverterMap();
+  const map = getEffectiveConverterMap(baseMap);
 
   if (!map.length) {
     alert("No valid Old Part # / Item Code or New Part # rows were found.");
@@ -701,9 +867,10 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
 }
 
 async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
-  const map = converterMap.length
+  const baseMap = converterMap.length
     ? converterMap
     : await readExcelConverterMap();
+  const map = getEffectiveConverterMap(baseMap);
 
   const originalBytes = await converterPdfFile.arrayBuffer();
   const pdfDoc = await PDFDocument.load(originalBytes);
@@ -1261,6 +1428,33 @@ function closeConverterPdfPreview() {
   document.getElementById("converterPreviewModal")?.classList.add("hidden");
 }
 
+async function refreshOpenConverterAfterPreview() {
+  const modal = document.getElementById("converterPreviewModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+
+  const status = document.getElementById("converterPreviewModalStatus");
+  const afterContainer = document.getElementById("converterAfterPreview");
+  if (!afterContainer) return;
+
+  if (status) status.textContent = "Updating after preview with manual edit...";
+  const result = await buildConvertedPDFBytes(false);
+  if (!result) return;
+
+  const pagesToPreview = result.changedPages.length
+    ? result.changedPages
+    : getPreviewPagesFromMatches();
+
+  afterContainer.innerHTML = "";
+  await renderPdfPreviewBytes(result.bytes, afterContainer, pagesToPreview);
+  converterRenderedPreviewKey = "";
+
+  if (status) {
+    status.textContent = pagesToPreview.length
+      ? `After preview updated. Showing page(s): ${pagesToPreview.join(", ")}.`
+      : "After preview updated. No changed pages were found.";
+  }
+}
+
 function getPreviewPagesFromMatches() {
   return Array.from(
     new Set(
@@ -1318,6 +1512,12 @@ function clearConverterFiles() {
   converterChangedPages = [];
   converterReplacementDetails = [];
   converterBuildCache = null;
+  converterScanPromise = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
+  converterManualOverrides = [];
+  converterLastScannedPages = [];
+  converterLastOcrPages = [];
 
   const pdfInput = document.getElementById("converterPdfUpload");
   const excelInput = document.getElementById("converterExcelUpload");
@@ -1343,7 +1543,7 @@ function resetConverterPreview() {
   if (tbody) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="3">No changes previewed yet.</td>
+        <td colspan="4">No changes previewed yet.</td>
       </tr>
     `;
   }
@@ -1380,3 +1580,10 @@ function escapeConverterHTML(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+
+
+
+
+
+
