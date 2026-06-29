@@ -452,7 +452,7 @@
           </select>
 
           <div class="button-row">
-            <button onclick="addTOCEntry()">
+            <button id="tocEntryActionButton" onclick="addTOCEntry()">
               Add TOC Entry
             </button>
 
@@ -472,6 +472,19 @@
 
       </div>
 
+    </div>
+  </div>
+  <div id="appPromptModal" class="modal hidden">
+    <div class="modal-content app-prompt-modal-content">
+      <h2 id="appPromptTitle">Action Needed</h2>
+      <p id="appPromptMessage" class="app-prompt-message"></p>
+
+      <div id="appPromptInputGroup" class="app-prompt-input-group hidden">
+        <label id="appPromptInputLabel" for="appPromptInput">Value</label>
+        <input id="appPromptInput" />
+      </div>
+
+      <div id="appPromptActions" class="button-row app-prompt-actions"></div>
     </div>
   </div>
   <script src="common.js"></script>
