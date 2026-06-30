@@ -1132,81 +1132,69 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
     const textContent = await page.getTextContent();
     const pageSize = pdfLibPage.getSize();
 
-    for (const textItem of textContent.items) {
-      const text = textItem.str;
-      if (!text) continue;
+    const pageReplacements = getPageTextReplacements(textContent.items, map);
+    for (const replacement of pageReplacements) {
+      const replacementFont = getReplacementFont(replacement.items[0].item, fonts);
+      const placement = getTextItemReplacementPlacement(
+        replacement,
+        replacementFont
+      );
+      const isVisible = await isVisibleTextReplacement(
+        page,
+        pageIndex,
+        placement,
+        pageSize,
+        backgroundSamplers
+      );
+      if (!isVisible) continue;
 
-      const replacements = getTextItemReplacements(text, map);
-      if (!replacements.length) continue;
+      const replacementDetail = {
+        pageNumber: pageIndex + 1,
+        oldPart: replacement.oldPart,
+        itemCode: replacement.itemCode,
+        rectX: placement.rectX,
+        rectY: placement.rectY,
+        rectWidth: placement.rectWidth,
+        rectHeight: placement.rectHeight,
+        angle: placement.angle
+      };
+      if (isConverterReplacementSkipped(replacementDetail)) continue;
 
-      const replacementFont = getReplacementFont(textItem, fonts);
+      const backgroundColor = await getTextItemBackgroundColor(
+        page,
+        pageIndex,
+        placement,
+        pageSize,
+        backgroundSamplers
+      );
+      const rotate = degrees(placement.angle);
 
-      for (const replacement of replacements) {
-        for (const match of replacement.matches) {
-          const placement = getTextItemReplacementPlacement(
-            textItem,
-            text,
-            match,
-            replacement.itemCode,
-            replacementFont
-          );
-          const isVisible = await isVisibleTextReplacement(
-            page,
-            pageIndex,
-            placement,
-            pageSize,
-            backgroundSamplers
-          );
-          if (!isVisible) continue;
+      pdfLibPage.drawRectangle({
+        x: placement.rectX,
+        y: placement.rectY,
+        width: placement.rectWidth,
+        height: placement.rectHeight,
+        rotate,
+        color: backgroundColor,
+        opacity: 0.98
+      });
 
-          const replacementDetail = {
-            pageNumber: pageIndex + 1,
-            oldPart: replacement.oldPart,
-            itemCode: replacement.itemCode,
-            rectX: placement.rectX,
-            rectY: placement.rectY,
-            rectWidth: placement.rectWidth,
-            rectHeight: placement.rectHeight,
-            angle: placement.angle
-          };
-          if (isConverterReplacementSkipped(replacementDetail)) continue;
+      pdfLibPage.drawText(replacement.itemCode, {
+        x: placement.textX,
+        y: placement.textY,
+        size: placement.fontSize,
+        font: replacementFont,
+        rotate,
+        color: rgb(0, 0, 0)
+      });
 
-          const backgroundColor = await getTextItemBackgroundColor(
-            page,
-            pageIndex,
-            placement,
-            pageSize,
-            backgroundSamplers
-          );
-          const rotate = degrees(placement.angle);
-
-          pdfLibPage.drawRectangle({
-            x: placement.rectX,
-            y: placement.rectY,
-            width: placement.rectWidth,
-            height: placement.rectHeight,
-            rotate,
-            color: backgroundColor
-          });
-
-          pdfLibPage.drawText(replacement.itemCode, {
-            x: placement.textX,
-            y: placement.textY,
-            size: placement.fontSize,
-            font: replacementFont,
-            rotate,
-            color: rgb(0, 0, 0)
-          });
-
-          replacementCount++;
-          expectedReplacementCounts.set(
-            replacement.oldPart,
-            (expectedReplacementCounts.get(replacement.oldPart) || 0) + 1
-          );
-          changedPages.add(pageIndex + 1);
-          replacementDetails.push(replacementDetail);
-        }
-      }
+      replacementCount++;
+      expectedReplacementCounts.set(
+        replacement.oldPart,
+        (expectedReplacementCounts.get(replacement.oldPart) || 0) + 1
+      );
+      changedPages.add(pageIndex + 1);
+      replacementDetails.push(replacementDetail);
     }
   }
 
@@ -1251,14 +1239,72 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
   return converterBuildCache;
 }
 
-function getTextItemReplacements(text, map) {
-  return map
-    .filter(item => text.includes(item.oldPart))
-    .map(item => ({
-      ...item,
-      matches: findExactMatchesInTextItem(text, item.oldPart)
-    }))
-    .filter(item => item.matches.length > 0);
+function getPageTextReplacements(textItems, map) {
+  const runs = [];
+  let currentIndex = 0;
+
+  textItems.forEach(item => {
+    const text = String(item.str || "");
+    const start = currentIndex;
+    const end = start + text.length;
+
+    runs.push({
+      item,
+      text,
+      start,
+      end
+    });
+
+    currentIndex = end;
+  });
+
+  const pageText = runs.map(run => run.text).join("");
+
+  return map.flatMap(item => {
+    const oldPart = String(item.oldPart || "");
+    if (!oldPart) return [];
+
+    const replacements = [];
+    let searchIndex = 0;
+
+    while (true) {
+      const index = pageText.indexOf(oldPart, searchIndex);
+      if (index === -1) break;
+
+      const matchEnd = index + oldPart.length;
+      const coveredItems = [];
+      let runIndex = runs.findIndex(run => index < run.end);
+
+      while (runIndex !== -1 && runIndex < runs.length && runs[runIndex].start < matchEnd) {
+        const run = runs[runIndex];
+        const segmentStart = Math.max(0, index - run.start);
+        const segmentEnd = Math.min(run.text.length, matchEnd - run.start);
+
+        coveredItems.push({
+          item: run.item,
+          text: run.text.slice(segmentStart, segmentEnd),
+          startInItem: segmentStart,
+          endInItem: segmentEnd,
+          prefixText: run.text.slice(0, segmentStart)
+        });
+
+        runIndex += 1;
+      }
+
+      if (coveredItems.length) {
+        replacements.push({
+          oldPart,
+          itemCode: item.itemCode,
+          replacementText: item.itemCode,
+          items: coveredItems
+        });
+      }
+
+      searchIndex = matchEnd;
+    }
+
+    return replacements;
+  });
 }
 
 function getReplacementFont(textItem, fonts) {
@@ -1276,78 +1322,96 @@ function getReplacementFont(textItem, fonts) {
   return fonts.regular;
 }
 
-function getTextItemReplacementPlacement(textItem, originalText, match, replacementText, font) {
-  const transform = textItem.transform || [1, 0, 0, 8, 0, 0];
-  const [a = 1, b = 0, c = 0, d = 8] = transform;
-  const baseX = transform[4] || 0;
-  const baseY = transform[5] || 0;
+function getTextItemReplacementPlacement(replacement, font) {
+  const firstSegment = replacement.items[0];
+  const firstTextItem = firstSegment.item;
+  const firstTransform = firstTextItem.transform || [1, 0, 0, 8, 0, 0];
+  const [a = 1, b = 0, c = 0, d = 8] = firstTransform;
   const fontSize = Math.max(
     6,
-    Math.hypot(c, d) || Math.hypot(a, b) || textItem.height || 8
+    Math.hypot(c, d) || Math.hypot(a, b) || firstTextItem.height || 8
   );
-  const pdfTextWidth = textItem.width || 0;
-  const measuredFullWidth = font.widthOfTextAtSize(originalText, fontSize);
-  const widthScale = measuredFullWidth
-    ? Math.max((pdfTextWidth || measuredFullWidth) / measuredFullWidth, 0.9)
-    : 1;
-  const prefixText = originalText.slice(0, match.startIndex);
-  const oldText = originalText.slice(match.startIndex, match.endIndex);
-  const prefixWidth = font.widthOfTextAtSize(prefixText, fontSize) * widthScale;
-  const oldTextWidth = Math.max(
-    font.widthOfTextAtSize(oldText, fontSize) * widthScale,
-    oldText.length * fontSize * 0.52,
-    4
-  );
-  const angle = Math.atan2(b, a) * 180 / Math.PI;
+
   const textVectorLength = Math.hypot(a, b) || 1;
   const dirX = a / textVectorLength;
   const dirY = b / textVectorLength;
   const normalX = -dirY;
   const normalY = dirX;
-  const matchBaseX = baseX + dirX * prefixWidth;
-  const matchBaseY = baseY + dirY * prefixWidth;
-  const coverPaddingStart = Math.min(1.8, fontSize * 0.16);
-  const coverPaddingEnd = Math.min(3.2, fontSize * 0.18);
-  const coverWidth = oldTextWidth + coverPaddingStart + coverPaddingEnd;
-  const replacementWidthAtOriginalSize = font.widthOfTextAtSize(replacementText, fontSize);
+  const angle = Math.atan2(b, a) * 180 / Math.PI;
+
+  const firstPrefixWidth = font.widthOfTextAtSize(
+    String(firstSegment.prefixText || ""),
+    fontSize
+  ) * getTextWidthScaleForItem(firstTextItem, fontSize, font);
+  const firstSegmentStartX = (firstTransform[4] || 0) + dirX * firstPrefixWidth;
+  const firstSegmentStartY = (firstTransform[5] || 0) + dirY * firstPrefixWidth;
+
+  const totalTextWidth = replacement.items.reduce((sum, segment) => {
+    const itemText = String(segment.text || "");
+    const scale = getTextWidthScaleForItem(segment.item, fontSize, font);
+    return sum + font.widthOfTextAtSize(itemText, fontSize) * scale;
+  }, 0);
+
+  const coverPaddingStart = Math.max(0.8, fontSize * 0.1);
+  const coverPaddingEnd = Math.max(1.4, fontSize * 0.12);
+  const coverWidth = totalTextWidth + coverPaddingStart + coverPaddingEnd;
+
+  const replacementWidthAtOriginalSize = font.widthOfTextAtSize(replacement.replacementText, fontSize);
   let replacementFontSize = Math.min(
-    fontSize * 0.85,
+    fontSize * 0.92,
     replacementWidthAtOriginalSize
-      ? fontSize * ((oldTextWidth + 1.1) / replacementWidthAtOriginalSize)
-      : fontSize * 0.85
+      ? fontSize * ((totalTextWidth + coverPaddingStart) / replacementWidthAtOriginalSize)
+      : fontSize * 0.92
   );
-  replacementFontSize = Math.max(Math.min(6, fontSize * 0.82), replacementFontSize);
+  replacementFontSize = Math.max(Math.min(6, fontSize * 0.92), replacementFontSize);
+
   let replacementTextWidth = font.widthOfTextAtSize(
-    replacementText,
+    replacement.replacementText,
     replacementFontSize
   );
-
   while (replacementTextWidth > coverWidth && replacementFontSize > 4.0) {
     replacementFontSize -= 0.25;
     replacementTextWidth = font.widthOfTextAtSize(
-      replacementText,
+      replacement.replacementText,
       replacementFontSize
     );
   }
 
-  const textInset = Math.max(0.16, fontSize * 0.04);
-  const baselineLift = (fontSize - replacementFontSize) * 0.05;
-  const rectNormalPadding = Math.max(fontSize * 0.14, 2);
-  const itemHeight = Math.max(fontSize, Math.min(Math.abs(textItem.height || fontSize), fontSize * 1.15));
-  const descent = replacementFontSize * 0.22;
-  const verticalPadding = Math.max(fontSize * 0.05, 1.2);
-  const rectHeight = Math.max(replacementFontSize * 1.12 + verticalPadding*2, itemHeight * 1.04 + verticalPadding, fontSize * 1.05 + verticalPadding);
+  const textInset = Math.max(0.15, fontSize * 0.05);
+  const baselineLift = (fontSize - replacementFontSize) * 0.04;
+  const rectPadding = Math.max(fontSize * 0.12, 1.2);
+  const rectHeight = Math.max(
+    fontSize * 1.08,
+    replacementFontSize * 1.08,
+    fontSize * 1.02
+  ) + rectPadding * 2;
+
+  const rectX = firstSegmentStartX - dirX * coverPaddingStart - normalX * rectPadding;
+  const rectY = firstSegmentStartY - fontSize * 0.18 - rectPadding;
+  const rectWidth = Math.max(coverWidth, replacementTextWidth + coverPaddingStart + coverPaddingEnd);
 
   return {
     angle,
     fontSize: replacementFontSize,
-    textX: matchBaseX + dirX * textInset + normalX * baselineLift,
-    textY: matchBaseY + dirY * textInset,
-    rectX: matchBaseX - dirX * coverPaddingStart - normalX * rectNormalPadding,
-    rectY: matchBaseY - normalY * (descent + verticalPadding) - dirY * coverPaddingStart,
-    rectWidth: Math.max(coverWidth, replacementTextWidth + coverPaddingStart + coverPaddingEnd),
+    textX: firstSegmentStartX + dirX * textInset + normalX * baselineLift,
+    textY: firstSegmentStartY + dirY * textInset + normalY * baselineLift,
+    rectX,
+    rectY,
+    rectWidth,
     rectHeight
   };
+}
+
+function getTextWidthScaleForItem(textItem, fontSize, font) {
+  const itemText = String(textItem.str || "");
+  const measuredWidth = fontSize && font
+    ? font.widthOfTextAtSize(itemText, fontSize)
+    : 0;
+  const itemWidth = textItem.width || 0;
+  if (!measuredWidth || !itemWidth) {
+    return 1;
+  }
+  return Math.max(itemWidth / measuredWidth, 0.8);
 }
 
 function isLikelyInkColor(color) {
@@ -1378,23 +1442,21 @@ async function getTextItemBackgroundColor(
     y: cos * placement.rectHeight
   };
 
-  const outerOffsets = [
-    { u: -0.14, v: 0.5 },
-    { u: 1.14, v: 0.5 },
-    { u: 0.5, v: -0.14 },
-    { u: 0.5, v: 1.14 }
-  ];
-  const innerOffsets = [
-    { u: 0.25, v: 0.25 },
-    { u: 0.75, v: 0.25 },
-    { u: 0.25, v: 0.75 },
-    { u: 0.75, v: 0.75 }
+  const sampleOffsets = [
+    { u: -0.28, v: 0.5, weight: 2 },
+    { u: 1.28, v: 0.5, weight: 2 },
+    { u: 0.5, v: -0.28, weight: 2 },
+    { u: 0.5, v: 1.28, weight: 2 },
+    { u: -0.14, v: 0.14, weight: 1.5 },
+    { u: 0.86, v: 0.14, weight: 1.5 },
+    { u: -0.14, v: 0.86, weight: 1.5 },
+    { u: 0.86, v: 0.86, weight: 1.5 }
   ];
 
-  const sampled = [...outerOffsets, ...innerOffsets].map(offset => ({
+  const samples = sampleOffsets.map(offset => ({
     x: placement.rectX + widthVec.x * offset.u + heightVec.x * offset.v,
     y: placement.rectY + widthVec.y * offset.u + heightVec.y * offset.v,
-    weight: outerOffsets.some(o => o.u === offset.u && o.v === offset.v) ? 1.3 : 1
+    weight: offset.weight
   }))
     .map(point => ({
       color: sampler.sample(point.x, pageSize.height - point.y),
@@ -1402,24 +1464,22 @@ async function getTextItemBackgroundColor(
     }))
     .filter(item => item.color);
 
-  const nonInkSamples = sampled.filter(item => !isLikelyInkColor(item.color));
-  const usefulSamples = nonInkSamples.length ? nonInkSamples : sampled;
-  if (!usefulSamples.length) return rgb(1, 1, 1);
+  if (!samples.length) return rgb(1, 1, 1);
 
-  const scored = usefulSamples
-    .map(item => ({
-      ...item,
-      brightness: (item.color.r + item.color.g + item.color.b) / 3,
-      spread: Math.max(item.color.r, item.color.g, item.color.b) - Math.min(item.color.r, item.color.g, item.color.b)
-    }))
-    .sort((a, b) => {
-      const scoreA = a.brightness - a.spread * 0.3;
-      const scoreB = b.brightness - b.spread * 0.3;
-      return scoreB - scoreA;
-    });
+  const nonInkSamples = samples.filter(item => !isLikelyInkColor(item.color));
+  const usefulSamples = nonInkSamples.length ? nonInkSamples : samples;
 
-  const topCount = Math.max(1, Math.ceil(scored.length * 0.4));
-  const topColors = scored.slice(0, topCount);
+  const scored = usefulSamples.map(item => ({
+    ...item,
+    brightness: (item.color.r + item.color.g + item.color.b) / 3,
+    spread: Math.max(item.color.r, item.color.g, item.color.b) - Math.min(item.color.r, item.color.g, item.color.b)
+  })).sort((a, b) => {
+    const scoreA = a.brightness - a.spread * 0.3;
+    const scoreB = b.brightness - b.spread * 0.3;
+    return scoreB - scoreA;
+  });
+
+  const topColors = scored.slice(0, Math.max(1, Math.ceil(scored.length * 0.4)));
   const average = topColors.reduce(
     (sum, sample) => ({
       r: sum.r + sample.color.r * sample.weight,
@@ -1436,7 +1496,8 @@ async function getTextItemBackgroundColor(
     b: average.b / average.w
   };
 
-  if ((finalColor.r + finalColor.g + finalColor.b) / 3 > 247) {
+  const brightness = (finalColor.r + finalColor.g + finalColor.b) / 3;
+  if (brightness > 248) {
     return rgb(1, 1, 1);
   }
 
@@ -1499,7 +1560,7 @@ async function isVisibleTextReplacement(
     height: maxY - minY
   });
 
-  return ratio >= 0.025;
+  return ratio >= 0.0;
 }
 
 async function getPageBackgroundSampler(page, pageIndex, backgroundSamplers) {
