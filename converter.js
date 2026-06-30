@@ -1176,7 +1176,7 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
         height: placement.rectHeight,
         rotate,
         color: backgroundColor,
-        opacity: 0.98
+        opacity: 1
       });
 
       pdfLibPage.drawText(replacement.itemCode, {
@@ -1352,8 +1352,8 @@ function getTextItemReplacementPlacement(replacement, font) {
     return sum + font.widthOfTextAtSize(itemText, fontSize) * scale;
   }, 0);
 
-  const coverPaddingStart = Math.max(0.8, fontSize * 0.1);
-  const coverPaddingEnd = Math.max(1.4, fontSize * 0.12);
+  const coverPaddingStart = Math.max(0.6, fontSize * 0.08);
+  const coverPaddingEnd = Math.max(1.0, fontSize * 0.1);
   const coverWidth = totalTextWidth + coverPaddingStart + coverPaddingEnd;
 
   const replacementWidthAtOriginalSize = font.widthOfTextAtSize(replacement.replacementText, fontSize);
@@ -1378,16 +1378,13 @@ function getTextItemReplacementPlacement(replacement, font) {
   }
 
   const textInset = Math.max(0.15, fontSize * 0.05);
-  const baselineLift = (fontSize - replacementFontSize) * 0.04;
-  const rectPadding = Math.max(fontSize * 0.12, 1.2);
-  const rectHeight = Math.max(
-    fontSize * 1.08,
-    replacementFontSize * 1.08,
-    fontSize * 1.02
-  ) + rectPadding * 2;
+  const baselineLift = (fontSize - replacementFontSize) * 0.32;
+  const rectPadding = Math.max(fontSize * 0.08, 1.0);
+  const itemHeight = Math.max(Math.abs(firstTextItem.height || fontSize), replacementFontSize);
+  const rectHeight = Math.max(itemHeight * 1.02, replacementFontSize * 1.03, fontSize * 1.0) + rectPadding * 1.6;
 
   const rectX = firstSegmentStartX - dirX * coverPaddingStart - normalX * rectPadding;
-  const rectY = firstSegmentStartY - fontSize * 0.18 - rectPadding;
+  const rectY = firstSegmentStartY - itemHeight * 0.22 - rectPadding;
   const rectWidth = Math.max(coverWidth, replacementTextWidth + coverPaddingStart + coverPaddingEnd);
 
   return {
@@ -1443,14 +1440,18 @@ async function getTextItemBackgroundColor(
   };
 
   const sampleOffsets = [
-    { u: -0.28, v: 0.5, weight: 2 },
-    { u: 1.28, v: 0.5, weight: 2 },
-    { u: 0.5, v: -0.28, weight: 2 },
-    { u: 0.5, v: 1.28, weight: 2 },
-    { u: -0.14, v: 0.14, weight: 1.5 },
-    { u: 0.86, v: 0.14, weight: 1.5 },
-    { u: -0.14, v: 0.86, weight: 1.5 },
-    { u: 0.86, v: 0.86, weight: 1.5 }
+    { u: -0.45, v: 0.5, weight: 2.2 },
+    { u: 1.45, v: 0.5, weight: 2.2 },
+    { u: 0.5, v: -0.45, weight: 2.2 },
+    { u: 0.5, v: 1.45, weight: 2.2 },
+    { u: -0.45, v: -0.45, weight: 1.2 },
+    { u: 1.45, v: -0.45, weight: 1.2 },
+    { u: -0.45, v: 1.45, weight: 1.2 },
+    { u: 1.45, v: 1.45, weight: 1.2 },
+    { u: -0.2, v: 0.5, weight: 1.8 },
+    { u: 1.2, v: 0.5, weight: 1.8 },
+    { u: 0.5, v: -0.2, weight: 1.8 },
+    { u: 0.5, v: 1.2, weight: 1.8 }
   ];
 
   const samples = sampleOffsets.map(offset => ({
