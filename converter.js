@@ -1306,15 +1306,15 @@ function getTextItemReplacementPlacement(textItem, originalText, match, replacem
   const normalY = dirX;
   const matchBaseX = baseX + dirX * prefixWidth;
   const matchBaseY = baseY + dirY * prefixWidth;
-  const coverPaddingStart = 3.5;
-  const coverPaddingEnd = 8;
+  const coverPaddingStart = Math.min(1.8, fontSize * 0.16);
+  const coverPaddingEnd = Math.min(3.2, fontSize * 0.18);
   const coverWidth = oldTextWidth + coverPaddingStart + coverPaddingEnd;
   const replacementWidthAtOriginalSize = font.widthOfTextAtSize(replacementText, fontSize);
   let replacementFontSize = Math.min(
-    fontSize * 0.94,
+    fontSize * 0.85,
     replacementWidthAtOriginalSize
-      ? fontSize * ((oldTextWidth + 2) / replacementWidthAtOriginalSize)
-      : fontSize * 0.94
+      ? fontSize * ((oldTextWidth + 1.1) / replacementWidthAtOriginalSize)
+      : fontSize * 0.85
   );
   replacementFontSize = Math.max(Math.min(6, fontSize * 0.82), replacementFontSize);
   let replacementTextWidth = font.widthOfTextAtSize(
@@ -1322,7 +1322,7 @@ function getTextItemReplacementPlacement(textItem, originalText, match, replacem
     replacementFontSize
   );
 
-  while (replacementTextWidth > coverWidth && replacementFontSize > 5) {
+  while (replacementTextWidth > coverWidth && replacementFontSize > 4.0) {
     replacementFontSize -= 0.25;
     replacementTextWidth = font.widthOfTextAtSize(
       replacementText,
@@ -1330,21 +1330,30 @@ function getTextItemReplacementPlacement(textItem, originalText, match, replacem
     );
   }
 
-  const textInset = Math.max(0.8, fontSize * 0.08);
-  const baselineLift = (fontSize - replacementFontSize) * 0.18;
-  const rectNormalPadding = fontSize * 0.24;
-  const rectHeight = fontSize * 1.12;
+  const textInset = Math.max(0.16, fontSize * 0.04);
+  const baselineLift = (fontSize - replacementFontSize) * 0.05;
+  const rectNormalPadding = Math.max(fontSize * 0.14, 2);
+  const itemHeight = Math.max(fontSize, Math.min(Math.abs(textItem.height || fontSize), fontSize * 1.15));
+  const descent = replacementFontSize * 0.22;
+  const verticalPadding = Math.max(fontSize * 0.05, 1.2);
+  const rectHeight = Math.max(replacementFontSize * 1.12 + verticalPadding*2, itemHeight * 1.04 + verticalPadding, fontSize * 1.05 + verticalPadding);
 
   return {
     angle,
     fontSize: replacementFontSize,
     textX: matchBaseX + dirX * textInset + normalX * baselineLift,
-    textY: matchBaseY + dirY * textInset + normalY * baselineLift,
+    textY: matchBaseY + dirY * textInset,
     rectX: matchBaseX - dirX * coverPaddingStart - normalX * rectNormalPadding,
-    rectY: matchBaseY - dirY * coverPaddingStart - normalY * rectNormalPadding,
+    rectY: matchBaseY - normalY * (descent + verticalPadding) - dirY * coverPaddingStart,
     rectWidth: Math.max(coverWidth, replacementTextWidth + coverPaddingStart + coverPaddingEnd),
     rectHeight
   };
+}
+
+function isLikelyInkColor(color) {
+  const brightness = (color.r + color.g + color.b) / 3;
+  const contrast = Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b);
+  return brightness < 205 && contrast > 45;
 }
 
 async function getTextItemBackgroundColor(
@@ -1357,26 +1366,84 @@ async function getTextItemBackgroundColor(
   const sampler = await getPageBackgroundSampler(page, pageIndex, backgroundSamplers);
   if (!sampler) return rgb(1, 1, 1);
 
-  const points = getRotatedPlacementCorners(placement);
-  const colors = points
-    .map(point => sampler.sample(point.x, pageSize.height - point.y))
-    .filter(Boolean);
+  const angle = Number(placement.angle || 0) * Math.PI / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const widthVec = {
+    x: cos * placement.rectWidth,
+    y: sin * placement.rectWidth
+  };
+  const heightVec = {
+    x: -sin * placement.rectHeight,
+    y: cos * placement.rectHeight
+  };
 
-  if (!colors.length) return rgb(1, 1, 1);
+  const outerOffsets = [
+    { u: -0.14, v: 0.5 },
+    { u: 1.14, v: 0.5 },
+    { u: 0.5, v: -0.14 },
+    { u: 0.5, v: 1.14 }
+  ];
+  const innerOffsets = [
+    { u: 0.25, v: 0.25 },
+    { u: 0.75, v: 0.25 },
+    { u: 0.25, v: 0.75 },
+    { u: 0.75, v: 0.75 }
+  ];
 
-  const average = colors.reduce(
-    (sum, color) => ({
-      r: sum.r + color.r,
-      g: sum.g + color.g,
-      b: sum.b + color.b
+  const sampled = [...outerOffsets, ...innerOffsets].map(offset => ({
+    x: placement.rectX + widthVec.x * offset.u + heightVec.x * offset.v,
+    y: placement.rectY + widthVec.y * offset.u + heightVec.y * offset.v,
+    weight: outerOffsets.some(o => o.u === offset.u && o.v === offset.v) ? 1.3 : 1
+  }))
+    .map(point => ({
+      color: sampler.sample(point.x, pageSize.height - point.y),
+      weight: point.weight
+    }))
+    .filter(item => item.color);
+
+  const nonInkSamples = sampled.filter(item => !isLikelyInkColor(item.color));
+  const usefulSamples = nonInkSamples.length ? nonInkSamples : sampled;
+  if (!usefulSamples.length) return rgb(1, 1, 1);
+
+  const scored = usefulSamples
+    .map(item => ({
+      ...item,
+      brightness: (item.color.r + item.color.g + item.color.b) / 3,
+      spread: Math.max(item.color.r, item.color.g, item.color.b) - Math.min(item.color.r, item.color.g, item.color.b)
+    }))
+    .sort((a, b) => {
+      const scoreA = a.brightness - a.spread * 0.3;
+      const scoreB = b.brightness - b.spread * 0.3;
+      return scoreB - scoreA;
+    });
+
+  const topCount = Math.max(1, Math.ceil(scored.length * 0.4));
+  const topColors = scored.slice(0, topCount);
+  const average = topColors.reduce(
+    (sum, sample) => ({
+      r: sum.r + sample.color.r * sample.weight,
+      g: sum.g + sample.color.g * sample.weight,
+      b: sum.b + sample.color.b * sample.weight,
+      w: sum.w + sample.weight
     }),
-    { r: 0, g: 0, b: 0 }
+    { r: 0, g: 0, b: 0, w: 0 }
   );
 
+  const finalColor = {
+    r: average.r / average.w,
+    g: average.g / average.w,
+    b: average.b / average.w
+  };
+
+  if ((finalColor.r + finalColor.g + finalColor.b) / 3 > 247) {
+    return rgb(1, 1, 1);
+  }
+
   return rgb(
-    average.r / colors.length / 255,
-    average.g / colors.length / 255,
-    average.b / colors.length / 255
+    Math.min(1, Math.max(0, finalColor.r / 255)),
+    Math.min(1, Math.max(0, finalColor.g / 255)),
+    Math.min(1, Math.max(0, finalColor.b / 255))
   );
 }
 
