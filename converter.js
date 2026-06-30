@@ -1417,6 +1417,71 @@ function isLikelyInkColor(color) {
   return brightness < 205 && contrast > 45;
 }
 
+function getDominantBackgroundSamples(samples) {
+  if (!samples.length) return [];
+
+  const buckets = new Map();
+  samples.forEach(sample => {
+    const key = getColorBucketKey(sample.color);
+    const bucket = buckets.get(key) || { samples: [], weight: 0 };
+    bucket.samples.push(sample);
+    bucket.weight += sample.weight;
+    buckets.set(key, bucket);
+  });
+
+  const dominant = Array.from(buckets.values())
+    .sort((a, b) => b.weight - a.weight)[0];
+
+  return dominant?.samples?.length
+    ? dominant.samples
+    : samples.slice(0, Math.max(1, Math.ceil(samples.length * 0.4)));
+}
+
+function getColorBucketKey(color) {
+  return [
+    Math.round(color.r / 10) * 10,
+    Math.round(color.g / 10) * 10,
+    Math.round(color.b / 10) * 10
+  ].join("|");
+}
+
+function getBackgroundSampleOffsets() {
+  const offsets = [
+    { u: 0.18, v: 0.5, weight: 4.2, distance: 0 },
+    { u: 0.5, v: 0.5, weight: 4.6, distance: 0 },
+    { u: 0.82, v: 0.5, weight: 4.2, distance: 0 },
+    { u: 0.35, v: 0.32, weight: 3.4, distance: 0.03 },
+    { u: 0.65, v: 0.68, weight: 3.4, distance: 0.03 }
+  ];
+  const rings = [
+    { distance: 0.05, weight: 3.0 },
+    { distance: 0.12, weight: 2.0 },
+    { distance: 0.22, weight: 1.0 }
+  ];
+
+  rings.forEach(ring => {
+    offsets.push(
+      { u: -ring.distance, v: 0.5, weight: ring.weight, distance: ring.distance },
+      { u: 1 + ring.distance, v: 0.5, weight: ring.weight, distance: ring.distance },
+      { u: 0.5, v: -ring.distance, weight: ring.weight, distance: ring.distance },
+      { u: 0.5, v: 1 + ring.distance, weight: ring.weight, distance: ring.distance },
+      { u: -ring.distance, v: -ring.distance, weight: ring.weight * 0.65, distance: ring.distance },
+      { u: 1 + ring.distance, v: -ring.distance, weight: ring.weight * 0.65, distance: ring.distance },
+      { u: -ring.distance, v: 1 + ring.distance, weight: ring.weight * 0.65, distance: ring.distance },
+      { u: 1 + ring.distance, v: 1 + ring.distance, weight: ring.weight * 0.65, distance: ring.distance }
+    );
+  });
+
+  return offsets;
+}
+
+function itemBackgroundScore(sample) {
+  const distancePenalty = Number(sample.distance || 0) * 38;
+  const confidenceBoost = Number(sample.weight || 1) * 5;
+  const inkPenalty = isLikelyInkColor(sample.color) ? 100 : 0;
+  return confidenceBoost - distancePenalty - inkPenalty;
+}
+
 async function getTextItemBackgroundColor(
   page,
   pageIndex,
@@ -1439,31 +1504,16 @@ async function getTextItemBackgroundColor(
     y: cos * placement.rectHeight
   };
 
-  const sampleOffsets = [
-    { u: -0.45, v: 0.5, weight: 2.2 },
-    { u: 1.45, v: 0.5, weight: 2.2 },
-    { u: 0.5, v: -0.45, weight: 2.2 },
-    { u: 0.5, v: 1.45, weight: 2.2 },
-    { u: -0.45, v: -0.45, weight: 1.2 },
-    { u: 1.45, v: -0.45, weight: 1.2 },
-    { u: -0.45, v: 1.45, weight: 1.2 },
-    { u: 1.45, v: 1.45, weight: 1.2 },
-    { u: -0.2, v: 0.5, weight: 1.8 },
-    { u: 1.2, v: 0.5, weight: 1.8 },
-    { u: 0.5, v: -0.2, weight: 1.8 },
-    { u: 0.5, v: 1.2, weight: 1.8 }
-  ];
+  const sampleOffsets = getBackgroundSampleOffsets();
 
-  const samples = sampleOffsets.map(offset => ({
-    x: placement.rectX + widthVec.x * offset.u + heightVec.x * offset.v,
-    y: placement.rectY + widthVec.y * offset.u + heightVec.y * offset.v,
-    weight: offset.weight
-  }))
-    .map(point => ({
-      color: sampler.sample(point.x, pageSize.height - point.y),
-      weight: point.weight
-    }))
-    .filter(item => item.color);
+  const samples = sampleOffsets.flatMap(offset => {
+    const x = placement.rectX + widthVec.x * offset.u + heightVec.x * offset.v;
+    const y = placement.rectY + widthVec.y * offset.u + heightVec.y * offset.v;
+    const patch = sampler.samplePatch(x, pageSize.height - y, Math.max(2, Math.min(5, placement.rectHeight * 0.24)));
+    return patch
+      ? [{ color: patch.color, weight: offset.weight * patch.confidence, distance: offset.distance }]
+      : [];
+  });
 
   if (!samples.length) return rgb(1, 1, 1);
 
@@ -1475,12 +1525,12 @@ async function getTextItemBackgroundColor(
     brightness: (item.color.r + item.color.g + item.color.b) / 3,
     spread: Math.max(item.color.r, item.color.g, item.color.b) - Math.min(item.color.r, item.color.g, item.color.b)
   })).sort((a, b) => {
-    const scoreA = a.brightness - a.spread * 0.3;
-    const scoreB = b.brightness - b.spread * 0.3;
+    const scoreA = itemBackgroundScore(a);
+    const scoreB = itemBackgroundScore(b);
     return scoreB - scoreA;
   });
 
-  const topColors = scored.slice(0, Math.max(1, Math.ceil(scored.length * 0.4)));
+  const topColors = getDominantBackgroundSamples(scored);
   const average = topColors.reduce(
     (sum, sample) => ({
       r: sum.r + sample.color.r * sample.weight,
@@ -1561,7 +1611,7 @@ async function isVisibleTextReplacement(
     height: maxY - minY
   });
 
-  return ratio >= 0.0;
+  return ratio >= 0.025;
 }
 
 async function getPageBackgroundSampler(page, pageIndex, backgroundSamplers) {
@@ -1584,6 +1634,56 @@ async function getPageBackgroundSampler(page, pageIndex, backgroundSamplers) {
         const pixelY = Math.max(0, Math.min(canvas.height - 1, Math.round(y)));
         const [r, g, b] = context.getImageData(pixelX, pixelY, 1, 1).data;
         return { r, g, b };
+      },
+      samplePatch(x, y, size = 5) {
+        const half = Math.max(1, Math.floor(size / 2));
+        const left = Math.max(0, Math.min(canvas.width - 1, Math.round(x) - half));
+        const top = Math.max(0, Math.min(canvas.height - 1, Math.round(y) - half));
+        const width = Math.max(1, Math.min(canvas.width - left, half * 2 + 1));
+        const height = Math.max(1, Math.min(canvas.height - top, half * 2 + 1));
+        const image = context.getImageData(left, top, width, height).data;
+        const colors = [];
+
+        for (let index = 0; index < image.length; index += 4) {
+          const color = {
+            r: image[index],
+            g: image[index + 1],
+            b: image[index + 2]
+          };
+          if (!isLikelyInkColor(color)) {
+            colors.push(color);
+          }
+        }
+
+        if (!colors.length) return null;
+
+        const buckets = new Map();
+        colors.forEach(color => {
+          const key = getColorBucketKey(color);
+          const bucket = buckets.get(key) || { colors: [] };
+          bucket.colors.push(color);
+          buckets.set(key, bucket);
+        });
+        const dominantColors = Array.from(buckets.values())
+          .sort((a, b) => b.colors.length - a.colors.length)[0]?.colors || colors;
+
+        const average = dominantColors.reduce(
+          (sum, color) => ({
+            r: sum.r + color.r,
+            g: sum.g + color.g,
+            b: sum.b + color.b
+          }),
+          { r: 0, g: 0, b: 0 }
+        );
+
+        return {
+          color: {
+            r: average.r / dominantColors.length,
+            g: average.g / dominantColors.length,
+            b: average.b / dominantColors.length
+          },
+          confidence: colors.length / (width * height)
+        };
       },
       inkRatio(rect) {
         const x = Math.max(0, Math.floor(rect.x - 1));
