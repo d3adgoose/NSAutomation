@@ -804,7 +804,7 @@ function skipConverterReplacement(encodedDetail) {
 
   converterActiveReplacementKey = "";
   applyConverterSkipStateImmediately();
-  markConverterSelectionsDirty("Change unselected. Click Done to update the preview.");
+  rebuildConverterAfterSkipChange("Change canceled. It will not be included in the build.");
 }
 
 function restoreConverterReplacement(encodedDetail) {
@@ -815,8 +815,7 @@ function restoreConverterReplacement(encodedDetail) {
   converterSkippedReplacements = converterSkippedReplacements.filter(item => item.key !== key);
 
   converterActiveReplacementKey = key;
-  applyConverterSkipStateImmediately();
-  markConverterSelectionsDirty("Change selected. Click Done to update the preview.");
+  rebuildConverterAfterSkipChange("Change restored. It will be included again.");
 }
 
 function toggleConverterReplacementSkip(encodedDetail) {
@@ -832,36 +831,28 @@ function toggleConverterReplacementSkip(encodedDetail) {
   }
 }
 
-function markConverterSelectionsDirty(message) {
+function rebuildConverterAfterSkipChange(message) {
   converterBuildCache = null;
   converterBuildPromise = null;
   converterRenderedPreviewKey = "";
-  updateConverterStatus(message);
 
-  const status = document.getElementById("converterPreviewModalStatus");
-  if (status) {
-    status.textContent = "Selection updated. Click Done to refresh the converted preview.";
-  }
-}
-
-function applyConverterPreviewSelections() {
-  return runConverterTask(
-    async () => {
-      const status = document.getElementById("converterPreviewModalStatus");
-      if (status) status.textContent = "Applying selected changes...";
-      await refreshOpenConverterAfterPreview();
-      updateConverterStatus("Selected changes applied to the preview. Build will use the same selections.");
-    },
-    "Selected changes could not be applied."
-  );
+  buildConvertedPDFBytes(false)
+    .then(() => {
+      renderConverterPreview();
+      renderConverterPreviewJumpList(converterReplacementDetails);
+      return refreshOpenConverterAfterPreview();
+    })
+    .then(() => updateConverterStatus(message))
+    .catch(error => {
+      console.error("Could not update skipped converter change:", error);
+      updateConverterStatus("Could not update that skipped change. Please try again.");
+    });
 }
 
 function applyConverterSkipStateImmediately() {
   document.querySelectorAll(".converter-preview-highlight").forEach(marker => {
     if (converterSkippedReplacements.some(item => item.key === marker.dataset.replacementKey)) {
-      marker.classList.add("unselected");
-    } else {
-      marker.classList.remove("unselected");
+      marker.classList.add("canceled");
     }
     marker.classList.remove("focused");
   });
@@ -2022,47 +2013,59 @@ function renderConverterPreviewJumpList(details = converterReplacementDetails) {
   const list = document.getElementById("converterPreviewJumpList");
   if (!list) return;
 
-  const orderedChanges = [];
+  const activeChanges = [];
   const seen = new Set();
-  [...details, ...converterSkippedReplacements].forEach(detail => {
+  details.forEach(detail => {
     const key = getConverterReplacementKey(detail);
     if (seen.has(key)) return;
     seen.add(key);
-    orderedChanges.push({ ...detail, key });
+    if (converterSkippedReplacements.some(item => item.key === key)) return;
+    activeChanges.push({ ...detail, key });
   });
+  const skippedChanges = converterSkippedReplacements.filter(detail =>
+    !activeChanges.some(active => active.key === detail.key)
+  );
 
-  if (!orderedChanges.length) {
+  if (!activeChanges.length && !skippedChanges.length) {
     list.innerHTML = "";
     return;
   }
 
   list.innerHTML = `
     <span>Jump to change</span>
-    ${orderedChanges.map(detail => getConverterJumpChipMarkup(detail)).join("")}
-  `;
-}
-
-function getConverterJumpChipMarkup(detail) {
-  const isUnselected = converterSkippedReplacements.some(item => item.key === detail.key);
-  const encoded = encodeConverterReplacementDetail(detail);
-
-  return `
-    <span class="converter-jump-chip ${isUnselected ? "unselected" : ""} ${detail.key === converterActiveReplacementKey ? "active" : ""}" data-replacement-key="${escapeConverterHTML(detail.key)}">
-      <button
-        type="button"
-        ${isUnselected ? "disabled" : `onclick="focusConverterReplacement('${encoded}')"` }
-      >
-        ${getConverterJumpChipHTML(detail)}
-      </button>
-      <button
-        class="${isUnselected ? "converter-jump-select" : "converter-jump-unselect"}"
-        type="button"
-        title="${isUnselected ? "Select this replacement" : "Unselect this replacement"}"
-        onclick="${isUnselected ? "restoreConverterReplacement" : "skipConverterReplacement"}('${encoded}')"
-      >
-        ${isUnselected ? "Select" : "Unselect"}
-      </button>
-    </span>
+    ${activeChanges.map(detail => `
+      <span class="converter-jump-chip">
+        <button
+          type="button"
+          onclick="focusConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+        >
+          ${getConverterJumpChipHTML(detail)}
+        </button>
+        <button
+          class="converter-jump-cancel"
+          type="button"
+          title="Cancel this replacement"
+          onclick="skipConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+        >
+          Cancel
+        </button>
+      </span>
+    `).join("")}
+    ${skippedChanges.map(detail => `
+      <span class="converter-jump-chip skipped">
+        <button type="button" disabled>
+          ${getConverterJumpChipHTML(detail)}
+        </button>
+        <button
+          class="converter-jump-restore"
+          type="button"
+          title="Restore this replacement"
+          onclick="restoreConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+        >
+          Restore
+        </button>
+      </span>
+    `).join("")}
   `;
 }
 
@@ -2099,20 +2102,7 @@ function focusConverterReplacement(encodedDetail) {
   converterActiveReplacementKey = detail.key || getConverterReplacementKey(detail);
   document.querySelectorAll(".converter-preview-highlight.focused")
     .forEach(item => item.classList.remove("focused"));
-  document.querySelectorAll(".converter-jump-chip.active")
-    .forEach(item => item.classList.remove("active"));
-  const chip = Array.from(document.querySelectorAll(".converter-jump-chip"))
-    .find(item => item.dataset.replacementKey === converterActiveReplacementKey);
-  if (chip) {
-    chip.classList.add("active");
-    chip.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-      inline: "center"
-    });
-  }
-  const marker = Array.from(document.querySelectorAll(".converter-preview-highlight"))
-    .find(item => item.dataset.replacementKey === converterActiveReplacementKey);
+  const marker = document.querySelector(`.converter-preview-highlight[data-replacement-key="${converterActiveReplacementKey}"]`);
   if (marker) {
     marker.classList.add("focused");
     marker.closest(".converter-preview-page-wrap")?.scrollIntoView({
@@ -2160,7 +2150,7 @@ async function refreshOpenConverterAfterPreview() {
   const afterContainer = document.getElementById("converterAfterPreview");
   if (!afterContainer) return;
 
-  if (status) status.textContent = "Updating preview with selected changes...";
+  if (status) status.textContent = "Updating after preview with manual edit...";
   const result = await buildConvertedPDFBytes(false);
   if (!result) return;
 
@@ -2356,8 +2346,8 @@ function renderConverterPreviewHighlights(pageWrap, viewport, pageNumber, highli
     marker.className = `converter-preview-highlight ${highlightType}`;
     marker.dataset.oldPart = detail.oldPart;
     marker.dataset.replacementKey = getConverterReplacementKey(detail);
-    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to show this change in the top bar.`;
-    marker.onclick = () => focusConverterReplacement(encodeConverterReplacementDetail(detail));
+    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to cancel this replacement.`;
+    marker.onclick = () => skipConverterReplacement(encodeConverterReplacementDetail(detail));
     if (marker.dataset.replacementKey === converterActiveReplacementKey) {
       marker.classList.add("focused");
     }
