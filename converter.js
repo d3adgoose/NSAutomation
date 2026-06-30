@@ -1,5 +1,6 @@
 let converterPdfFile = null;
 let converterExcelFile = null;
+let converterExcelFiles = [];
 let converterMap = [];
 let converterMatches = [];
 let converterChangedPages = [];
@@ -11,8 +12,11 @@ let converterRenderedPreviewKey = "";
 let converterManualOverrides = [];
 let converterLastScannedPages = [];
 let converterLastOcrPages = [];
+let converterPreviewFocusPage = null;
+let converterSkippedReplacements = [];
+let converterActiveReplacementKey = "";
 
-const { PDFDocument, StandardFonts, rgb } = PDFLib;
+const { PDFDocument, StandardFonts, degrees, rgb } = PDFLib;
 
 document.addEventListener("DOMContentLoaded", () => {
   const pdfInput = document.getElementById("converterPdfUpload");
@@ -29,7 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (excelInput) {
     excelInput.addEventListener("change", event => {
-      setConverterExcelFile(event.target.files[0]);
+      setConverterExcelFiles(Array.from(event.target.files || []));
     });
   }
 
@@ -53,7 +57,8 @@ function setupConverterDropZone(dropZone, expectedType) {
     event.preventDefault();
     dropZone.classList.remove("dragover");
 
-    const file = event.dataTransfer.files[0];
+    const files = Array.from(event.dataTransfer.files || []);
+    const file = files[0];
     if (!file) return;
 
     if (expectedType === "pdf") {
@@ -61,7 +66,7 @@ function setupConverterDropZone(dropZone, expectedType) {
     }
 
     if (expectedType === "excel") {
-      setConverterExcelFile(file);
+      setConverterExcelFiles(files);
     }
   });
 }
@@ -87,6 +92,9 @@ function setConverterPdfFile(file) {
   converterManualOverrides = [];
   converterLastScannedPages = [];
   converterLastOcrPages = [];
+  converterPreviewFocusPage = null;
+  converterSkippedReplacements = [];
+  converterActiveReplacementKey = "";
 
   const selected = document.getElementById("selectedConverterPdf");
   if (selected) {
@@ -98,22 +106,23 @@ function setConverterPdfFile(file) {
 }
 
 function setConverterExcelFile(file) {
-  if (!file) return;
+  setConverterExcelFiles(file ? [file] : []);
+}
 
-  const name = file.name.toLowerCase();
+function setConverterExcelFiles(files) {
+  const incomingFiles = Array.from(files || []).filter(file => {
+    const name = file.name.toLowerCase();
+    return name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv");
+  });
 
-  if (
-    !(
-      name.endsWith(".xlsx") ||
-      name.endsWith(".xls") ||
-      name.endsWith(".csv")
-    )
-  ) {
-    alert("Please drop or choose an Excel file in the Excel box.");
+  if (!incomingFiles.length) {
+    alert("Please drop or choose one or more Excel or CSV files in the Excel box.");
     return;
   }
 
-  converterExcelFile = file;
+  const validFiles = mergeConverterExcelFiles(converterExcelFiles, incomingFiles);
+  converterExcelFiles = validFiles;
+  converterExcelFile = validFiles[0];
   converterMap = [];
   converterMatches = [];
   converterChangedPages = [];
@@ -125,16 +134,49 @@ function setConverterExcelFile(file) {
   converterManualOverrides = [];
   converterLastScannedPages = [];
   converterLastOcrPages = [];
+  converterPreviewFocusPage = null;
+  converterSkippedReplacements = [];
+  converterActiveReplacementKey = "";
 
   const selected = document.getElementById("selectedConverterExcel");
   if (selected) {
-    selected.textContent = `Selected Excel: ${file.name}`;
+    selected.innerHTML = `
+      <span class="selected-excel-summary">
+        ${validFiles.length === 1 ? "1 Excel file selected" : `${validFiles.length} Excel files selected`}
+      </span>
+      <span class="selected-excel-list">
+        ${validFiles.map((file, index) => `
+          <span class="selected-excel-chip">
+            <span>${index + 1}</span>
+            ${escapeConverterHTML(file.name)}
+          </span>
+        `).join("")}
+      </span>
+    `;
   }
 
   resetConverterPreview();
   updateConverterStatus();
+
+  const excelInput = document.getElementById("converterExcelUpload");
+  if (excelInput) excelInput.value = "";
 }
 
+function mergeConverterExcelFiles(existingFiles, incomingFiles) {
+  const filesByKey = new Map();
+  [...existingFiles, ...incomingFiles].forEach(file => {
+    filesByKey.set(getConverterExcelFileKey(file), file);
+  });
+  return Array.from(filesByKey.values());
+}
+
+function getConverterExcelFileKey(file) {
+  return [
+    file.name,
+    file.size,
+    file.lastModified || 0
+  ].join("|");
+}
 function updateConverterStatus(message = "") {
   const status = document.getElementById("converterStatus");
   if (!status) return;
@@ -148,8 +190,8 @@ function updateConverterStatus(message = "") {
     ? `PDF: ${converterPdfFile.name}`
     : "No PDF selected";
 
-  const excelText = converterExcelFile
-    ? `Excel: ${converterExcelFile.name}`
+  const excelText = converterExcelFiles.length
+    ? `Excel: ${converterExcelFiles.length === 1 ? converterExcelFiles[0].name : `${converterExcelFiles.length} files`}`
     : "No Excel selected";
 
   const foundCount = converterMatches.filter(match => (match.foundPages || []).length || (match.ocrFoundPages || []).length).length;
@@ -174,53 +216,104 @@ function runConverterTask(task, failureMessage) {
 }
 
 async function readExcelConverterMap() {
-  if (!converterExcelFile) {
+  if (!converterExcelFiles.length && converterExcelFile) {
+    converterExcelFiles = [converterExcelFile];
+  }
+
+  if (!converterExcelFiles.length) {
     alert("Upload an Excel file first.");
     return [];
   }
 
-  const buffer = await converterExcelFile.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
-  const firstSheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[firstSheetName];
+  const combinedMap = [];
 
-  const rows = XLSX.utils.sheet_to_json(worksheet, {
-    defval: ""
+  for (const file of converterExcelFiles) {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+
+    workbook.SheetNames.forEach(sheetName => {
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, {
+        defval: ""
+      });
+
+      rows.forEach(row => {
+        const oldPart = getExcelRowValue(row, [
+          "Old/Obsolete Part Number",
+          "Old/Obsolete Part #",
+          "Old/Obsolete Part#",
+          "Old Obsolete Part Number",
+          "Old Obsolete Part #",
+          "Old / Obsolete Part Number",
+          "Old / Obsolete Part #",
+          "Old/Obsolete PN",
+          "Old/Obsolete PN #",
+          "Obsolete Part Number",
+          "Obsolete Part #",
+          "Obsolete Part#",
+          "Obsolete PN",
+          "Obsolete PN #",
+          "Obsolete Item Number",
+          "Old Part #",
+          "Old Part#",
+          "Old Part Number",
+          "Old Part",
+          "Old PN",
+          "Old PN #"
+        ]);
+
+        const itemCode = getExcelRowValue(row, [
+          "New Part Number",
+          "New Part #",
+          "New Part#",
+          "New Part",
+          "New PN",
+          "New PN #",
+          "New Item Number",
+          "Item Code",
+          "ItemCode",
+          "Item #",
+          "Item Number",
+          "Part #",
+          "Part Number"
+        ]);
+
+        if (oldPart && itemCode && oldPart !== itemCode) {
+          combinedMap.push({
+            oldPart,
+            itemCode,
+            sourceFile: file.name,
+            sourceSheet: sheetName
+          });
+        }
+      });
+    });
+  }
+
+  const seen = new Set();
+  converterMap = combinedMap.filter(item => {
+    const key = `${item.oldPart}=>${item.itemCode}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
-
-  const map = rows
-    .map(row => {
-      const oldPart =
-        row["Old Part #"] ||
-        row["Old Part#"] ||
-        row["Old Part Number"] ||
-        row["Old Part"] ||
-        "";
-
-      const itemCode =
-        row["Item Code"] ||
-        row["ItemCode"] ||
-        row["Item #"] ||
-        row["Item Number"] ||
-        row["New Part #"] ||
-        row["New Part#"] ||
-        row["New Part Number"] ||
-        row["New Part"] ||
-        row["Part #"] ||
-        row["Part Number"] ||
-        "";
-
-      return {
-        oldPart: String(oldPart).trim(),
-        itemCode: String(itemCode).trim()
-      };
-    })
-    .filter(item => item.oldPart && item.itemCode);
-
-  converterMap = map;
-  return map;
+  return converterMap;
 }
 
+function getExcelRowValue(row, aliases) {
+  const normalizedAliases = aliases.map(normalizeExcelHeader);
+  const matchKey = Object.keys(row).find(key => normalizedAliases.includes(normalizeExcelHeader(key)));
+  return matchKey ? String(row[matchKey] || "").trim() : "";
+}
+
+function normalizeExcelHeader(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[#/\\]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 async function extractPDFTextByPage(file) {
   const bytes = await file.arrayBuffer();
 
@@ -500,7 +593,7 @@ async function previewPartNumberChangesScan() {
     return;
   }
 
-  if (!converterExcelFile) {
+  if (!converterExcelFiles.length && !converterExcelFile) {
     alert("Upload an Excel file first.");
     return;
   }
@@ -511,7 +604,7 @@ async function previewPartNumberChangesScan() {
 
   if (!map.length) {
     updateConverterStatus("No Old Part # / Item Code or New Part # rows found in the Excel file.");
-    alert("No valid rows found. Make sure the Excel columns include Old Part # and either Item Code or New Part #.");
+    alert("No valid rows found. Make sure the Excel columns include Old Part # / Item Code, or Old/Obsolete Part Number / New Part Number.");
     return;
   }
 
@@ -551,7 +644,14 @@ async function previewPartNumberChangesScan() {
   updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}`);
 
   if (getDetectedChangeRows().some(row => !row.locationText.includes("drawing OCR"))) {
-    warmConverterBuildCache();
+    updateConverterStatus("Confirming visible replacements...");
+    await buildConvertedPDFBytes(false);
+    renderConverterPreview();
+    updateConverterStatus(
+      converterReplacementDetails.length
+        ? `Preview complete. Confirmed ${converterReplacementDetails.length} visible replacement(s).`
+        : "Preview complete. No visible replacement areas were confirmed."
+    );
   }
 }
 
@@ -609,14 +709,17 @@ function getConverterPageRows() {
     converterMatches.forEach(match => {
       const pdfPage = (match.foundPageCounts || []).find(page => page.pageNumber === pageNumber);
       if (pdfPage) {
-        changes.push({
-          pageNumber,
-          oldPart: match.oldPart,
-          itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
-          count: pdfPage.count,
-          source: "PDF text",
-          locationText: `${pdfPage.count} PDF text mention(s)`
-        });
+        const visibleCount = getVisibleConverterReplacementCount(pageNumber, match.oldPart);
+        if (!hasVisibleReplacementFilter() || visibleCount > 0) {
+          changes.push({
+            pageNumber,
+            oldPart: match.oldPart,
+            itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
+            count: visibleCount || pdfPage.count,
+            source: "PDF text",
+            locationText: `${visibleCount || pdfPage.count} visible PDF text mention(s)`
+          });
+        }
       }
 
       const hasPdfMatch = Boolean(pdfPage);
@@ -635,6 +738,126 @@ function getConverterPageRows() {
 
     return { pageNumber, changes };
   });
+}
+
+function hasVisibleReplacementFilter() {
+  return Boolean(converterBuildCache || converterReplacementDetails.length);
+}
+
+function getVisibleConverterReplacementCount(pageNumber, oldPart) {
+  return converterReplacementDetails.filter(detail =>
+    detail.pageNumber === pageNumber &&
+    detail.oldPart === oldPart &&
+    !isConverterReplacementSkipped(detail)
+  ).length;
+}
+
+function getConverterReplacementKey(detail) {
+  return [
+    detail.pageNumber,
+    detail.oldPart,
+    detail.itemCode,
+    Math.round(Number(detail.rectX || 0) * 10) / 10,
+    Math.round(Number(detail.rectY || 0) * 10) / 10,
+    Math.round(Number(detail.rectWidth || 0) * 10) / 10,
+    Math.round(Number(detail.rectHeight || 0) * 10) / 10,
+    Math.round(Number(detail.angle || 0))
+  ].join("|");
+}
+
+function isConverterReplacementSkipped(detail) {
+  const key = getConverterReplacementKey(detail);
+  return converterSkippedReplacements.some(item => item.key === key);
+}
+
+function encodeConverterReplacementDetail(detail) {
+  return encodeURIComponent(JSON.stringify({
+    key: getConverterReplacementKey(detail),
+    pageNumber: detail.pageNumber,
+    oldPart: detail.oldPart,
+    itemCode: detail.itemCode,
+    rectX: detail.rectX,
+    rectY: detail.rectY,
+    rectWidth: detail.rectWidth,
+    rectHeight: detail.rectHeight,
+    angle: detail.angle || 0
+  }));
+}
+
+function decodeConverterReplacementDetail(encodedDetail) {
+  try {
+    return JSON.parse(decodeURIComponent(encodedDetail));
+  } catch (error) {
+    console.warn("Could not read converter replacement detail:", error);
+    return null;
+  }
+}
+
+function skipConverterReplacement(encodedDetail) {
+  const detail = decodeConverterReplacementDetail(encodedDetail);
+  if (!detail) return;
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  if (!converterSkippedReplacements.some(item => item.key === key)) {
+    converterSkippedReplacements.push({ ...detail, key });
+  }
+
+  converterActiveReplacementKey = "";
+  applyConverterSkipStateImmediately();
+  rebuildConverterAfterSkipChange("Change canceled. It will not be included in the build.");
+}
+
+function restoreConverterReplacement(encodedDetail) {
+  const detail = decodeConverterReplacementDetail(encodedDetail);
+  if (!detail) return;
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  converterSkippedReplacements = converterSkippedReplacements.filter(item => item.key !== key);
+
+  converterActiveReplacementKey = key;
+  rebuildConverterAfterSkipChange("Change restored. It will be included again.");
+}
+
+function toggleConverterReplacementSkip(encodedDetail) {
+  const detail = decodeConverterReplacementDetail(encodedDetail);
+  if (!detail) return;
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  const isSkipped = converterSkippedReplacements.some(item => item.key === key);
+  if (isSkipped) {
+    restoreConverterReplacement(encodedDetail);
+  } else {
+    skipConverterReplacement(encodedDetail);
+  }
+}
+
+function rebuildConverterAfterSkipChange(message) {
+  converterBuildCache = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
+
+  buildConvertedPDFBytes(false)
+    .then(() => {
+      renderConverterPreview();
+      renderConverterPreviewJumpList(converterReplacementDetails);
+      return refreshOpenConverterAfterPreview();
+    })
+    .then(() => updateConverterStatus(message))
+    .catch(error => {
+      console.error("Could not update skipped converter change:", error);
+      updateConverterStatus("Could not update that skipped change. Please try again.");
+    });
+}
+
+function applyConverterSkipStateImmediately() {
+  document.querySelectorAll(".converter-preview-highlight").forEach(marker => {
+    if (converterSkippedReplacements.some(item => item.key === marker.dataset.replacementKey)) {
+      marker.classList.add("canceled");
+    }
+    marker.classList.remove("focused");
+  });
+  renderConverterPreviewJumpList(converterReplacementDetails);
+  renderConverterPreview();
 }
 
 function renderConverterPreview() {
@@ -672,7 +895,11 @@ function renderConverterPreview() {
 
     row.className = "converter-page-change-row";
     row.innerHTML = `
-      <td>${pageRow.pageNumber}</td>
+      <td>
+        <button class="converter-page-jump-btn" type="button" onclick="openConverterPdfPreview(${pageRow.pageNumber})">
+          ${pageRow.pageNumber}
+        </button>
+      </td>
       <td>${escapeConverterHTML(oldSummary)}</td>
       <td>${escapeConverterHTML(newSummary)}</td>
       <td>
@@ -703,7 +930,13 @@ function renderConverterPreview() {
                 value="${escapeConverterHTML(change.itemCode)}"
                 onchange="updateConverterManualPart('${escapeConverterHTML(change.oldPart)}', this.value)"
               />
-              <span>${escapeConverterHTML(change.locationText)}</span>
+              <button
+                class="converter-change-preview-btn"
+                type="button"
+                onclick="openConverterPdfPreview(${change.pageNumber}, decodeURIComponent('${encodeURIComponent(change.oldPart)}'))"
+              >
+                ${escapeConverterHTML(change.locationText)}
+              </button>
             </label>
           `).join("")}
         </div>
@@ -800,7 +1033,7 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
     return null;
   }
 
-  if (!converterExcelFile) {
+  if (!converterExcelFiles.length && !converterExcelFile) {
     alert("Upload an Excel file first.");
     return null;
   }
@@ -906,53 +1139,74 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
       const replacements = getTextItemReplacements(text, map);
       if (!replacements.length) continue;
 
-      const replacementText = applyTextItemReplacements(text, replacements);
       const replacementFont = getReplacementFont(textItem, fonts);
-      const placement = getTextItemReplacementPlacement(
-        textItem,
-        text,
-        replacementText,
-        replacementFont
-      );
-      const backgroundColor = await getTextItemBackgroundColor(
-        page,
-        pageIndex,
-        placement,
-        pageSize,
-        backgroundSamplers
-      );
 
-      pdfLibPage.drawRectangle({
-        x: placement.rectX,
-        y: placement.rectY,
-        width: placement.rectWidth,
-        height: placement.rectHeight,
-        color: backgroundColor
-      });
+      for (const replacement of replacements) {
+        for (const match of replacement.matches) {
+          const placement = getTextItemReplacementPlacement(
+            textItem,
+            text,
+            match,
+            replacement.itemCode,
+            replacementFont
+          );
+          const isVisible = await isVisibleTextReplacement(
+            page,
+            pageIndex,
+            placement,
+            pageSize,
+            backgroundSamplers
+          );
+          if (!isVisible) continue;
 
-      pdfLibPage.drawText(replacementText, {
-        x: placement.textX,
-        y: placement.textY,
-        size: placement.fontSize,
-        font: replacementFont,
-        color: rgb(0, 0, 0)
-      });
+          const replacementDetail = {
+            pageNumber: pageIndex + 1,
+            oldPart: replacement.oldPart,
+            itemCode: replacement.itemCode,
+            rectX: placement.rectX,
+            rectY: placement.rectY,
+            rectWidth: placement.rectWidth,
+            rectHeight: placement.rectHeight,
+            angle: placement.angle
+          };
+          if (isConverterReplacementSkipped(replacementDetail)) continue;
 
-      replacements.forEach(replacement => {
-        replacement.matches.forEach(() => {
+          const backgroundColor = await getTextItemBackgroundColor(
+            page,
+            pageIndex,
+            placement,
+            pageSize,
+            backgroundSamplers
+          );
+          const rotate = degrees(placement.angle);
+
+          pdfLibPage.drawRectangle({
+            x: placement.rectX,
+            y: placement.rectY,
+            width: placement.rectWidth,
+            height: placement.rectHeight,
+            rotate,
+            color: backgroundColor
+          });
+
+          pdfLibPage.drawText(replacement.itemCode, {
+            x: placement.textX,
+            y: placement.textY,
+            size: placement.fontSize,
+            font: replacementFont,
+            rotate,
+            color: rgb(0, 0, 0)
+          });
+
           replacementCount++;
           expectedReplacementCounts.set(
             replacement.oldPart,
             (expectedReplacementCounts.get(replacement.oldPart) || 0) + 1
           );
           changedPages.add(pageIndex + 1);
-          replacementDetails.push({
-            pageNumber: pageIndex + 1,
-            oldPart: replacement.oldPart,
-            itemCode: replacement.itemCode
-          });
-        });
-      });
+          replacementDetails.push(replacementDetail);
+        }
+      }
     }
   }
 
@@ -1007,13 +1261,6 @@ function getTextItemReplacements(text, map) {
     .filter(item => item.matches.length > 0);
 }
 
-function applyTextItemReplacements(text, replacements) {
-  return replacements.reduce(
-    (result, item) => result.split(item.oldPart).join(item.itemCode),
-    text
-  );
-}
-
 function getReplacementFont(textItem, fonts) {
   const fontName = String(textItem.fontName || "").toLowerCase();
 
@@ -1029,19 +1276,47 @@ function getReplacementFont(textItem, fonts) {
   return fonts.regular;
 }
 
-function getTextItemReplacementPlacement(textItem, originalText, replacementText, font) {
+function getTextItemReplacementPlacement(textItem, originalText, match, replacementText, font) {
   const transform = textItem.transform || [1, 0, 0, 8, 0, 0];
+  const [a = 1, b = 0, c = 0, d = 8] = transform;
   const baseX = transform[4] || 0;
   const baseY = transform[5] || 0;
   const fontSize = Math.max(
     6,
-    Math.abs(transform[3]) || Math.abs(transform[0]) || textItem.height || 8
+    Math.hypot(c, d) || Math.hypot(a, b) || textItem.height || 8
   );
   const pdfTextWidth = textItem.width || 0;
   const measuredFullWidth = font.widthOfTextAtSize(originalText, fontSize);
-  const usableTextWidth = pdfTextWidth || measuredFullWidth;
-  const coverWidth = usableTextWidth + 2;
-  let replacementFontSize = fontSize;
+  const widthScale = measuredFullWidth
+    ? Math.max((pdfTextWidth || measuredFullWidth) / measuredFullWidth, 0.9)
+    : 1;
+  const prefixText = originalText.slice(0, match.startIndex);
+  const oldText = originalText.slice(match.startIndex, match.endIndex);
+  const prefixWidth = font.widthOfTextAtSize(prefixText, fontSize) * widthScale;
+  const oldTextWidth = Math.max(
+    font.widthOfTextAtSize(oldText, fontSize) * widthScale,
+    oldText.length * fontSize * 0.52,
+    4
+  );
+  const angle = Math.atan2(b, a) * 180 / Math.PI;
+  const textVectorLength = Math.hypot(a, b) || 1;
+  const dirX = a / textVectorLength;
+  const dirY = b / textVectorLength;
+  const normalX = -dirY;
+  const normalY = dirX;
+  const matchBaseX = baseX + dirX * prefixWidth;
+  const matchBaseY = baseY + dirY * prefixWidth;
+  const coverPaddingStart = 3.5;
+  const coverPaddingEnd = 8;
+  const coverWidth = oldTextWidth + coverPaddingStart + coverPaddingEnd;
+  const replacementWidthAtOriginalSize = font.widthOfTextAtSize(replacementText, fontSize);
+  let replacementFontSize = Math.min(
+    fontSize * 0.94,
+    replacementWidthAtOriginalSize
+      ? fontSize * ((oldTextWidth + 2) / replacementWidthAtOriginalSize)
+      : fontSize * 0.94
+  );
+  replacementFontSize = Math.max(Math.min(6, fontSize * 0.82), replacementFontSize);
   let replacementTextWidth = font.widthOfTextAtSize(
     replacementText,
     replacementFontSize
@@ -1055,14 +1330,20 @@ function getTextItemReplacementPlacement(textItem, originalText, replacementText
     );
   }
 
+  const textInset = Math.max(0.8, fontSize * 0.08);
+  const baselineLift = (fontSize - replacementFontSize) * 0.18;
+  const rectNormalPadding = fontSize * 0.24;
+  const rectHeight = fontSize * 1.12;
+
   return {
+    angle,
     fontSize: replacementFontSize,
-    textX: baseX,
-    textY: baseY + (fontSize - replacementFontSize) * 0.35,
-    rectX: baseX - 1,
-    rectY: baseY - (fontSize * 0.22),
-    rectWidth: Math.max(coverWidth, replacementTextWidth + 2),
-    rectHeight: fontSize * 1.08
+    textX: matchBaseX + dirX * textInset + normalX * baselineLift,
+    textY: matchBaseY + dirY * textInset + normalY * baselineLift,
+    rectX: matchBaseX - dirX * coverPaddingStart - normalX * rectNormalPadding,
+    rectY: matchBaseY - dirY * coverPaddingStart - normalY * rectNormalPadding,
+    rectWidth: Math.max(coverWidth, replacementTextWidth + coverPaddingStart + coverPaddingEnd),
+    rectHeight
   };
 }
 
@@ -1076,15 +1357,7 @@ async function getTextItemBackgroundColor(
   const sampler = await getPageBackgroundSampler(page, pageIndex, backgroundSamplers);
   if (!sampler) return rgb(1, 1, 1);
 
-  const points = [
-    { x: placement.rectX + 1, y: placement.rectY + 1 },
-    { x: placement.rectX + placement.rectWidth - 1, y: placement.rectY + 1 },
-    { x: placement.rectX + 1, y: placement.rectY + placement.rectHeight - 1 },
-    {
-      x: placement.rectX + placement.rectWidth - 1,
-      y: placement.rectY + placement.rectHeight - 1
-    }
-  ];
+  const points = getRotatedPlacementCorners(placement);
   const colors = points
     .map(point => sampler.sample(point.x, pageSize.height - point.y))
     .filter(Boolean);
@@ -1107,6 +1380,61 @@ async function getTextItemBackgroundColor(
   );
 }
 
+function getRotatedPlacementCorners(placement) {
+  const angle = Number(placement.angle || 0) * Math.PI / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const normalX = -sin;
+  const normalY = cos;
+  const start = { x: placement.rectX, y: placement.rectY };
+  const end = {
+    x: start.x + cos * placement.rectWidth,
+    y: start.y + sin * placement.rectWidth
+  };
+
+  return [
+    start,
+    end,
+    {
+      x: end.x + normalX * placement.rectHeight,
+      y: end.y + normalY * placement.rectHeight
+    },
+    {
+      x: start.x + normalX * placement.rectHeight,
+      y: start.y + normalY * placement.rectHeight
+    }
+  ];
+}
+
+async function isVisibleTextReplacement(
+  page,
+  pageIndex,
+  placement,
+  pageSize,
+  backgroundSamplers
+) {
+  const sampler = await getPageBackgroundSampler(page, pageIndex, backgroundSamplers);
+  if (!sampler?.inkRatio) return true;
+
+  const corners = getRotatedPlacementCorners(placement)
+    .map(point => ({
+      x: point.x,
+      y: pageSize.height - point.y
+    }));
+  const minX = Math.min(...corners.map(point => point.x));
+  const maxX = Math.max(...corners.map(point => point.x));
+  const minY = Math.min(...corners.map(point => point.y));
+  const maxY = Math.max(...corners.map(point => point.y));
+  const ratio = sampler.inkRatio({
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY
+  });
+
+  return ratio >= 0.025;
+}
+
 async function getPageBackgroundSampler(page, pageIndex, backgroundSamplers) {
   if (backgroundSamplers.has(pageIndex)) {
     return backgroundSamplers.get(pageIndex);
@@ -1127,6 +1455,30 @@ async function getPageBackgroundSampler(page, pageIndex, backgroundSamplers) {
         const pixelY = Math.max(0, Math.min(canvas.height - 1, Math.round(y)));
         const [r, g, b] = context.getImageData(pixelX, pixelY, 1, 1).data;
         return { r, g, b };
+      },
+      inkRatio(rect) {
+        const x = Math.max(0, Math.floor(rect.x - 1));
+        const y = Math.max(0, Math.floor(rect.y - 1));
+        const width = Math.max(1, Math.min(canvas.width - x, Math.ceil(rect.width + 2)));
+        const height = Math.max(1, Math.min(canvas.height - y, Math.ceil(rect.height + 2)));
+        const image = context.getImageData(x, y, width, height).data;
+        let inkPixels = 0;
+        const totalPixels = width * height;
+
+        for (let index = 0; index < image.length; index += 4) {
+          const r = image[index];
+          const g = image[index + 1];
+          const b = image[index + 2];
+          const alpha = image[index + 3];
+          const brightness = (r + g + b) / 3;
+          const colorSpread = Math.max(r, g, b) - Math.min(r, g, b);
+
+          if (alpha > 20 && (brightness < 245 || colorSpread > 18)) {
+            inkPixels++;
+          }
+        }
+
+        return inkPixels / totalPixels;
       }
     };
 
@@ -1337,7 +1689,11 @@ function findExactMatchesInTextItem(text, oldPart) {
   return matches;
 }
 
-function openConverterPdfPreview() {
+function openConverterPdfPreview(pageNumber = null, oldPart = "") {
+  converterPreviewFocusPage = pageNumber
+    ? { pageNumber, oldPart: String(oldPart || "") }
+    : null;
+
   return runConverterTask(
     openConverterPdfPreviewImpl,
     "PDF preview could not be created."
@@ -1350,7 +1706,7 @@ async function openConverterPdfPreviewImpl() {
     return;
   }
 
-  if (!converterExcelFile) {
+  if (!converterExcelFiles.length && !converterExcelFile) {
     alert("Upload an Excel file first.");
     return;
   }
@@ -1359,9 +1715,11 @@ async function openConverterPdfPreviewImpl() {
   const status = document.getElementById("converterPreviewModalStatus");
   const beforeContainer = document.getElementById("converterBeforePreview");
   const afterContainer = document.getElementById("converterAfterPreview");
+  const jumpList = document.getElementById("converterPreviewJumpList");
 
   if (modal) modal.classList.remove("hidden");
   if (status) status.textContent = "Building before and after preview...";
+  if (jumpList) jumpList.innerHTML = "";
 
   if (!getDetectedChangeRows().length) {
     if (status) status.textContent = "Scanning for detected changes first...";
@@ -1384,6 +1742,7 @@ async function openConverterPdfPreviewImpl() {
   const pagesToPreview = result.changedPages.length
     ? result.changedPages
     : getPreviewPagesFromMatches();
+  renderConverterPreviewJumpList(result.replacementDetails || []);
   const previewKey = getConverterPreviewKey(result, pagesToPreview);
 
   if (
@@ -1396,14 +1755,21 @@ async function openConverterPdfPreviewImpl() {
         ? `Preview ready. Showing cached changed page(s): ${pagesToPreview.join(", ")}.`
         : "Preview ready. No changed pages were found.";
     }
+    focusConverterPreviewSelection();
     return;
   }
 
   if (beforeContainer) beforeContainer.innerHTML = "";
   if (afterContainer) afterContainer.innerHTML = "";
 
-  await renderPdfPreviewBytes(originalBytes, beforeContainer, pagesToPreview);
-  await renderPdfPreviewBytes(result.bytes, afterContainer, pagesToPreview);
+  await renderPdfPreviewBytes(originalBytes, beforeContainer, pagesToPreview, {
+    highlights: result.replacementDetails || [],
+    highlightType: "before"
+  });
+  await renderPdfPreviewBytes(result.bytes, afterContainer, pagesToPreview, {
+    highlights: result.replacementDetails || [],
+    highlightType: "after"
+  });
   converterRenderedPreviewKey = previewKey;
 
   if (status) {
@@ -1411,14 +1777,132 @@ async function openConverterPdfPreviewImpl() {
       ? `Preview ready. Showing changed page(s): ${pagesToPreview.join(", ")}.`
       : "Preview ready. No changed pages were found.";
   }
+  focusConverterPreviewSelection();
+}
+
+function renderConverterPreviewJumpList(details = converterReplacementDetails) {
+  const list = document.getElementById("converterPreviewJumpList");
+  if (!list) return;
+
+  const activeChanges = [];
+  const seen = new Set();
+  details.forEach(detail => {
+    const key = getConverterReplacementKey(detail);
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (converterSkippedReplacements.some(item => item.key === key)) return;
+    activeChanges.push({ ...detail, key });
+  });
+  const skippedChanges = converterSkippedReplacements.filter(detail =>
+    !activeChanges.some(active => active.key === detail.key)
+  );
+
+  if (!activeChanges.length && !skippedChanges.length) {
+    list.innerHTML = "";
+    return;
+  }
+
+  list.innerHTML = `
+    <span>Jump to change</span>
+    ${activeChanges.map(detail => `
+      <span class="converter-jump-chip">
+        <button
+          type="button"
+          onclick="focusConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+        >
+          ${getConverterJumpChipHTML(detail)}
+        </button>
+        <button
+          class="converter-jump-cancel"
+          type="button"
+          title="Cancel this replacement"
+          onclick="skipConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+        >
+          Cancel
+        </button>
+      </span>
+    `).join("")}
+    ${skippedChanges.map(detail => `
+      <span class="converter-jump-chip skipped">
+        <button type="button" disabled>
+          ${getConverterJumpChipHTML(detail)}
+        </button>
+        <button
+          class="converter-jump-restore"
+          type="button"
+          title="Restore this replacement"
+          onclick="restoreConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+        >
+          Restore
+        </button>
+      </span>
+    `).join("")}
+  `;
+}
+
+function getConverterJumpChipHTML(detail) {
+  return `
+    <span class="converter-jump-page">Page ${detail.pageNumber}</span>
+    <span class="converter-jump-change">
+      <span>${escapeConverterHTML(detail.oldPart)}</span>
+      <span>${escapeConverterHTML(detail.itemCode)}</span>
+    </span>
+  `;
+}
+
+function scrollConverterPreviewToChange(pageNumber, oldPart = "") {
+  const pageWrap = document.querySelector(`.converter-preview-page-wrap[data-page-number="${pageNumber}"]`);
+  if (!pageWrap) return;
+
+  document.querySelectorAll(".converter-preview-highlight.focused")
+    .forEach(item => item.classList.remove("focused"));
+
+  const highlights = Array.from(pageWrap.querySelectorAll(".converter-preview-highlight"));
+  const highlight = oldPart
+    ? highlights.find(item => item.dataset.oldPart === oldPart)
+    : highlights[0];
+  highlight?.classList.add("focused");
+
+  pageWrap.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function focusConverterReplacement(encodedDetail) {
+  const detail = decodeConverterReplacementDetail(encodedDetail);
+  if (!detail) return;
+
+  converterActiveReplacementKey = detail.key || getConverterReplacementKey(detail);
+  document.querySelectorAll(".converter-preview-highlight.focused")
+    .forEach(item => item.classList.remove("focused"));
+  const marker = document.querySelector(`.converter-preview-highlight[data-replacement-key="${converterActiveReplacementKey}"]`);
+  if (marker) {
+    marker.classList.add("focused");
+    marker.closest(".converter-preview-page-wrap")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+    return;
+  }
+
+  scrollConverterPreviewToChange(detail.pageNumber, detail.oldPart);
+}
+
+function focusConverterPreviewSelection() {
+  if (!converterPreviewFocusPage) return;
+
+  requestAnimationFrame(() => {
+    scrollConverterPreviewToChange(
+      converterPreviewFocusPage.pageNumber,
+      converterPreviewFocusPage.oldPart
+    );
+  });
 }
 
 function getConverterPreviewKey(result, pagesToPreview) {
   return [
     converterPdfFile?.name || "",
     converterPdfFile?.size || 0,
-    converterExcelFile?.name || "",
-    converterExcelFile?.size || 0,
+    converterExcelFiles.map(file => file.name).join(",") || converterExcelFile?.name || "",
+    converterExcelFiles.reduce((sum, file) => sum + file.size, 0) || converterExcelFile?.size || 0,
     result.bytes?.byteLength || result.bytes?.length || 0,
     pagesToPreview.join(",")
   ].join("|");
@@ -1433,6 +1917,7 @@ async function refreshOpenConverterAfterPreview() {
   if (!modal || modal.classList.contains("hidden")) return;
 
   const status = document.getElementById("converterPreviewModalStatus");
+  const beforeContainer = document.getElementById("converterBeforePreview");
   const afterContainer = document.getElementById("converterAfterPreview");
   if (!afterContainer) return;
 
@@ -1444,8 +1929,21 @@ async function refreshOpenConverterAfterPreview() {
     ? result.changedPages
     : getPreviewPagesFromMatches();
 
+  const originalBytes = await converterPdfFile.arrayBuffer();
+  if (beforeContainer) {
+    beforeContainer.innerHTML = "";
+    await renderPdfPreviewBytes(originalBytes, beforeContainer, pagesToPreview, {
+      highlights: result.replacementDetails || [],
+      highlightType: "before"
+    });
+  }
+
   afterContainer.innerHTML = "";
-  await renderPdfPreviewBytes(result.bytes, afterContainer, pagesToPreview);
+  await renderPdfPreviewBytes(result.bytes, afterContainer, pagesToPreview, {
+    highlights: result.replacementDetails || [],
+    highlightType: "after"
+  });
+  renderConverterPreviewJumpList(result.replacementDetails || []);
   converterRenderedPreviewKey = "";
 
   if (status) {
@@ -1463,7 +1961,7 @@ function getPreviewPagesFromMatches() {
   ).sort((a, b) => a - b);
 }
 
-async function renderPdfPreviewBytes(bytes, container, pageNumbers = []) {
+async function renderPdfPreviewBytes(bytes, container, pageNumbers = [], options = {}) {
   if (!container) return;
 
   const pdf = await pdfjsLib.getDocument({
@@ -1484,17 +1982,32 @@ async function renderPdfPreviewBytes(bytes, container, pageNumbers = []) {
     label.textContent = `Page ${pageNumber}`;
     container.appendChild(label);
 
+    const pageWrap = document.createElement("div");
+    pageWrap.className = "converter-preview-page-wrap";
+    pageWrap.dataset.pageNumber = String(pageNumber);
+    pageWrap.style.width = `${viewport.width}px`;
+    pageWrap.style.maxWidth = "100%";
+
     const canvas = document.createElement("canvas");
     canvas.className = "converter-preview-page";
     canvas.width = viewport.width;
     canvas.height = viewport.height;
 
-    container.appendChild(canvas);
+    pageWrap.appendChild(canvas);
+    container.appendChild(pageWrap);
 
     await page.render({
       canvasContext: canvas.getContext("2d", { willReadFrequently: true }),
       viewport
     }).promise;
+
+    renderConverterPreviewHighlights(
+      pageWrap,
+      viewport,
+      pageNumber,
+      options.highlights || [],
+      options.highlightType || "after"
+    );
   }
 
   if (!pageNumbers.length && pdf.numPages > pagesToRender.length) {
@@ -1507,6 +2020,7 @@ async function renderPdfPreviewBytes(bytes, container, pageNumbers = []) {
 function clearConverterFiles() {
   converterPdfFile = null;
   converterExcelFile = null;
+  converterExcelFiles = [];
   converterMap = [];
   converterMatches = [];
   converterChangedPages = [];
@@ -1518,6 +2032,9 @@ function clearConverterFiles() {
   converterManualOverrides = [];
   converterLastScannedPages = [];
   converterLastOcrPages = [];
+  converterPreviewFocusPage = null;
+  converterSkippedReplacements = [];
+  converterActiveReplacementKey = "";
 
   const pdfInput = document.getElementById("converterPdfUpload");
   const excelInput = document.getElementById("converterExcelUpload");
@@ -1532,6 +2049,7 @@ function clearConverterFiles() {
 
   document.getElementById("converterBeforePreview")?.replaceChildren();
   document.getElementById("converterAfterPreview")?.replaceChildren();
+  document.getElementById("converterPreviewJumpList")?.replaceChildren();
 
   resetConverterPreview();
   updateConverterStatus("No files selected yet.");
@@ -1581,9 +2099,65 @@ function escapeConverterHTML(value) {
     .replaceAll("'", "&#039;");
 }
 
+function renderConverterPreviewHighlights(pageWrap, viewport, pageNumber, highlights, highlightType) {
+  const pageHighlights = highlights.filter(detail =>
+    detail.pageNumber === pageNumber &&
+    Number.isFinite(detail.rectX) &&
+    Number.isFinite(detail.rectY) &&
+    Number.isFinite(detail.rectWidth) &&
+    Number.isFinite(detail.rectHeight)
+  );
 
+  pageHighlights.forEach(detail => {
+    const polygon = getConverterPreviewHighlightPolygon(detail, viewport);
+    if (!polygon) return;
 
+    const marker = document.createElement("button");
+    marker.type = "button";
+    marker.className = `converter-preview-highlight ${highlightType}`;
+    marker.dataset.oldPart = detail.oldPart;
+    marker.dataset.replacementKey = getConverterReplacementKey(detail);
+    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to cancel this replacement.`;
+    marker.onclick = () => skipConverterReplacement(encodeConverterReplacementDetail(detail));
+    if (marker.dataset.replacementKey === converterActiveReplacementKey) {
+      marker.classList.add("focused");
+    }
+    marker.style.left = `${(polygon.left / viewport.width) * 100}%`;
+    marker.style.top = `${(polygon.top / viewport.height) * 100}%`;
+    marker.style.width = `${(polygon.width / viewport.width) * 100}%`;
+    marker.style.height = `${(polygon.height / viewport.height) * 100}%`;
+    marker.style.clipPath = polygon.clipPath;
+    pageWrap.appendChild(marker);
+  });
+}
 
+function getConverterPreviewHighlightPolygon(detail, viewport) {
+  const corners = getRotatedPlacementCorners(detail)
+    .map(point => {
+      const [x, y] = viewport.convertToViewportPoint(point.x, point.y);
+      return { x, y };
+    });
+  const minX = Math.min(...corners.map(point => point.x));
+  const maxX = Math.max(...corners.map(point => point.x));
+  const minY = Math.min(...corners.map(point => point.y));
+  const maxY = Math.max(...corners.map(point => point.y));
+  const width = Math.max(maxX - minX, 10);
+  const height = Math.max(maxY - minY, 10);
 
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
 
+  const points = corners.map(point => {
+    const x = ((point.x - minX) / width) * 100;
+    const y = ((point.y - minY) / height) * 100;
+    return `${x.toFixed(2)}% ${y.toFixed(2)}%`;
+  });
+
+  return {
+    left: minX,
+    top: minY,
+    width,
+    height,
+    clipPath: `polygon(${points.join(", ")})`
+  };
+}
 
