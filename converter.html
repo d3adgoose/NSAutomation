@@ -150,24 +150,30 @@
       <p id="converterPreviewModalStatus" class="warranty-status">
         Preview not loaded yet.
       </p>
-      <div id="converterPreviewJumpList" class="converter-preview-jump-list"></div>
-      <div id="converterAfterEditPanel" class="converter-after-edit-panel"></div>
 
-      <div class="converter-preview-grid">
-        <div>
-          <h3>Before</h3>
-          <div id="converterBeforePreview"></div>
-        </div>
+      <div class="converter-preview-layout">
+        <div class="converter-preview-main">
+          <div id="converterPreviewJumpList" class="converter-preview-jump-list"></div>
+          <div id="converterAfterEditPanel" class="converter-after-edit-panel"></div>
 
-        <div>
-          <h3>After</h3>
-          <div id="converterAfterPreview"></div>
+          <div class="converter-preview-grid">
+            <div>
+              <h3>Before</h3>
+              <div id="converterBeforePreview"></div>
+            </div>
+
+            <div>
+              <h3>After</h3>
+              <div id="converterAfterPreview"></div>
+            </div>
+          </div>
+
         </div>
-      </div>
+        <aside id="converterPlacementEditor" class="converter-placement-editor hidden"></aside>
+        </div>
 
       <div class="button-row">
-        <button onclick="applyConverterPreviewSelections()">Done</button>
-        <button class="secondary" onclick="closeConverterPdfPreview()">Close</button>
+        <button class="secondary" onclick="closeConverterPdfPreview()">Done</button>
       </div>
     </div>
   </div>

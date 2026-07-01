@@ -10,11 +10,16 @@ let converterScanPromise = null;
 let converterBuildPromise = null;
 let converterRenderedPreviewKey = "";
 let converterManualOverrides = [];
+let converterDraftManualOverrides = [];
 let converterLastScannedPages = [];
 let converterLastOcrPages = [];
 let converterPreviewFocusPage = null;
 let converterSkippedReplacements = [];
 let converterActiveReplacementKey = "";
+let converterPlacementAdjustments = [];
+let converterDraftPlacementAdjustments = [];
+let converterPlacementRepeatDelay = null;
+let converterPlacementRepeatTimer = null;
 
 const { PDFDocument, StandardFonts, degrees, rgb } = PDFLib;
 
@@ -90,11 +95,14 @@ function setConverterPdfFile(file) {
   converterBuildPromise = null;
   converterRenderedPreviewKey = "";
   converterManualOverrides = [];
+  converterDraftManualOverrides = [];
   converterLastScannedPages = [];
   converterLastOcrPages = [];
   converterPreviewFocusPage = null;
   converterSkippedReplacements = [];
   converterActiveReplacementKey = "";
+  converterPlacementAdjustments = [];
+  converterDraftPlacementAdjustments = [];
 
   const selected = document.getElementById("selectedConverterPdf");
   if (selected) {
@@ -132,11 +140,14 @@ function setConverterExcelFiles(files) {
   converterBuildPromise = null;
   converterRenderedPreviewKey = "";
   converterManualOverrides = [];
+  converterDraftManualOverrides = [];
   converterLastScannedPages = [];
   converterLastOcrPages = [];
   converterPreviewFocusPage = null;
   converterSkippedReplacements = [];
   converterActiveReplacementKey = "";
+  converterPlacementAdjustments = [];
+  converterDraftPlacementAdjustments = [];
 
   const selected = document.getElementById("selectedConverterExcel");
   if (selected) {
@@ -491,6 +502,12 @@ function getManualConverterValue(oldPart) {
   return converterManualOverrides.find(item => item.oldPart === oldPart)?.itemCode || "";
 }
 
+function getDraftConverterValue(oldPart) {
+  const draftValue = converterDraftManualOverrides.find(item => item.oldPart === oldPart)?.itemCode;
+  if (draftValue) return draftValue;
+  return getManualConverterValue(oldPart);
+}
+
 function getEffectiveConverterMap(baseMap = converterMap) {
   return baseMap.map(item => {
     const manualValue = getManualConverterValue(item.oldPart);
@@ -517,6 +534,21 @@ function updateConverterManualPart(oldPart, value) {
     console.error("After preview refresh failed:", error);
   });
   updateConverterStatus("Manual new part number saved. Build and preview will use the edited value.");
+}
+
+function updateConverterDraftPart(oldPart, value) {
+  const itemCode = String(value || "").trim();
+  converterDraftManualOverrides = converterDraftManualOverrides.filter(item => item.oldPart !== oldPart);
+  if (itemCode) converterDraftManualOverrides.push({ oldPart, itemCode });
+
+  const detail = converterReplacementDetails.find(item => item.oldPart === oldPart);
+  if (detail) {
+    renderConverterPlacementEditor({ ...detail, key: getConverterReplacementKey(detail) });
+  }
+  converterBuildCache = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
+  updateConverterStatus("Preview number edited. Click Done to apply it.");
 }
 
 
@@ -753,6 +785,9 @@ function getVisibleConverterReplacementCount(pageNumber, oldPart) {
 }
 
 function getConverterReplacementKey(detail) {
+  if (detail.baseKey) return detail.baseKey;
+  if (detail.key) return detail.key;
+
   return [
     detail.pageNumber,
     detail.oldPart,
@@ -763,6 +798,112 @@ function getConverterReplacementKey(detail) {
     Math.round(Number(detail.rectHeight || 0) * 10) / 10,
     Math.round(Number(detail.angle || 0))
   ].join("|");
+}
+
+function getConverterPlacementAdjustment(key, source = converterDraftPlacementAdjustments) {
+  let adjustment = source.find(item => item.key === key);
+  if (!adjustment) {
+    adjustment = {
+      key,
+      dx: 0,
+      dy: 0,
+      dw: 0,
+      dh: 0,
+      fontDelta: 0
+    };
+    source.push(adjustment);
+  }
+  return adjustment;
+}
+
+function applyConverterPlacementAdjustment(key, placement, source = converterDraftPlacementAdjustments) {
+  const adjustment = source.find(item => item.key === key);
+  if (!adjustment) return placement;
+
+  const angle = Number(placement.angle || 0) * Math.PI / 180;
+  const dirX = Math.cos(angle);
+  const dirY = Math.sin(angle);
+  const normalX = -dirY;
+  const normalY = dirX;
+  const dx = Number(adjustment.dx || 0);
+  const dy = Number(adjustment.dy || 0);
+  const dw = Number(adjustment.dw || 0);
+  const dh = Number(adjustment.dh || 0);
+  const fontDelta = Number(adjustment.fontDelta || 0);
+  const baseTextX = Number.isFinite(Number(placement.textX)) ? Number(placement.textX) : Number(placement.rectX || 0);
+  const baseTextY = Number.isFinite(Number(placement.textY)) ? Number(placement.textY) : Number(placement.rectY || 0);
+  const baseFontSize = Number.isFinite(Number(placement.fontSize))
+    ? Number(placement.fontSize)
+    : Math.max(4, Number(placement.rectHeight || 8) * 0.8);
+
+  return {
+    ...placement,
+    textX: baseTextX + dx,
+    textY: baseTextY + dy,
+    rectX: placement.rectX + dx - dirX * Math.min(0, dw / 2) - normalX * Math.min(0, dh / 2),
+    rectY: placement.rectY + dy - dirY * Math.min(0, dw / 2) - normalY * Math.min(0, dh / 2),
+    rectWidth: Math.max(4, Number(placement.rectWidth || 0) + dw),
+    rectHeight: Math.max(4, Number(placement.rectHeight || 0) + dh),
+    fontSize: Math.max(4, baseFontSize + fontDelta)
+  };
+}
+
+function adjustConverterPlacement(encodedDetail, changes) {
+  const detail = decodeConverterReplacementDetail(encodedDetail);
+  if (!detail) return;
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  const adjustment = getConverterPlacementAdjustment(key, converterDraftPlacementAdjustments);
+  Object.entries(changes || {}).forEach(([name, amount]) => {
+    adjustment[name] = Number(adjustment[name] || 0) + Number(amount || 0);
+  });
+
+  converterActiveReplacementKey = key;
+  renderConverterPlacementEditor({ ...detail, key });
+  refreshConverterDraftHighlights();
+  updateConverterStatus("Preview edit ready. Click Done to apply it.");
+}
+
+function startConverterPlacementRepeat(encodedDetail, changes, event = null) {
+  if (event) {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+  }
+
+  stopConverterPlacementRepeat();
+  adjustConverterPlacement(encodedDetail, changes);
+
+  converterPlacementRepeatDelay = setTimeout(() => {
+    converterPlacementRepeatTimer = setInterval(() => {
+      adjustConverterPlacement(encodedDetail, changes);
+    }, 85);
+  }, 280);
+
+  window.addEventListener("pointerup", stopConverterPlacementRepeat, { once: true });
+  window.addEventListener("pointercancel", stopConverterPlacementRepeat, { once: true });
+}
+
+function stopConverterPlacementRepeat() {
+  if (converterPlacementRepeatDelay) {
+    clearTimeout(converterPlacementRepeatDelay);
+    converterPlacementRepeatDelay = null;
+  }
+  if (converterPlacementRepeatTimer) {
+    clearInterval(converterPlacementRepeatTimer);
+    converterPlacementRepeatTimer = null;
+  }
+}
+
+function resetConverterPlacement(encodedDetail) {
+  const detail = decodeConverterReplacementDetail(encodedDetail);
+  if (!detail) return;
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  converterDraftPlacementAdjustments = converterDraftPlacementAdjustments.filter(item => item.key !== key);
+  converterActiveReplacementKey = key;
+  renderConverterPlacementEditor({ ...detail, key });
+  refreshConverterDraftHighlights();
+  updateConverterStatus("Preview edit reset. Click Done to apply current edits.");
 }
 
 function isConverterReplacementSkipped(detail) {
@@ -1139,16 +1280,7 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
         replacement,
         replacementFont
       );
-      const isVisible = await isVisibleTextReplacement(
-        page,
-        pageIndex,
-        placement,
-        pageSize,
-        backgroundSamplers
-      );
-      if (!isVisible) continue;
-
-      const replacementDetail = {
+      const baseDetail = {
         pageNumber: pageIndex + 1,
         oldPart: replacement.oldPart,
         itemCode: replacement.itemCode,
@@ -1158,31 +1290,56 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
         rectHeight: placement.rectHeight,
         angle: placement.angle
       };
+      const baseKey = getConverterReplacementKey(baseDetail);
+      const adjustedPlacement = applyConverterPlacementAdjustment(baseKey, placement, converterPlacementAdjustments);
+      const isVisible = await isVisibleTextReplacement(
+        page,
+        pageIndex,
+        adjustedPlacement,
+        pageSize,
+        backgroundSamplers
+      );
+      if (!isVisible) continue;
+
+      const replacementDetail = {
+        pageNumber: pageIndex + 1,
+        oldPart: replacement.oldPart,
+        itemCode: replacement.itemCode,
+        baseKey,
+        textX: adjustedPlacement.textX,
+        textY: adjustedPlacement.textY,
+        fontSize: adjustedPlacement.fontSize,
+        rectX: adjustedPlacement.rectX,
+        rectY: adjustedPlacement.rectY,
+        rectWidth: adjustedPlacement.rectWidth,
+        rectHeight: adjustedPlacement.rectHeight,
+        angle: adjustedPlacement.angle
+      };
       if (isConverterReplacementSkipped(replacementDetail)) continue;
 
       const backgroundColor = await getTextItemBackgroundColor(
         page,
         pageIndex,
-        placement,
+        adjustedPlacement,
         pageSize,
         backgroundSamplers
       );
-      const rotate = degrees(placement.angle);
+      const rotate = degrees(adjustedPlacement.angle);
 
       pdfLibPage.drawRectangle({
-        x: placement.rectX,
-        y: placement.rectY,
-        width: placement.rectWidth,
-        height: placement.rectHeight,
+        x: adjustedPlacement.rectX,
+        y: adjustedPlacement.rectY,
+        width: adjustedPlacement.rectWidth,
+        height: adjustedPlacement.rectHeight,
         rotate,
         color: backgroundColor,
         opacity: 1
       });
 
       pdfLibPage.drawText(replacement.itemCode, {
-        x: placement.textX,
-        y: placement.textY,
-        size: placement.fontSize,
+        x: adjustedPlacement.textX,
+        y: adjustedPlacement.textY,
+        size: adjustedPlacement.fontSize,
         font: replacementFont,
         rotate,
         color: rgb(0, 0, 0)
@@ -1949,6 +2106,7 @@ async function openConverterPdfPreviewImpl() {
   if (modal) modal.classList.remove("hidden");
   if (status) status.textContent = "Building before and after preview...";
   if (jumpList) jumpList.innerHTML = "";
+  renderConverterPlacementEditor();
 
   if (!getDetectedChangeRows().length) {
     if (status) status.textContent = "Scanning for detected changes first...";
@@ -2099,10 +2257,17 @@ function focusConverterReplacement(encodedDetail) {
   const detail = decodeConverterReplacementDetail(encodedDetail);
   if (!detail) return;
 
+  syncConverterDraftManualOverrides();
   converterActiveReplacementKey = detail.key || getConverterReplacementKey(detail);
+  if (!converterDraftPlacementAdjustments.some(item => item.key === converterActiveReplacementKey)) {
+    const applied = converterPlacementAdjustments.find(item => item.key === converterActiveReplacementKey);
+    if (applied) converterDraftPlacementAdjustments.push({ ...applied });
+  }
   document.querySelectorAll(".converter-preview-highlight.focused")
     .forEach(item => item.classList.remove("focused"));
-  const marker = document.querySelector(`.converter-preview-highlight[data-replacement-key="${converterActiveReplacementKey}"]`);
+  const marker = Array.from(document.querySelectorAll(".converter-preview-highlight"))
+    .find(item => item.dataset.replacementKey === converterActiveReplacementKey);
+  renderConverterPlacementEditor({ ...detail, key: converterActiveReplacementKey });
   if (marker) {
     marker.classList.add("focused");
     marker.closest(".converter-preview-page-wrap")?.scrollIntoView({
@@ -2113,6 +2278,210 @@ function focusConverterReplacement(encodedDetail) {
   }
 
   scrollConverterPreviewToChange(detail.pageNumber, detail.oldPart);
+}
+
+function syncConverterDraftManualOverrides() {
+  if (!converterDraftManualOverrides.length && converterManualOverrides.length) {
+    converterDraftManualOverrides = converterManualOverrides.map(item => ({ ...item }));
+  }
+}
+
+function renderConverterPlacementEditor(detail = null) {
+  const panel = document.getElementById("converterPlacementEditor");
+  if (!panel) return;
+
+  if (!detail) {
+    panel.classList.remove("hidden");
+    panel.innerHTML = `
+      <div class="converter-placement-summary">
+        <span>Preview Edit</span>
+        <strong>Select a change chip or highlight to edit its preview placement.</strong>
+      </div>
+    `;
+    return;
+  }
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  const adjustment = converterDraftPlacementAdjustments.find(item => item.key === key) || {};
+  const encoded = encodeConverterReplacementDetail({ ...detail, key });
+
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <div class="converter-placement-summary">
+      <span>Preview Edit</span>
+      <strong>Page ${detail.pageNumber}: ${escapeConverterHTML(detail.oldPart)} to ${escapeConverterHTML(detail.itemCode)}</strong>
+    </div>
+    <div class="converter-placement-controls">
+      <div class="converter-placement-group">
+        <span>Move</span>
+        <div class="converter-nudge-grid">
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dy: 0.5 })">Up</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dx: -0.5 })">Left</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dx: 0.5 })">Right</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dy: -0.5 })">Down</button>
+        </div>
+      </div>
+      <div class="converter-placement-group">
+        <span>Text</span>
+        <div class="converter-button-pair">
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { fontDelta: -0.25 })">Smaller</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { fontDelta: 0.25 })">Larger</button>
+        </div>
+      </div>
+      <div class="converter-placement-group">
+        <span>Cover</span>
+        <div class="converter-button-pair">
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dw: -1 })">Narrower</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dw: 1 })">Wider</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dh: -0.5 })">Shorter</button>
+          <button type="button" onclick="adjustConverterPlacement('${encoded}', { dh: 0.5 })">Taller</button>
+        </div>
+      </div>
+      <button class="secondary converter-placement-reset" type="button" onclick="resetConverterPlacement('${encoded}')">Reset</button>
+    </div>
+    <div class="converter-placement-values">
+      These controls only edit the preview. Click Done to apply.
+      Move X ${formatConverterAdjustment(adjustment.dx)} / Y ${formatConverterAdjustment(adjustment.dy)}
+      · Text ${formatConverterAdjustment(adjustment.fontDelta)}
+      · Cover W ${formatConverterAdjustment(adjustment.dw)} / H ${formatConverterAdjustment(adjustment.dh)}
+    </div>
+  `;
+}
+
+function formatConverterAdjustment(value) {
+  const number = Number(value || 0);
+  return number > 0 ? `+${number.toFixed(2)}` : number.toFixed(2);
+}
+
+function renderConverterPlacementEditorV2(detail = null) {
+  const panel = document.getElementById("converterPlacementEditor");
+  if (!panel) return;
+
+  if (!detail) {
+    panel.classList.remove("hidden");
+    panel.innerHTML = `
+      <div class="converter-editor-empty">
+        <span>Preview edit</span>
+        <strong>Select a change chip or highlight</strong>
+        <p>Use the side panel to review the replacement and fine tune its preview placement before clicking Done.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const key = detail.key || getConverterReplacementKey(detail);
+  const adjustment = converterDraftPlacementAdjustments.find(item => item.key === key) || {};
+  const encoded = encodeConverterReplacementDetail({ ...detail, key });
+  const adjustedDetail = applyConverterPlacementAdjustment(key, detail, converterDraftPlacementAdjustments);
+  const sizePreview = Number(adjustedDetail.fontSize || detail.fontSize || detail.rectHeight || 10);
+  const previewFontSize = Math.max(13, Math.min(22, sizePreview * 1.4));
+  const draftItemCode = getDraftConverterValue(detail.oldPart) || detail.itemCode;
+
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <div class="converter-editor-header">
+      <span>Preview edit</span>
+      <strong>Page ${detail.pageNumber}</strong>
+    </div>
+    <div class="converter-editor-card">
+      <span class="converter-editor-label">Before</span>
+      <div class="converter-editor-before">${escapeConverterHTML(detail.oldPart)}</div>
+      <span class="converter-editor-label">After</span>
+      <input
+        class="converter-editor-after"
+        style="font-size:${previewFontSize}px"
+        value="${escapeConverterHTML(draftItemCode)}"
+        onchange="updateConverterDraftPart('${escapeConverterHTML(detail.oldPart)}', this.value)"
+      />
+    </div>
+    <p class="converter-editor-note">
+      These are preview-only edits. The PDF is updated after you click Done.
+    </p>
+    <div class="converter-placement-controls">
+      <div class="converter-placement-group">
+        <span>Position</span>
+        <div class="converter-nudge-grid">
+          <button class="converter-nudge-up" type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dy: 0.5 }, event)" title="Hold to move up">Up</button>
+          <button class="converter-nudge-left" type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dx: -0.5 }, event)" title="Hold to move left">Left</button>
+          <button class="converter-nudge-right" type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dx: 0.5 }, event)" title="Hold to move right">Right</button>
+          <button class="converter-nudge-down" type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dy: -0.5 }, event)" title="Hold to move down">Down</button>
+        </div>
+      </div>
+      <div class="converter-placement-group">
+        <span>Text size</span>
+        <div class="converter-button-pair">
+          <button type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { fontDelta: -0.25 }, event)" title="Hold to shrink text">Smaller</button>
+          <button type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { fontDelta: 0.25 }, event)" title="Hold to enlarge text">Larger</button>
+        </div>
+      </div>
+      <div class="converter-placement-group">
+        <span>Cover box</span>
+        <div class="converter-button-pair converter-cover-row">
+          <button type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dw: -1 }, event)" title="Hold to make cover narrower">Narrower</button>
+          <button type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dw: 1 }, event)" title="Hold to make cover wider">Wider</button>
+        </div>
+        <div class="converter-button-pair converter-cover-row">
+          <button type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dh: -0.5 }, event)" title="Hold to make cover shorter">Shorter</button>
+          <button type="button" onpointerdown="startConverterPlacementRepeat('${encoded}', { dh: 0.5 }, event)" title="Hold to make cover taller">Taller</button>
+        </div>
+      </div>
+      <button class="secondary converter-placement-reset" type="button" onclick="resetConverterPlacement('${encoded}')">Reset</button>
+    </div>
+    <div class="converter-placement-values">
+      Move X ${formatConverterAdjustment(adjustment.dx)} / Y ${formatConverterAdjustment(adjustment.dy)}
+      / Text ${formatConverterAdjustment(adjustment.fontDelta)}
+      / Cover W ${formatConverterAdjustment(adjustment.dw)} / H ${formatConverterAdjustment(adjustment.dh)}
+    </div>
+  `;
+}
+
+renderConverterPlacementEditor = renderConverterPlacementEditorV2;
+
+function refreshConverterDraftHighlights() {
+  document.querySelectorAll(".converter-preview-page-wrap").forEach(pageWrap => {
+    const pageNumber = Number(pageWrap.dataset.pageNumber);
+    const canvas = pageWrap.querySelector("canvas");
+    if (!pageNumber || !canvas) return;
+
+    pageWrap.querySelectorAll(".converter-preview-highlight, .converter-draft-cover, .converter-draft-box-sizing, .converter-draft-text").forEach(item => item.remove());
+    const scale = Number(pageWrap.dataset.viewportScale || 0.8);
+    const viewport = {
+      width: canvas.width,
+      height: canvas.height,
+      convertToViewportPoint(x, y) {
+        return [x * scale, canvas.height - y * scale];
+      }
+    };
+    renderConverterPreviewHighlights(
+      pageWrap,
+      viewport,
+      pageNumber,
+      getConverterDraftReplacementDetails(),
+      pageWrap.closest("#converterBeforePreview") ? "before" : "after"
+    );
+  });
+}
+
+function getConverterDraftReplacementDetails() {
+  return converterReplacementDetails.map(detail => {
+    const key = getConverterReplacementKey(detail);
+    const adjustedDetail = applyConverterPlacementAdjustment(key, detail, converterDraftPlacementAdjustments);
+    return {
+      ...detail,
+      originalTextX: detail.textX,
+      originalTextY: detail.textY,
+      originalFontSize: detail.fontSize,
+      originalRectX: detail.rectX,
+      originalRectY: detail.rectY,
+      originalRectWidth: detail.rectWidth,
+      originalRectHeight: detail.rectHeight,
+      originalAngle: detail.angle,
+      ...adjustedDetail,
+      itemCode: getDraftConverterValue(detail.oldPart) || detail.itemCode,
+      key,
+      baseKey: key
+    };
+  });
 }
 
 function focusConverterPreviewSelection() {
@@ -2139,6 +2508,22 @@ function getConverterPreviewKey(result, pagesToPreview) {
 
 function closeConverterPdfPreview() {
   document.getElementById("converterPreviewModal")?.classList.add("hidden");
+}
+
+function applyConverterPreviewSelections() {
+  converterManualOverrides = converterDraftManualOverrides.map(item => ({ ...item }));
+  converterPlacementAdjustments = converterDraftPlacementAdjustments.map(item => ({ ...item }));
+  converterBuildCache = null;
+  converterBuildPromise = null;
+  converterRenderedPreviewKey = "";
+
+  return runConverterTask(
+    async () => {
+      await refreshOpenConverterAfterPreview();
+      updateConverterStatus("Preview edits applied. Build will use the current preview edits.");
+    },
+    "Preview edits could not be applied."
+  );
 }
 
 async function refreshOpenConverterAfterPreview() {
@@ -2214,6 +2599,7 @@ async function renderPdfPreviewBytes(bytes, container, pageNumbers = [], options
     const pageWrap = document.createElement("div");
     pageWrap.className = "converter-preview-page-wrap";
     pageWrap.dataset.pageNumber = String(pageNumber);
+    pageWrap.dataset.viewportScale = String(viewport.scale || 0.8);
     pageWrap.style.width = `${viewport.width}px`;
     pageWrap.style.maxWidth = "100%";
 
@@ -2259,11 +2645,14 @@ function clearConverterFiles() {
   converterBuildPromise = null;
   converterRenderedPreviewKey = "";
   converterManualOverrides = [];
+  converterDraftManualOverrides = [];
   converterLastScannedPages = [];
   converterLastOcrPages = [];
   converterPreviewFocusPage = null;
   converterSkippedReplacements = [];
   converterActiveReplacementKey = "";
+  converterPlacementAdjustments = [];
+  converterDraftPlacementAdjustments = [];
 
   const pdfInput = document.getElementById("converterPdfUpload");
   const excelInput = document.getElementById("converterExcelUpload");
@@ -2340,23 +2729,215 @@ function renderConverterPreviewHighlights(pageWrap, viewport, pageNumber, highli
   pageHighlights.forEach(detail => {
     const polygon = getConverterPreviewHighlightPolygon(detail, viewport);
     if (!polygon) return;
+    const hasDraftPreview = highlightType === "after" && isConverterDraftPreviewDifferent(detail);
 
+    if (hasDraftPreview) {
+      renderConverterDraftReplacementPreview(pageWrap, viewport, detail, polygon);
+    }
+
+    const markerPolygon = hasDraftPreview
+      ? getConverterPreviewTextPolygon(pageWrap, viewport, detail) || polygon
+      : polygon;
     const marker = document.createElement("button");
     marker.type = "button";
     marker.className = `converter-preview-highlight ${highlightType}`;
     marker.dataset.oldPart = detail.oldPart;
     marker.dataset.replacementKey = getConverterReplacementKey(detail);
-    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to cancel this replacement.`;
-    marker.onclick = () => skipConverterReplacement(encodeConverterReplacementDetail(detail));
+    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to edit this preview placement.`;
+    marker.onclick = () => focusConverterReplacement(encodeConverterReplacementDetail(detail));
     if (marker.dataset.replacementKey === converterActiveReplacementKey) {
       marker.classList.add("focused");
     }
-    marker.style.left = `${(polygon.left / viewport.width) * 100}%`;
-    marker.style.top = `${(polygon.top / viewport.height) * 100}%`;
-    marker.style.width = `${(polygon.width / viewport.width) * 100}%`;
-    marker.style.height = `${(polygon.height / viewport.height) * 100}%`;
-    marker.style.clipPath = polygon.clipPath;
+    if (hasDraftPreview) marker.classList.add("text-fit");
+    marker.style.left = `${(markerPolygon.left / viewport.width) * 100}%`;
+    marker.style.top = `${(markerPolygon.top / viewport.height) * 100}%`;
+    marker.style.width = `${(markerPolygon.width / viewport.width) * 100}%`;
+    marker.style.height = `${(markerPolygon.height / viewport.height) * 100}%`;
+    marker.style.clipPath = markerPolygon.clipPath;
     pageWrap.appendChild(marker);
+  });
+}
+
+function isConverterDraftPreviewDifferent(detail) {
+  const checks = [
+    ["itemCode", ""],
+    ["textX", "originalTextX"],
+    ["textY", "originalTextY"],
+    ["fontSize", "originalFontSize"],
+    ["rectX", "originalRectX"],
+    ["rectY", "originalRectY"],
+    ["rectWidth", "originalRectWidth"],
+    ["rectHeight", "originalRectHeight"],
+    ["angle", "originalAngle"]
+  ];
+
+  return checks.some(([currentKey, originalKey]) => {
+    if (currentKey === "itemCode") {
+      const committed = converterReplacementDetails.find(item => getConverterReplacementKey(item) === getConverterReplacementKey(detail));
+      return String(detail.itemCode || "") !== String(committed?.itemCode || "");
+    }
+    const current = Number(detail[currentKey]);
+    const original = Number(detail[originalKey]);
+    return Number.isFinite(current) && Number.isFinite(original) && Math.abs(current - original) > 0.01;
+  });
+}
+
+function renderConverterDraftReplacementPreview(pageWrap, viewport, detail, polygon) {
+  const originalDetail = {
+    ...detail,
+    textX: detail.originalTextX ?? detail.textX,
+    textY: detail.originalTextY ?? detail.textY,
+    fontSize: detail.originalFontSize ?? detail.fontSize,
+    rectX: detail.originalRectX ?? detail.rectX,
+    rectY: detail.originalRectY ?? detail.rectY,
+    rectWidth: detail.originalRectWidth ?? detail.rectWidth,
+    rectHeight: detail.originalRectHeight ?? detail.rectHeight,
+    angle: detail.originalAngle ?? detail.angle
+  };
+  const originalPolygon = getConverterPreviewHighlightPolygon(originalDetail, viewport);
+  const backgroundColor = getConverterPreviewBackgroundColor(pageWrap, polygon, originalPolygon);
+
+  if (originalPolygon) {
+    appendConverterDraftCover(pageWrap, viewport, originalPolygon, backgroundColor);
+  }
+  appendConverterDraftCover(pageWrap, viewport, polygon, backgroundColor);
+  appendConverterDraftBoxSizing(pageWrap, viewport, polygon);
+  appendConverterDraftText(pageWrap, viewport, detail, backgroundColor);
+}
+
+function appendConverterDraftCover(pageWrap, viewport, polygon, backgroundColor) {
+  const cover = document.createElement("span");
+  cover.className = "converter-draft-cover";
+  cover.style.left = `${(polygon.left / viewport.width) * 100}%`;
+  cover.style.top = `${(polygon.top / viewport.height) * 100}%`;
+  cover.style.width = `${(polygon.width / viewport.width) * 100}%`;
+  cover.style.height = `${(polygon.height / viewport.height) * 100}%`;
+  cover.style.clipPath = polygon.clipPath;
+  cover.style.background = backgroundColor;
+  pageWrap.appendChild(cover);
+}
+
+function appendConverterDraftBoxSizing(pageWrap, viewport, polygon) {
+  const outline = document.createElement("span");
+  outline.className = "converter-draft-box-sizing";
+  outline.title = "Cover box size";
+  outline.style.left = `${(polygon.left / viewport.width) * 100}%`;
+  outline.style.top = `${(polygon.top / viewport.height) * 100}%`;
+  outline.style.width = `${(polygon.width / viewport.width) * 100}%`;
+  outline.style.height = `${(polygon.height / viewport.height) * 100}%`;
+  outline.style.clipPath = polygon.clipPath;
+  pageWrap.appendChild(outline);
+}
+
+function appendConverterDraftText(pageWrap, viewport, detail, backgroundColor) {
+  const text = String(detail.itemCode || "").trim();
+  if (!text) return;
+
+  const [x, y] = viewport.convertToViewportPoint(
+    Number(detail.textX ?? detail.rectX ?? 0),
+    Number(detail.textY ?? detail.rectY ?? 0)
+  );
+  const scale = Number(pageWrap.dataset.viewportScale || 0.8);
+  const fontSize = Math.max(6, Number(detail.fontSize || detail.rectHeight || 8) * scale);
+  const angle = -Number(detail.angle || 0);
+  const textOverlay = document.createElement("span");
+  textOverlay.className = "converter-draft-text";
+  textOverlay.textContent = text;
+  textOverlay.style.left = `${(x / viewport.width) * 100}%`;
+  textOverlay.style.top = `${(y / viewport.height) * 100}%`;
+  textOverlay.style.fontSize = `${fontSize}px`;
+  textOverlay.style.lineHeight = `${fontSize}px`;
+  textOverlay.style.transform = `translateY(-90%) rotate(${angle}deg)`;
+  textOverlay.style.background = backgroundColor;
+  pageWrap.appendChild(textOverlay);
+}
+
+function getConverterPreviewTextPolygon(pageWrap, viewport, detail) {
+  const text = String(detail.itemCode || "").trim();
+  if (!text) return null;
+
+  const scale = Number(pageWrap.dataset.viewportScale || 0.8);
+  const fontSize = Math.max(6, Number(detail.fontSize || detail.rectHeight || 8));
+  const textWidth = getConverterPreviewTextWidth(pageWrap, text, fontSize * scale) / scale;
+  const height = Math.max(4, fontSize * 1.12);
+  return getConverterPreviewHighlightPolygon(
+    {
+      rectX: Number(detail.textX ?? detail.rectX ?? 0),
+      rectY: Number(detail.textY ?? detail.rectY ?? 0),
+      rectWidth: Math.max(6, textWidth + 2),
+      rectHeight: height,
+      angle: Number(detail.angle || 0)
+    },
+    viewport
+  );
+}
+
+function getConverterPreviewTextWidth(pageWrap, text, fontSize) {
+  const canvas = pageWrap.querySelector("canvas");
+  const fallback = text.length * fontSize * 0.58;
+  if (!canvas) return fallback;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return fallback;
+
+  ctx.save();
+  ctx.font = `700 ${fontSize}px Arial, Helvetica, sans-serif`;
+  const width = ctx.measureText(text).width;
+  ctx.restore();
+  return Number.isFinite(width) && width > 0 ? width : fallback;
+}
+
+function getConverterPreviewBackgroundColor(pageWrap, polygon, originalPolygon = null) {
+  const canvas = pageWrap.querySelector("canvas");
+  if (!canvas) return "rgb(255, 255, 255)";
+
+  const samplePolygons = [polygon, originalPolygon].filter(Boolean);
+  const colors = [];
+  samplePolygons.forEach(samplePolygon => {
+    colors.push(...sampleConverterPreviewCanvasColors(canvas, samplePolygon));
+  });
+
+  const lightColors = colors.filter(color => {
+    const brightness = (color.r * 299 + color.g * 587 + color.b * 114) / 1000;
+    const spread = Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b);
+    return brightness > 120 && spread < 80;
+  });
+  const source = lightColors.length ? lightColors : colors;
+  if (!source.length) return "rgb(255, 255, 255)";
+
+  const average = source.reduce(
+    (sum, color) => ({
+      r: sum.r + color.r,
+      g: sum.g + color.g,
+      b: sum.b + color.b
+    }),
+    { r: 0, g: 0, b: 0 }
+  );
+  return `rgb(${Math.round(average.r / source.length)}, ${Math.round(average.g / source.length)}, ${Math.round(average.b / source.length)})`;
+}
+
+function sampleConverterPreviewCanvasColors(canvas, polygon) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return [];
+
+  const insetX = Math.max(1, polygon.width * 0.18);
+  const insetY = Math.max(1, polygon.height * 0.18);
+  const points = [
+    [polygon.left + insetX, polygon.top + insetY],
+    [polygon.left + polygon.width - insetX, polygon.top + insetY],
+    [polygon.left + insetX, polygon.top + polygon.height - insetY],
+    [polygon.left + polygon.width - insetX, polygon.top + polygon.height - insetY],
+    [polygon.left + polygon.width / 2, polygon.top + polygon.height / 2]
+  ];
+
+  return points.map(([x, y]) => {
+    const pixel = ctx.getImageData(
+      Math.max(0, Math.min(canvas.width - 1, Math.round(x))),
+      Math.max(0, Math.min(canvas.height - 1, Math.round(y))),
+      1,
+      1
+    ).data;
+    return { r: pixel[0], g: pixel[1], b: pixel[2] };
   });
 }
 
