@@ -1358,6 +1358,11 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.16);
 }
 
+.converter-jump-chip.active .converter-jump-select,
+.converter-jump-chip.active .converter-jump-unselect {
+  font-weight: 800;
+}
+
 .converter-jump-chip:hover > button:first-child {
   background: #e8f0ff;
 }
@@ -1931,3 +1936,9 @@ details summary:hover {
 
 
 
+
+.converter-master-note {
+  color: #2563eb;
+  font-size: 0.85rem;
+  font-weight: 600;
+}

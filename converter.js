@@ -15,11 +15,16 @@ let converterLastScannedPages = [];
 let converterLastOcrPages = [];
 let converterPreviewFocusPage = null;
 let converterSkippedReplacements = [];
+let converterReplacementOrder = new Map();
 let converterActiveReplacementKey = "";
 let converterPlacementAdjustments = [];
 let converterDraftPlacementAdjustments = [];
 let converterPlacementRepeatDelay = null;
 let converterPlacementRepeatTimer = null;
+let converterMasterPartLookup = null;
+let converterMasterPartLookupKey = "";
+let converterMasterPartCorrectionCount = 0;
+let converterMasterPartPageMatchCount = 0;
 
 const { PDFDocument, StandardFonts, degrees, rgb } = PDFLib;
 
@@ -100,9 +105,12 @@ function setConverterPdfFile(file) {
   converterLastOcrPages = [];
   converterPreviewFocusPage = null;
   converterSkippedReplacements = [];
+  converterReplacementOrder = new Map();
   converterActiveReplacementKey = "";
   converterPlacementAdjustments = [];
   converterDraftPlacementAdjustments = [];
+  converterMasterPartCorrectionCount = 0;
+  converterMasterPartPageMatchCount = 0;
 
   const selected = document.getElementById("selectedConverterPdf");
   if (selected) {
@@ -145,9 +153,12 @@ function setConverterExcelFiles(files) {
   converterLastOcrPages = [];
   converterPreviewFocusPage = null;
   converterSkippedReplacements = [];
+  converterReplacementOrder = new Map();
   converterActiveReplacementKey = "";
   converterPlacementAdjustments = [];
   converterDraftPlacementAdjustments = [];
+  converterMasterPartCorrectionCount = 0;
+  converterMasterPartPageMatchCount = 0;
 
   const selected = document.getElementById("selectedConverterExcel");
   if (selected) {
@@ -237,10 +248,20 @@ async function readExcelConverterMap() {
   }
 
   const combinedMap = [];
+  const workbookRecords = [];
+  converterMasterPartCorrectionCount = 0;
+  converterMasterPartPageMatchCount = 0;
 
   for (const file of converterExcelFiles) {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
+    workbookRecords.push({ file, workbook });
+  }
+
+  const masterLookup = getConverterMasterPartLookup(workbookRecords);
+
+  workbookRecords.forEach(({ file, workbook }) => {
+    const usesMasterListLogic = isConverterMasterListWorkbook(file, workbook);
 
     workbook.SheetNames.forEach(sheetName => {
       const worksheet = workbook.Sheets[sheetName];
@@ -249,7 +270,7 @@ async function readExcelConverterMap() {
       });
 
       rows.forEach(row => {
-        const oldPart = getExcelRowValue(row, [
+        let oldPart = getExcelRowValue(row, [
           "Old/Obsolete Part Number",
           "Old/Obsolete Part #",
           "Old/Obsolete Part#",
@@ -270,8 +291,43 @@ async function readExcelConverterMap() {
           "Old Part Number",
           "Old Part",
           "Old PN",
-          "Old PN #"
+          "Old PN #",
+          "Use Old Part",
+          "Use Old Part Number",
+          "Use Old PN",
+          "Current Part Number",
+          "Current Part #",
+          "Current PN",
+          "Existing Part Number",
+          "Existing Part #",
+          "Existing PN",
+          "Original Part Number",
+          "Original Part #",
+          "Original PN",
+          "Previous Part Number",
+          "Previous Part #",
+          "Previous PN",
+          "From Part Number",
+          "From Part #",
+          "From PN",
+          "Merge From",
+          "Merged From"
         ]);
+
+        const legacyPart = usesMasterListLogic
+          ? getExcelSafeLegacyPart(row, [
+              "Sage PN",
+              "Sage Part Number",
+              "Sage Part #",
+              "Legacy PN",
+              "Legacy Part Number",
+              "Legacy Part #",
+              "Comments",
+              "Comment",
+              "Legacy Comments"
+            ])
+          : "";
+        if (!oldPart && legacyPart) oldPart = legacyPart;
 
         const itemCode = getExcelRowValue(row, [
           "New Part Number",
@@ -286,20 +342,52 @@ async function readExcelConverterMap() {
           "Item #",
           "Item Number",
           "Part #",
-          "Part Number"
+          "Part Number",
+          "Master Part Number",
+          "Master Part #",
+          "Official Part Number",
+          "Official Part #",
+          "Correct Part Number",
+          "Correct Part #",
+          "Replacement Part Number",
+          "Replacement Part #",
+          "Replacement PN",
+          "To Part Number",
+          "To Part #",
+          "To PN",
+          "NS Part Number",
+          "NS Part #"
         ]);
 
-        if (oldPart && itemCode && oldPart !== itemCode) {
+        const description = getExcelRowValue(row, [
+          "Description",
+          "Part Description",
+          "Item Description",
+          "Product Description",
+          "Desc"
+        ]);
+        const masterCorrection = getMasterPartCorrection(
+          description,
+          itemCode,
+          masterLookup
+        );
+        const correctedItemCode = masterCorrection?.partNumber || itemCode;
+
+        if (oldPart && correctedItemCode && oldPart !== correctedItemCode) {
+          if (masterCorrection) converterMasterPartCorrectionCount++;
+
           combinedMap.push({
             oldPart,
-            itemCode,
+            itemCode: correctedItemCode,
             sourceFile: file.name,
-            sourceSheet: sheetName
+            sourceSheet: sheetName,
+            description,
+            masterPartCorrection: masterCorrection || null
           });
         }
       });
     });
-  }
+  });
 
   const seen = new Set();
   converterMap = combinedMap.filter(item => {
@@ -317,6 +405,28 @@ function getExcelRowValue(row, aliases) {
   return matchKey ? String(row[matchKey] || "").trim() : "";
 }
 
+function getExcelSafeLegacyPart(row, aliases) {
+  const normalizedAliases = aliases.map(normalizeExcelHeader);
+  for (const key of Object.keys(row)) {
+    if (!normalizedAliases.includes(normalizeExcelHeader(key))) continue;
+    const safeValue = getSafeConverterLegacyPart(row[key], normalizeExcelHeader(key));
+    if (safeValue) return safeValue;
+  }
+  return "";
+}
+
+function getSafeConverterLegacyPart(value, normalizedHeader = "") {
+  const cleanValue = String(value || "").trim();
+  const oldPartMatch = cleanValue.match(/\b\d{3}-\d{4}\b/);
+  if (!oldPartMatch) return "";
+
+  if (String(normalizedHeader || "").includes("comment")) {
+    return oldPartMatch[0];
+  }
+
+  return cleanValue === oldPartMatch[0] ? oldPartMatch[0] : "";
+}
+
 function normalizeExcelHeader(value) {
   return String(value || "")
     .toLowerCase()
@@ -325,6 +435,273 @@ function normalizeExcelHeader(value) {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+function getConverterMasterPartLookup(workbookRecords) {
+  const lookupKey = workbookRecords
+    .map(({ file }) => getConverterExcelFileKey(file))
+    .join("||");
+
+  if (converterMasterPartLookup && converterMasterPartLookupKey === lookupKey) {
+    return converterMasterPartLookup;
+  }
+
+  const entriesByDescription = new Map();
+  const entries = [];
+
+  workbookRecords
+    .filter(({ file, workbook }) => isConverterMasterListWorkbook(file, workbook))
+    .forEach(({ file, workbook }) => {
+      workbook.SheetNames
+        .filter(sheetName => !shouldIgnoreMasterPartSheet(sheetName, workbook.Sheets[sheetName]))
+        .forEach(sheetName => {
+          const worksheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+          rows.forEach(row => {
+            const partNumber = getExcelRowValue(row, [
+              "Part Number",
+              "Part #",
+              "Part#",
+              "PN",
+              "P/N",
+              "Item Code",
+              "Item Number"
+            ]);
+            const description = getExcelRowValue(row, [
+              "Description",
+              "Part Description",
+              "Item Description",
+              "Product Description",
+              "Desc"
+            ]);
+            const normalizedDescription = normalizePartDescription(description);
+
+            if (!partNumber || !isSpecificMasterDescription(normalizedDescription)) return;
+
+            const entry = {
+              partNumber,
+              description,
+              normalizedDescription,
+              sourceFile: file.name,
+              sourceSheet: sheetName
+            };
+            entries.push(entry);
+
+            if (!entriesByDescription.has(normalizedDescription)) {
+              entriesByDescription.set(normalizedDescription, new Map());
+            }
+
+            const partMap = entriesByDescription.get(normalizedDescription);
+            if (!partMap.has(partNumber)) {
+              partMap.set(partNumber, entry);
+            }
+          });
+        });
+    });
+
+  converterMasterPartLookup = { entries, entriesByDescription };
+  converterMasterPartLookupKey = lookupKey;
+  return converterMasterPartLookup;
+}
+
+function isConverterMasterListWorkbook(file, workbook) {
+  const fileName = String(file?.name || "").toLowerCase();
+  if (/\b(master|pn master|part list|parts list)\b/.test(fileName)) return true;
+
+  const numericSheetCount = workbook.SheetNames.filter(sheetName =>
+    /^\d{4}/.test(String(sheetName || "").trim())
+  ).length;
+
+  return numericSheetCount >= 2;
+}
+
+function shouldIgnoreMasterPartSheet(sheetName, worksheet) {
+  const normalizedName = normalizeExcelHeader(sheetName);
+  if (!worksheet) return true;
+  if (/^(notes?|instructions?|read me|summary|cover|index|toc)$/.test(normalizedName)) {
+    return true;
+  }
+
+  const range = XLSX.utils.decode_range(worksheet["!ref"] || "A1:A1");
+  return range.e.r <= range.s.r;
+}
+
+function normalizePartDescription(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSpecificMasterDescription(normalizedDescription) {
+  const tokens = String(normalizedDescription || "")
+    .split(" ")
+    .filter(Boolean);
+
+  return (
+    normalizedDescription.length >= 10 &&
+    tokens.length >= 2 &&
+    tokens.some(token => token.length >= 4)
+  );
+}
+
+function isMasterDescriptionMatchForPdfLine(lineText, entry) {
+  const normalizedDescription = entry?.normalizedDescription || "";
+  if (!isSpecificMasterDescription(normalizedDescription)) return false;
+
+  const lineDescription = normalizePdfLineDescriptionForMasterMatch(lineText);
+  if (!isSpecificMasterDescription(lineDescription)) return false;
+
+  if (lineDescription === normalizedDescription) return true;
+
+  const descriptionTokens = new Set(normalizedDescription.split(" ").filter(Boolean));
+  const lineTokens = new Set(lineDescription.split(" ").filter(Boolean));
+  const matchedTokens = Array.from(descriptionTokens)
+    .filter(token => lineTokens.has(token))
+    .length;
+  const tokenCoverage = descriptionTokens.size
+    ? matchedTokens / descriptionTokens.size
+    : 0;
+  const similarity = getPartDescriptionSimilarity(lineDescription, normalizedDescription);
+
+  return tokenCoverage >= 0.85 && similarity >= 0.9;
+}
+
+function normalizePdfLineDescriptionForMasterMatch(lineText) {
+  return normalizePartDescription(
+    String(lineText || "")
+      .replace(/\b\d{4}[-\s]\d{4}\b/g, " ")
+      .replace(/\b\d{2,4}-\d{3,4}\b/g, " ")
+  );
+}
+
+function getMasterPartCorrection(description, currentPartNumber, lookup) {
+  const normalizedDescription = normalizePartDescription(description);
+  const currentPart = String(currentPartNumber || "").trim();
+
+  if (!isSpecificMasterDescription(normalizedDescription) || !currentPart || !lookup?.entries?.length) {
+    return null;
+  }
+
+  const exactMatches = getUniqueMasterPartMatches(
+    lookup.entriesByDescription.get(normalizedDescription)
+  );
+  const exactCorrection = getSingleMasterPartCorrection(
+    exactMatches,
+    currentPart,
+    "exact"
+  );
+  if (exactCorrection) return exactCorrection;
+  if (exactMatches.length > 0) return null;
+
+  const fuzzyMatches = getFuzzyMasterPartMatches(normalizedDescription, lookup.entries);
+  return getSingleMasterPartCorrection(fuzzyMatches, currentPart, "fuzzy");
+}
+
+function getUniqueMasterPartMatches(partMap) {
+  if (!partMap) return [];
+  return Array.from(partMap.values());
+}
+
+function getSingleMasterPartCorrection(matches, currentPartNumber, matchType) {
+  if (matches.length !== 1) return null;
+
+  const match = matches[0];
+  if (normalizePartNumber(match.partNumber) === normalizePartNumber(currentPartNumber)) {
+    return null;
+  }
+
+  return {
+    partNumber: match.partNumber,
+    description: match.description,
+    sourceFile: match.sourceFile,
+    sourceSheet: match.sourceSheet,
+    matchType,
+    note: "Corrected Part Number using Master List"
+  };
+}
+
+function getFuzzyMasterPartMatches(normalizedDescription, entries) {
+  const threshold = 0.97;
+  let bestScore = 0;
+  let bestEntries = [];
+  const sourceTokens = new Set(normalizedDescription.split(" ").filter(Boolean));
+
+  entries.forEach(entry => {
+    const entryDescription = entry.normalizedDescription || "";
+    const lengthRatio = Math.min(normalizedDescription.length, entryDescription.length) /
+      Math.max(normalizedDescription.length, entryDescription.length);
+    if (lengthRatio < 0.8) return;
+
+    const entryTokens = new Set(entryDescription.split(" ").filter(Boolean));
+    const matchedTokens = Array.from(sourceTokens)
+      .filter(token => entryTokens.has(token))
+      .length;
+    const tokenCoverage = sourceTokens.size ? matchedTokens / sourceTokens.size : 0;
+    if (tokenCoverage < 0.85) return;
+
+    const score = getPartDescriptionSimilarity(
+      normalizedDescription,
+      entryDescription
+    );
+
+    if (score < threshold) return;
+
+    if (score > bestScore + 0.001) {
+      bestScore = score;
+      bestEntries = [entry];
+    } else if (Math.abs(score - bestScore) <= 0.001) {
+      bestEntries.push(entry);
+    }
+  });
+
+  const uniqueParts = new Map();
+  bestEntries.forEach(entry => {
+    uniqueParts.set(entry.partNumber, entry);
+  });
+
+  return Array.from(uniqueParts.values());
+}
+
+function getPartDescriptionSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+
+  const distance = getLevenshteinDistance(a, b);
+  const maxLength = Math.max(a.length, b.length);
+  return maxLength ? 1 - distance / maxLength : 0;
+}
+
+function getLevenshteinDistance(a, b) {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = previous[0];
+    previous[0] = i;
+
+    for (let j = 1; j <= b.length; j++) {
+      const temp = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      diagonal = temp;
+    }
+  }
+
+  return previous[b.length];
+}
+
+function normalizePartNumber(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
 async function extractPDFTextByPage(file) {
   const bytes = await file.arrayBuffer();
 
@@ -498,6 +875,98 @@ function normalizeOCRText(text) {
     .trim();
 }
 
+function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
+  const map = [...baseMap];
+  const existingKeys = new Set(map.map(item => `${item.oldPart}=>${item.itemCode}`));
+  const pendingByOldPart = new Map();
+  converterMasterPartPageMatchCount = 0;
+
+  if (!converterMasterPartLookup?.entries?.length || !Array.isArray(pages)) {
+    converterMap = map;
+    return converterMap;
+  }
+
+  pages.forEach(page => {
+    const lines = getConverterTextItemLines(page.textItems || []);
+
+    lines.forEach(line => {
+      const normalizedLine = normalizePartDescription(line.text);
+      if (!normalizedLine) return;
+
+      converterMasterPartLookup.entries.forEach(entry => {
+        if (!isMasterDescriptionMatchForPdfLine(line.text, entry)) return;
+
+        const candidates = getConverterPartNumberCandidates(line.text)
+          .filter(part => normalizePartNumber(part) !== normalizePartNumber(entry.partNumber));
+        const uniqueCandidates = Array.from(new Set(candidates));
+        if (uniqueCandidates.length !== 1) return;
+
+        const oldPart = uniqueCandidates[0];
+        const existing = pendingByOldPart.get(oldPart);
+        if (existing && existing.itemCode !== entry.partNumber) {
+          pendingByOldPart.set(oldPart, null);
+          return;
+        }
+
+        pendingByOldPart.set(oldPart, {
+          oldPart,
+          itemCode: entry.partNumber,
+          sourceFile: entry.sourceFile,
+          sourceSheet: entry.sourceSheet,
+          description: entry.description,
+          masterPartCorrection: {
+            partNumber: entry.partNumber,
+            description: entry.description,
+            sourceFile: entry.sourceFile,
+            sourceSheet: entry.sourceSheet,
+            matchType: "pdf-line",
+            note: "Corrected Part Number using Master List"
+          }
+        });
+      });
+    });
+  });
+
+  pendingByOldPart.forEach(item => {
+    if (!item) return;
+    const key = `${item.oldPart}=>${item.itemCode}`;
+    if (existingKeys.has(key)) return;
+    existingKeys.add(key);
+    map.push(item);
+    converterMasterPartPageMatchCount++;
+  });
+
+  converterMap = map;
+  return converterMap;
+}
+
+function getConverterTextItemLines(textItems) {
+  const lineMap = new Map();
+
+  textItems.forEach(item => {
+    const y = Math.round(Number(item.transform?.[5] || 0) / 3) * 3;
+    if (!lineMap.has(y)) lineMap.set(y, []);
+    lineMap.get(y).push(item);
+  });
+
+  return Array.from(lineMap.entries())
+    .sort((a, b) => b[0] - a[0])
+    .map(([, items]) => ({
+      text: items
+        .sort((a, b) => Number(a.transform?.[4] || 0) - Number(b.transform?.[4] || 0))
+        .map(item => item.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+    }))
+    .filter(line => line.text);
+}
+
+function getConverterPartNumberCandidates(text) {
+  const matches = String(text || "").match(/\b\d{4}[-\s]\d{4}\b/g) || [];
+  return matches.map(match => match.replace(/\s+/, "-"));
+}
+
 function getManualConverterValue(oldPart) {
   return converterManualOverrides.find(item => item.oldPart === oldPart)?.itemCode || "";
 }
@@ -633,18 +1102,23 @@ async function previewPartNumberChangesScan() {
   updateConverterStatus("Reading Excel and scanning PDF...");
 
   const map = await readExcelConverterMap();
+  const pages = await extractPDFTextByPage(converterPdfFile);
+  const effectiveMap = augmentConverterMapWithMasterDescriptionMatches(map, pages);
 
-  if (!map.length) {
-    updateConverterStatus("No Old Part # / Item Code or New Part # rows found in the Excel file.");
-    alert("No valid rows found. Make sure the Excel columns include Old Part # / Item Code, or Old/Obsolete Part Number / New Part Number.");
+  if (!effectiveMap.length) {
+    converterBuildCache = null;
+    converterLastScannedPages = pages;
+    converterLastOcrPages = [];
+    converterMatches = [];
+    renderConverterPreview();
+    updateConverterStatus("No convertible part numbers were found. Files without conversion columns are skipped unless a master-list description appears with one clear different part number in the PDF.");
     return;
   }
 
-  const pages = await extractPDFTextByPage(converterPdfFile);
   converterBuildCache = null;
   converterLastScannedPages = pages;
   converterLastOcrPages = [];
-  converterMatches = buildConverterMatches(getEffectiveConverterMap(map), pages);
+  converterMatches = buildConverterMatches(getEffectiveConverterMap(effectiveMap), pages);
   renderConverterPreview();
 
   let ocrPages = [];
@@ -660,7 +1134,7 @@ async function previewPartNumberChangesScan() {
 
   if (ocrPages.length) {
     converterLastOcrPages = ocrPages;
-    converterMatches = buildConverterMatches(getEffectiveConverterMap(map), pages, ocrPages);
+    converterMatches = buildConverterMatches(getEffectiveConverterMap(converterMap), pages, ocrPages);
     renderConverterPreview();
   }
 
@@ -673,7 +1147,13 @@ async function previewPartNumberChangesScan() {
   const ocrText = ocrFoundCount
     ? ` ${ocrFoundCount} part number(s) also appeared on drawing/OCR page(s).`
     : "";
-  updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}`);
+  const correctionText = converterMasterPartCorrectionCount
+    ? ` ${converterMasterPartCorrectionCount} row part number(s) corrected using Master List.`
+    : "";
+  const masterMatchText = converterMasterPartPageMatchCount
+    ? ` ${converterMasterPartPageMatchCount} PDF part number(s) matched by Master List description.`
+    : "";
+  updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}${correctionText}${masterMatchText}`);
 
   if (getDetectedChangeRows().some(row => !row.locationText.includes("drawing OCR"))) {
     updateConverterStatus("Confirming visible replacements...");
@@ -747,6 +1227,7 @@ function getConverterPageRows() {
             pageNumber,
             oldPart: match.oldPart,
             itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
+            masterPartCorrection: match.masterPartCorrection || null,
             count: visibleCount || pdfPage.count,
             source: "PDF text",
             locationText: `${visibleCount || pdfPage.count} visible PDF text mention(s)`
@@ -761,6 +1242,7 @@ function getConverterPageRows() {
           pageNumber,
           oldPart: match.oldPart,
           itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
+          masterPartCorrection: match.masterPartCorrection || null,
           count: ocrPage.count,
           source: "Drawing OCR",
           locationText: "drawing OCR review"
@@ -921,7 +1403,10 @@ function encodeConverterReplacementDetail(detail) {
     rectY: detail.rectY,
     rectWidth: detail.rectWidth,
     rectHeight: detail.rectHeight,
-    angle: detail.angle || 0
+    angle: detail.angle || 0,
+    listIndex: Number.isFinite(Number(detail.listIndex))
+      ? Number(detail.listIndex)
+      : getConverterReplacementOrder(detail)
   }));
 }
 
@@ -945,7 +1430,7 @@ function skipConverterReplacement(encodedDetail) {
 
   converterActiveReplacementKey = "";
   applyConverterSkipStateImmediately();
-  rebuildConverterAfterSkipChange("Change canceled. It will not be included in the build.");
+  rebuildConverterAfterSkipChange("Change unselected. It will not be included in the build.");
 }
 
 function restoreConverterReplacement(encodedDetail) {
@@ -956,7 +1441,7 @@ function restoreConverterReplacement(encodedDetail) {
   converterSkippedReplacements = converterSkippedReplacements.filter(item => item.key !== key);
 
   converterActiveReplacementKey = key;
-  rebuildConverterAfterSkipChange("Change restored. It will be included again.");
+  rebuildConverterAfterSkipChange("Change selected. It will be included again.");
 }
 
 function toggleConverterReplacementSkip(encodedDetail) {
@@ -993,7 +1478,10 @@ function rebuildConverterAfterSkipChange(message) {
 function applyConverterSkipStateImmediately() {
   document.querySelectorAll(".converter-preview-highlight").forEach(marker => {
     if (converterSkippedReplacements.some(item => item.key === marker.dataset.replacementKey)) {
-      marker.classList.add("canceled");
+      marker.classList.add("unselected");
+      marker.classList.remove("canceled");
+    } else {
+      marker.classList.remove("unselected", "canceled");
     }
     marker.classList.remove("focused");
   });
@@ -1078,6 +1566,7 @@ function renderConverterPreview() {
               >
                 ${escapeConverterHTML(change.locationText)}
               </button>
+              ${change.masterPartCorrection ? '<span class="converter-master-note">Corrected Part Number using Master List</span>' : ''}
             </label>
           `).join("")}
         </div>
@@ -1105,6 +1594,7 @@ function getDetectedChangeRows() {
         pageNumber: page.pageNumber,
         oldPart: match.oldPart,
         itemCode: match.itemCode,
+        masterPartCorrection: match.masterPartCorrection || null,
         locationText: `Page ${page.pageNumber} - ${page.count} PDF text mention(s)`
       });
     });
@@ -1116,6 +1606,7 @@ function getDetectedChangeRows() {
           pageNumber: page.pageNumber,
           oldPart: match.oldPart,
           itemCode: match.itemCode,
+          masterPartCorrection: match.masterPartCorrection || null,
           locationText: `Page ${page.pageNumber} - drawing OCR review`
         });
       });
@@ -1184,15 +1675,14 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
   const baseMap = converterMap.length
     ? converterMap
     : await readExcelConverterMap();
-  const map = getEffectiveConverterMap(baseMap);
+  let map = getEffectiveConverterMap(baseMap);
 
-  if (!map.length) {
-    alert("No valid Old Part # / Item Code or New Part # rows were found.");
-    updateConverterStatus("Could not generate PDF because no valid Excel rows were found.");
+  if (!map.length && !converterMasterPartLookup?.entries?.length) {
+    updateConverterStatus("No convertible part numbers were found in the selected Excel files.");
     return null;
   }
 
-  if (converterBuildCache) {
+    if (converterBuildCache) {
     if (showFinalStatus) {
       const pageText = converterBuildCache.changedPages.length
         ? ` on page(s) ${converterBuildCache.changedPages.join(", ")}`
@@ -1244,7 +1734,7 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
   const baseMap = converterMap.length
     ? converterMap
     : await readExcelConverterMap();
-  const map = getEffectiveConverterMap(baseMap);
+  let map = getEffectiveConverterMap(baseMap);
 
   const originalBytes = await converterPdfFile.arrayBuffer();
   const pdfDoc = await PDFDocument.load(originalBytes);
@@ -1258,6 +1748,18 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
   const pdfForText = await pdfjsLib.getDocument({
     data: originalBytes.slice(0)
   }).promise;
+
+  if (!map.length && converterMasterPartLookup?.entries?.length) {
+    const pages = await extractPDFTextByPage(converterPdfFile);
+    map = getEffectiveConverterMap(
+      augmentConverterMapWithMasterDescriptionMatches(baseMap, pages)
+    );
+  }
+
+  if (!map.length) {
+    updateConverterStatus("No convertible part numbers were found in the selected Excel files.");
+    return null;
+  }
 
   let replacementCount = 0;
   const changedPages = new Set();
@@ -2171,62 +2673,86 @@ function renderConverterPreviewJumpList(details = converterReplacementDetails) {
   const list = document.getElementById("converterPreviewJumpList");
   if (!list) return;
 
-  const activeChanges = [];
-  const seen = new Set();
-  details.forEach(detail => {
+  const changesByKey = new Map();
+  details.forEach((detail, index) => {
     const key = getConverterReplacementKey(detail);
-    if (seen.has(key)) return;
-    seen.add(key);
-    if (converterSkippedReplacements.some(item => item.key === key)) return;
-    activeChanges.push({ ...detail, key });
+    if (!changesByKey.has(key)) {
+      changesByKey.set(key, {
+        ...detail,
+        key,
+        listIndex: getConverterReplacementOrder({ ...detail, key }, index)
+      });
+    }
   });
-  const skippedChanges = converterSkippedReplacements.filter(detail =>
-    !activeChanges.some(active => active.key === detail.key)
-  );
 
-  if (!activeChanges.length && !skippedChanges.length) {
+  converterSkippedReplacements.forEach(detail => {
+    const key = detail.key || getConverterReplacementKey(detail);
+    const listIndex = getConverterReplacementOrder(detail, detail.listIndex);
+    if (changesByKey.has(key)) {
+      changesByKey.set(key, { ...changesByKey.get(key), ...detail, key, listIndex, skipped: true });
+    } else {
+      changesByKey.set(key, { ...detail, key, skipped: true, listIndex });
+    }
+  });
+
+  const orderedChanges = Array.from(changesByKey.values())
+    .sort((a, b) => getConverterJumpSortValue(a) - getConverterJumpSortValue(b));
+
+  if (!orderedChanges.length) {
     list.innerHTML = "";
     return;
   }
 
   list.innerHTML = `
     <span>Jump to change</span>
-    ${activeChanges.map(detail => `
-      <span class="converter-jump-chip">
-        <button
-          type="button"
-          onclick="focusConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
+    ${orderedChanges.map(detail => {
+      const encoded = encodeConverterReplacementDetail(detail);
+      const isUnselected = !!detail.skipped;
+      const key = detail.key || getConverterReplacementKey(detail);
+      const isActive = key === converterActiveReplacementKey;
+      return `
+        <span
+          class="converter-jump-chip ${isUnselected ? "unselected" : ""} ${isActive ? "active" : ""}"
+          data-replacement-key="${escapeConverterHTML(key)}"
         >
-          ${getConverterJumpChipHTML(detail)}
-        </button>
-        <button
-          class="converter-jump-cancel"
-          type="button"
-          title="Cancel this replacement"
-          onclick="skipConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
-        >
-          Cancel
-        </button>
-      </span>
-    `).join("")}
-    ${skippedChanges.map(detail => `
-      <span class="converter-jump-chip skipped">
-        <button type="button" disabled>
-          ${getConverterJumpChipHTML(detail)}
-        </button>
-        <button
-          class="converter-jump-restore"
-          type="button"
-          title="Restore this replacement"
-          onclick="restoreConverterReplacement('${encodeConverterReplacementDetail(detail)}')"
-        >
-          Restore
-        </button>
-      </span>
-    `).join("")}
+          <button
+            type="button"
+            ${isUnselected ? "disabled" : `onclick="focusConverterReplacement('${encoded}')"`}
+          >
+            ${getConverterJumpChipHTML(detail)}
+          </button>
+          <button
+            class="${isUnselected ? "converter-jump-select" : "converter-jump-unselect"}"
+            type="button"
+            title="${isUnselected ? "Select this replacement" : "Unselect this replacement"}"
+            onclick="${isUnselected ? "restoreConverterReplacement" : "skipConverterReplacement"}('${encoded}')"
+          >
+            ${isUnselected ? "Select" : "Unselect"}
+          </button>
+        </span>
+      `;
+    }).join("")}
   `;
+
+  focusConverterJumpChip(converterActiveReplacementKey);
 }
 
+function getConverterJumpSortValue(detail) {
+  return getConverterReplacementOrder(detail, detail.listIndex);
+}
+
+function getConverterReplacementOrder(detail, fallbackIndex = null) {
+  const key = detail?.key || getConverterReplacementKey(detail || {});
+  if (converterReplacementOrder.has(key)) {
+    return converterReplacementOrder.get(key);
+  }
+
+  const fallback = Number.isFinite(Number(fallbackIndex))
+    ? Number(fallbackIndex)
+    : converterReplacementOrder.size;
+  converterReplacementOrder.set(key, fallback);
+  return fallback;
+}
 function getConverterJumpChipHTML(detail) {
   return `
     <span class="converter-jump-page">Page ${detail.pageNumber}</span>
@@ -2253,31 +2779,65 @@ function scrollConverterPreviewToChange(pageNumber, oldPart = "") {
   pageWrap.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function focusConverterReplacement(encodedDetail) {
+function focusConverterReplacement(encodedDetail, options = {}) {
   const detail = decodeConverterReplacementDetail(encodedDetail);
   if (!detail) return;
 
   syncConverterDraftManualOverrides();
   converterActiveReplacementKey = detail.key || getConverterReplacementKey(detail);
+  const shouldScrollToChip = !!options.scrollToChip;
+  focusConverterJumpChip(converterActiveReplacementKey, shouldScrollToChip);
+
   if (!converterDraftPlacementAdjustments.some(item => item.key === converterActiveReplacementKey)) {
     const applied = converterPlacementAdjustments.find(item => item.key === converterActiveReplacementKey);
     if (applied) converterDraftPlacementAdjustments.push({ ...applied });
   }
   document.querySelectorAll(".converter-preview-highlight.focused")
     .forEach(item => item.classList.remove("focused"));
-  const marker = Array.from(document.querySelectorAll(".converter-preview-highlight"))
-    .find(item => item.dataset.replacementKey === converterActiveReplacementKey);
+  const markers = Array.from(document.querySelectorAll(".converter-preview-highlight"))
+    .filter(item => item.dataset.replacementKey === converterActiveReplacementKey);
+  markers.forEach(item => item.classList.add("focused"));
+  const marker = markers[0];
   renderConverterPlacementEditor({ ...detail, key: converterActiveReplacementKey });
   if (marker) {
-    marker.classList.add("focused");
-    marker.closest(".converter-preview-page-wrap")?.scrollIntoView({
-      behavior: "smooth",
-      block: "start"
-    });
+    if (!shouldScrollToChip) {
+      marker.closest(".converter-preview-page-wrap")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
     return;
   }
 
-  scrollConverterPreviewToChange(detail.pageNumber, detail.oldPart);
+  if (!shouldScrollToChip) {
+    scrollConverterPreviewToChange(detail.pageNumber, detail.oldPart);
+  }
+}
+
+function focusConverterJumpChip(key, shouldScroll = false) {
+  const chips = Array.from(document.querySelectorAll(".converter-jump-chip"));
+  let activeChip = null;
+
+  chips.forEach(chip => {
+    const isActive = !!key && chip.dataset.replacementKey === key;
+    chip.classList.toggle("active", isActive);
+    if (isActive) activeChip = chip;
+  });
+
+  if (!shouldScroll || !activeChip) return;
+
+  document.getElementById("converterPreviewJumpList")?.scrollIntoView({
+    behavior: "smooth",
+    block: "start"
+  });
+  activeChip.scrollIntoView({
+    behavior: "smooth",
+    block: "nearest",
+    inline: "center"
+  });
+  activeChip.querySelector(".converter-jump-select, .converter-jump-unselect")?.focus({
+    preventScroll: true
+  });
 }
 
 function syncConverterDraftManualOverrides() {
@@ -2650,9 +3210,12 @@ function clearConverterFiles() {
   converterLastOcrPages = [];
   converterPreviewFocusPage = null;
   converterSkippedReplacements = [];
+  converterReplacementOrder = new Map();
   converterActiveReplacementKey = "";
   converterPlacementAdjustments = [];
   converterDraftPlacementAdjustments = [];
+  converterMasterPartCorrectionCount = 0;
+  converterMasterPartPageMatchCount = 0;
 
   const pdfInput = document.getElementById("converterPdfUpload");
   const excelInput = document.getElementById("converterExcelUpload");
@@ -2743,8 +3306,11 @@ function renderConverterPreviewHighlights(pageWrap, viewport, pageNumber, highli
     marker.className = `converter-preview-highlight ${highlightType}`;
     marker.dataset.oldPart = detail.oldPart;
     marker.dataset.replacementKey = getConverterReplacementKey(detail);
-    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to edit this preview placement.`;
-    marker.onclick = () => focusConverterReplacement(encodeConverterReplacementDetail(detail));
+    marker.title = `${detail.oldPart} -> ${detail.itemCode}. Click to find its Select/Unselect button.`;
+    marker.onclick = () => focusConverterReplacement(
+      encodeConverterReplacementDetail(detail),
+      { scrollToChip: true }
+    );
     if (marker.dataset.replacementKey === converterActiveReplacementKey) {
       marker.classList.add("focused");
     }
