@@ -282,12 +282,14 @@ function sortLibraryBySection() {
       return sectionOrder[a.packetSection] - sectionOrder[b.packetSection];
     }
 
-    if (a.packetSection === "Datasheets" && b.packetSection === "Datasheets") {
-      return (a.datasheetOrder ?? 999) - (b.datasheetOrder ?? 999);
-    }
-
-    return 0;
+    return getSectionFileOrder(a) - getSectionFileOrder(b);
   });
+}
+
+function getSectionFileOrder(item) {
+  return Number.isFinite(Number(item?.datasheetOrder))
+    ? Number(item.datasheetOrder)
+    : 999;
 }
 
 async function renameTOCSections() {
@@ -1725,7 +1727,8 @@ async function buildPacket() {
         section: item.packetSection,
         startPage,
         targetPageIndex: finalPdf.getPageCount(),
-        tocLevel: 0
+        tocLevel: 0,
+        isParentTOC: true
       });
     }
 
@@ -1738,7 +1741,8 @@ async function buildPacket() {
           targetPageIndex:
             finalPdf.getPageCount() + entry.sourcePage - 1,
           tocLevel: Number(entry.tocLevel || 0),
-          parentId: entry.parentId || ""
+          parentId: entry.parentId || "",
+          isManualTOC: true
         }));
 
       tocItems.push(...manualEntries);
@@ -5149,7 +5153,7 @@ async function drawTOCOnExistingPage(
       const itemTitle = item.title.trim().toLowerCase();
       const sectionTitle = sectionLabel.trim().toLowerCase();
 
-      return itemTitle !== sectionTitle;
+      return !item.isParentTOC || itemTitle !== sectionTitle;
     });
 
         filteredItems.forEach(item => {

@@ -22,41 +22,7 @@ const TOC_DETECTION_RULES = {
     }
   ],
 
-  Maintenance: [
-    {
-      title: "Daily Maintenance",
-      patterns: [
-        "daily maintenance",
-        "maintenance-daily",
-        "maintenance daily"
-      ]
-    },
-    {
-      title: "Weekly Maintenance",
-      patterns: [
-        "weekly maintenance",
-        "maintenance-weekly",
-        "maintenance weekly"
-      ]
-    },
-    {
-      title: "Monthly Maintenance",
-      patterns: [
-        "monthly maintenance",
-        "maintenance-monthly",
-        "maintenance monthly"
-      ]
-    },
-    {
-      title: "Yearly Maintenance",
-      patterns: [
-        "yearly maintenance",
-        "annual maintenance",
-        "maintenance-yearly",
-        "maintenance yearly"
-      ]
-    }
-  ]
+  Maintenance: []
 };
 const tocDetectionCache = new WeakMap();
 
