@@ -8,6 +8,7 @@ let converterReplacementDetails = [];
 let converterBuildCache = null;
 let converterScanPromise = null;
 let converterBuildPromise = null;
+let converterPdfVersion = 0;
 let converterRenderedPreviewKey = "";
 let converterManualOverrides = [];
 let converterDraftManualOverrides = [];
@@ -92,6 +93,7 @@ function setConverterPdfFile(file) {
   }
 
   converterPdfFile = file;
+  converterPdfVersion++;
   converterMatches = [];
   converterChangedPages = [];
   converterReplacementDetails = [];
@@ -119,6 +121,14 @@ function setConverterPdfFile(file) {
 
   resetConverterPreview();
   updateConverterStatus();
+
+  const pdfInput = document.getElementById("converterPdfUpload");
+  if (pdfInput) pdfInput.value = "";
+
+  document.getElementById("converterBeforePreview")?.replaceChildren();
+  document.getElementById("converterAfterPreview")?.replaceChildren();
+  document.getElementById("converterPreviewJumpList")?.replaceChildren();
+  renderConverterPlacementEditor();
 }
 
 function setConverterExcelFile(file) {
@@ -235,6 +245,10 @@ function runConverterTask(task, failureMessage) {
         `${failureMessage} ${error?.message || "Please try again."}`
       );
     });
+}
+
+function isCurrentConverterPdf(file, version) {
+  return converterPdfFile === file && converterPdfVersion === version;
 }
 
 async function readExcelConverterMap() {
@@ -1079,17 +1093,23 @@ function previewPartNumberChanges() {
 async function previewPartNumberChangesImpl() {
   if (converterScanPromise) return converterScanPromise;
 
-  converterScanPromise = previewPartNumberChangesScan();
+  const scanPromise = previewPartNumberChangesScan();
+  converterScanPromise = scanPromise;
 
   try {
-    return await converterScanPromise;
+    return await scanPromise;
   } finally {
-    converterScanPromise = null;
+    if (converterScanPromise === scanPromise) {
+      converterScanPromise = null;
+    }
   }
 }
 
 async function previewPartNumberChangesScan() {
-  if (!converterPdfFile) {
+  const scanPdfFile = converterPdfFile;
+  const scanPdfVersion = converterPdfVersion;
+
+  if (!scanPdfFile) {
     alert("Upload a PDF first.");
     return;
   }
@@ -1102,7 +1122,11 @@ async function previewPartNumberChangesScan() {
   updateConverterStatus("Reading Excel and scanning PDF...");
 
   const map = await readExcelConverterMap();
-  const pages = await extractPDFTextByPage(converterPdfFile);
+  if (!isCurrentConverterPdf(scanPdfFile, scanPdfVersion)) return;
+
+  const pages = await extractPDFTextByPage(scanPdfFile);
+  if (!isCurrentConverterPdf(scanPdfFile, scanPdfVersion)) return;
+
   const effectiveMap = augmentConverterMapWithMasterDescriptionMatches(map, pages);
 
   if (!effectiveMap.length) {
@@ -1124,13 +1148,15 @@ async function previewPartNumberChangesScan() {
   let ocrPages = [];
 
   try {
-    ocrPages = await extractDrawingPageOCRText(converterPdfFile, pages);
+    ocrPages = await extractDrawingPageOCRText(scanPdfFile, pages);
   } catch (error) {
     console.warn("Drawing-page OCR scan failed:", error);
     updateConverterStatus(
       "PDF text preview is ready. Drawing-page OCR stopped before it finished."
     );
   }
+
+  if (!isCurrentConverterPdf(scanPdfFile, scanPdfVersion)) return;
 
   if (ocrPages.length) {
     converterLastOcrPages = ocrPages;
@@ -1720,23 +1746,35 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
   }
 
   if (!showFinalStatus) {
-    converterBuildPromise = buildConvertedPDFBytesImpl(showFinalStatus)
+    const buildPromise = buildConvertedPDFBytesImpl(showFinalStatus)
       .finally(() => {
-        converterBuildPromise = null;
+        if (converterBuildPromise === buildPromise) {
+          converterBuildPromise = null;
+        }
       });
-    return converterBuildPromise;
+    converterBuildPromise = buildPromise;
+    return buildPromise;
   }
 
   return buildConvertedPDFBytesImpl(showFinalStatus);
 }
 
 async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
+  const buildPdfFile = converterPdfFile;
+  const buildPdfVersion = converterPdfVersion;
+
+  if (!buildPdfFile) return null;
+
   const baseMap = converterMap.length
     ? converterMap
     : await readExcelConverterMap();
   let map = getEffectiveConverterMap(baseMap);
 
-  const originalBytes = await converterPdfFile.arrayBuffer();
+  if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
+
+  const originalBytes = await buildPdfFile.arrayBuffer();
+  if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
+
   const pdfDoc = await PDFDocument.load(originalBytes);
   const fonts = {
     regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
@@ -1750,7 +1788,8 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
   }).promise;
 
   if (!map.length && converterMasterPartLookup?.entries?.length) {
-    const pages = await extractPDFTextByPage(converterPdfFile);
+    const pages = await extractPDFTextByPage(buildPdfFile);
+    if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
     map = getEffectiveConverterMap(
       augmentConverterMapWithMasterDescriptionMatches(baseMap, pages)
     );
@@ -1857,7 +1896,11 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
     }
   }
 
+  if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
+
   let convertedBytes = await pdfDoc.save();
+  if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
+
   converterChangedPages = Array.from(changedPages).sort((a, b) => a - b);
   converterReplacementDetails = replacementDetails;
   const overlayVerification = await verifyConvertedPDF(
@@ -1873,6 +1916,7 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
     convertedBytes,
     map
   );
+  if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
   const verification = {
     ...overlayVerification,
     ...finalVerification,
@@ -3194,6 +3238,7 @@ async function renderPdfPreviewBytes(bytes, container, pageNumbers = [], options
 
 function clearConverterFiles() {
   converterPdfFile = null;
+  converterPdfVersion++;
   converterExcelFile = null;
   converterExcelFiles = [];
   converterMap = [];
