@@ -1,0 +1,31 @@
+.ghost-autocomplete-overlay {
+  position: fixed;
+  z-index: 9999;
+  display: none;
+  box-sizing: border-box;
+  align-items: center;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
+  color: inherit;
+}
+
+.ghost-autocomplete-overlay.is-visible {
+  display: flex;
+}
+
+.ghost-autocomplete-prefix {
+  color: transparent;
+  user-select: none;
+}
+
+.ghost-autocomplete-suffix {
+  color: rgba(100, 116, 139, 0.68);
+  user-select: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ghost-autocomplete-suffix {
+    color: rgba(203, 213, 225, 0.55);
+  }
+}
