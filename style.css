@@ -2151,7 +2151,7 @@ details summary:hover {
 
 .app-prompt-message {
   white-space: pre-line;
-  color: #334155;
+  color: #222222;
 }
 
 .app-prompt-input-group {
@@ -2311,4 +2311,553 @@ details summary:hover {
   color: #2563eb;
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+/* Shared application polish: desktop-app spacing, controls, feedback, and motion. */
+:root {
+  --ns-bg: #f4f6f8;
+  --ns-bg-strong: #e8eef4;
+  --ns-surface: #ffffff;
+  --ns-surface-soft: #f8fbff;
+  --ns-surface-muted: #f9f9f9;
+  --ns-border: #dddddd;
+  --ns-border-strong: #cccccc;
+  --ns-text: #222222;
+  --ns-muted: #555555;
+  --ns-primary: #0b2d4d;
+  --ns-primary-hover: #17476f;
+  --ns-danger: #b42318;
+  --ns-danger-hover: #8f1b13;
+  --ns-success: #0f766e;
+  --ns-warning: #b45309;
+  --ns-info: #1d4ed8;
+  --ns-radius: 8px;
+  --ns-radius-sm: 6px;
+  --ns-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 24px rgba(15, 23, 42, 0.07);
+  --ns-shadow-hover: 0 2px 4px rgba(15, 23, 42, 0.08), 0 14px 28px rgba(15, 23, 42, 0.09);
+  --ns-focus: 0 0 0 3px rgba(23, 71, 111, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scrollbar-color: #8ba0b5 #e5ebf2;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.45;
+  background: var(--ns-bg);
+  color: var(--ns-text);
+}
+
+header {
+  padding: 22px 32px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+
+header h1,
+header p {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 1120px;
+}
+
+header h1 {
+  margin-top: 0;
+  margin-bottom: 6px;
+  font-size: clamp(26px, 2vw, 34px);
+  letter-spacing: 0;
+}
+
+header p {
+  margin-top: 0;
+  margin-bottom: 0;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+main {
+  width: min(1480px, calc(100% - 32px));
+  max-width: none;
+  margin: 20px auto 36px;
+  padding: 0;
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: 0;
+}
+
+h2 {
+  margin: 0 0 12px;
+  color: var(--ns-text);
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+h3 {
+  margin: 16px 0 10px;
+  color: var(--ns-text);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+p,
+label,
+summary,
+td,
+th,
+li {
+  color: inherit;
+}
+
+label {
+  display: inline-block;
+  margin-bottom: 5px;
+  color: #222222;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.card,
+.home-feature,
+.uploaded-pdf-row,
+.packet-history-row,
+.order-row,
+.page-manager-card,
+.pdf-page-preview,
+.toc-template-picker,
+.toc-template-preview-panel,
+.subsection-entry,
+.section-order-group,
+.converter-placement-editor,
+.converter-preview-item,
+.database-card,
+.saved-packet-card {
+  border: 1px solid var(--ns-border);
+  border-radius: var(--ns-radius);
+  background: var(--ns-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.card {
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: var(--ns-shadow-card);
+}
+
+.card > :first-child,
+.modal-content > :first-child {
+  margin-top: 0;
+}
+
+.card > :last-child,
+.modal-content > :last-child {
+  margin-bottom: 0;
+}
+
+.grid {
+  gap: 14px;
+}
+
+.button-row,
+.template-info,
+.builder-history-controls,
+.toc-template-table-actions,
+.toc-tree-actions,
+.preview-build-actions {
+  gap: 8px;
+  align-items: center;
+}
+
+button,
+.attach-pdf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 8px 13px;
+  border-radius: var(--ns-radius-sm);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: var(--ns-primary);
+  color: #ffffff;
+  transition: background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  user-select: none;
+}
+
+button:hover,
+.attach-pdf-btn:hover {
+  background: var(--ns-primary-hover);
+  box-shadow: 0 6px 14px rgba(11, 45, 77, 0.16);
+  transform: translateY(-1px);
+}
+
+button:active,
+.attach-pdf-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+button:disabled,
+button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+  box-shadow: none;
+}
+
+.secondary,
+button.secondary {
+  border: 1px solid var(--ns-border-strong);
+  background: var(--ns-surface-soft);
+  color: var(--ns-primary);
+}
+
+.secondary:hover,
+button.secondary:hover {
+  border-color: var(--ns-primary-hover);
+  background: #e8eef4;
+  color: var(--ns-primary);
+}
+
+.delete-btn,
+.remove-pdf-btn {
+  background: var(--ns-danger);
+}
+
+.delete-btn:hover,
+.remove-pdf-btn:hover {
+  background: var(--ns-danger-hover);
+}
+
+button:focus-visible,
+.attach-pdf-btn:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: none;
+  box-shadow: var(--ns-focus);
+}
+
+input,
+select,
+textarea {
+  min-height: 38px;
+  border: 1px solid var(--ns-border-strong);
+  border-radius: var(--ns-radius-sm);
+  background: #ffffff;
+  color: var(--ns-text);
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: #999999;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #777777;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  background: #f1f1f1;
+  color: #777777;
+}
+
+table {
+  overflow: hidden;
+  border: 1px solid var(--ns-border);
+  border-radius: var(--ns-radius);
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--ns-surface);
+}
+
+th,
+td {
+  border: 0;
+  border-bottom: 1px solid var(--ns-border);
+  padding: 9px 10px;
+}
+
+th {
+  background: #e8eef4;
+  color: #222222;
+  font-size: 12px;
+  font-weight: 750;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+tr:nth-child(even) {
+  background: #f9f9f9;
+}
+
+tr:hover {
+  background: #f8fbff;
+}
+
+.drop-zone,
+.import-drop-zone {
+  border-width: 2px;
+  border-color: #17476f;
+  background: #f8fbff;
+  color: #222222;
+}
+
+.drop-zone.dragover,
+.import-drop-zone.dragover {
+  border-color: var(--ns-primary-hover);
+  background: #eaf4ff;
+  box-shadow: inset 0 0 0 1px rgba(23, 71, 111, 0.18), 0 10px 22px rgba(11, 45, 77, 0.12);
+  transform: translateY(-1px);
+}
+
+.uploaded-pdf-row,
+.packet-history-row,
+.order-row,
+.page-manager-card,
+.pdf-page-preview,
+.subsection-entry,
+.converter-preview-item,
+.saved-packet-card {
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
+}
+
+.uploaded-pdf-row:hover,
+.packet-history-row:hover,
+.order-row:hover,
+.page-manager-card:hover,
+.pdf-page-preview:hover,
+.subsection-entry:hover,
+.converter-preview-item:hover,
+.saved-packet-card:hover {
+  border-color: #a9bad0;
+  box-shadow: var(--ns-shadow-hover);
+}
+
+.uploaded-pdf-row {
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px 14px;
+}
+
+.uploaded-pdf-name,
+.packet-history-title,
+.toc-tree-title {
+  color: var(--ns-text);
+  font-weight: 750;
+}
+
+.uploaded-pdf-title,
+.subsection-count,
+.builder-history-status,
+.toc-tree-meta,
+.toc-tree-empty,
+.converter-master-note {
+  color: var(--ns-muted);
+}
+
+.order-row {
+  padding: 9px 10px;
+  cursor: grab;
+}
+
+.order-row.dragging {
+  opacity: 0.76;
+  cursor: grabbing;
+  box-shadow: 0 10px 24px rgba(11, 45, 77, 0.18);
+  transform: scale(0.996);
+}
+
+.drag-handle {
+  color: #6e8195;
+}
+
+.modal {
+  background: rgba(15, 23, 42, 0.48);
+  backdrop-filter: blur(2px);
+}
+
+.modal-content {
+  border: 1px solid rgba(184, 198, 213, 0.82);
+  border-radius: var(--ns-radius);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+  animation: ns-modal-in 0.16s ease-out;
+}
+
+@keyframes ns-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.warranty-status,
+.builder-history-status,
+.subsection-page-selection-status,
+.toc-template-page-status,
+.preview-build-status,
+.converter-status,
+.database-status {
+  border-left: 3px solid #7f9ab7;
+  border-radius: var(--ns-radius-sm);
+  background: var(--ns-surface-muted);
+  padding: 8px 10px;
+  color: var(--ns-muted);
+}
+
+.toc-entry-missing-page,
+.toc-template-page-error {
+  color: var(--ns-danger);
+}
+
+.toc-tree-list {
+  gap: 10px;
+}
+
+.toc-tree-row {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-left: calc(var(--toc-level) * 28px);
+  border-color: var(--ns-border);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
+}
+
+.toc-tree-row::before {
+  border-left-color: #d4dde7;
+}
+
+.toc-tree-row::after {
+  background: #d4dde7;
+}
+
+.toc-tree-row:hover {
+  border-color: #c7d4e2;
+  background: #f8fbff;
+  box-shadow: 0 6px 16px rgba(11, 45, 77, 0.09);
+}
+
+.toc-tree-row-attention {
+  border-color: #f59e0b;
+  background: #fff8ed;
+}
+
+.toc-tree-level-badge {
+  border-color: #d4dde7;
+  background: #f8fbff;
+  color: var(--ns-primary);
+}
+
+.toc-tree-actions {
+  opacity: 0.88;
+  transition: opacity 0.16s ease;
+}
+
+.toc-tree-row:hover .toc-tree-actions,
+.toc-tree-row:focus-within .toc-tree-actions {
+  opacity: 1;
+}
+
+.toc-template-table-row,
+.converter-preview-row,
+.database-row {
+  transition: background-color 0.16s ease;
+}
+
+.final-preview-frame,
+.converter-preview-frame,
+.pdf-viewer-frame,
+.preview-build-viewer {
+  border-color: var(--ns-border);
+  border-radius: var(--ns-radius);
+  background: #f3f6fa;
+}
+
+.side-menu {
+  box-shadow: 10px 0 30px rgba(15, 23, 42, 0.18);
+}
+
+.hamburger {
+  border-radius: var(--ns-radius-sm);
+  box-shadow: 0 8px 18px rgba(11, 45, 77, 0.22);
+}
+
+details {
+  transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+
+summary {
+  cursor: pointer;
+  border-radius: var(--ns-radius-sm);
+}
+
+@media (max-width: 900px) {
+  main {
+    width: min(100% - 20px, 1480px);
+    margin-top: 14px;
+  }
+
+  .card,
+  .modal-content {
+    padding: 14px;
+  }
+
+  .toc-tree-row {
+    margin-left: calc(var(--toc-level) * 16px);
+  }
+}
+
+@media (max-width: 620px) {
+  header {
+    padding: 18px 16px;
+  }
+
+  .button-row {
+    align-items: stretch;
+  }
+
+  .button-row > button,
+  .button-row > .attach-pdf-btn {
+    flex: 1 1 150px;
+  }
+
+  .uploaded-pdf-row {
+    align-items: stretch;
+  }
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }

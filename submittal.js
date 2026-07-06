@@ -3116,7 +3116,7 @@ function openDatasheetOrderModal(datasheets) {
       list.appendChild(row);
     });
 
-  list.addEventListener("dragover", e => {
+  list.ondragover = e => {
     e.preventDefault();
 
     const dragging = list.querySelector(".dragging");
@@ -3129,7 +3129,7 @@ function openDatasheetOrderModal(datasheets) {
     } else {
       list.insertBefore(dragging, afterElement);
     }
-  });
+  };
 
   modal.classList.remove("hidden");
 }
