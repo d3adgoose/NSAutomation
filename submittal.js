@@ -28,6 +28,55 @@ const TOC_ENTRY_TEMPLATES = [
       { title: "Medium duty flange coupler installation", tocLevel: 2 },
       { title: "3M dual roof mop", tocLevel: 1 }
     ]
+  },
+  {
+    id: "activation-eyes",
+    name: "Activation Eyes",
+    entries: [
+      { title: "Activation Eyes", tocLevel: 0 },
+      { title: "Activation Sensors", tocLevel: 1 },
+      { title: "Entrance Light", tocLevel: 1 },
+      { title: "Signal Light", tocLevel: 1 }
+    ]
+  },
+  {
+    id: "brush-module-5m-420",
+    name: "Brush Module 5M-420",
+    entries: [
+      { title: "Brush Module 5M-420", tocLevel: 0 },
+      { title: "2hp 5M brush motor", tocLevel: 1 },
+      { title: "5M 15:1 ratio & 40:1 ratio gear reducers", tocLevel: 1 },
+      { title: "1.5\" 2-bolt heavy duty bearing", tocLevel: 1 },
+      { title: "5M-420 spray pipes", tocLevel: 1 },
+      { title: "5010 brass 1/4\" mnpt nozzle", tocLevel: 2 },
+      { title: "5M-12.5 ECO-motion bristle wrap-brush", tocLevel: 1 },
+      { title: "Heavy duty flange coupler", tocLevel: 2 },
+      { title: "13-1/2\" shock absorber", tocLevel: 2 },
+      { title: "5M-12.5 ECO-motion bristle side-brush", tocLevel: 1 },
+      { title: "Flange coupler", tocLevel: 2 },
+      { title: "5M-420 heavy duty flange coupler & flange couple - installation", tocLevel: 1 },
+      { title: "Alum. 5M angled 50-slotted rack", tocLevel: 1 }
+    ]
+  },
+  {
+    id: "brush-module-3250",
+    name: "Brush module 3250",
+    entries: [
+      { title: "Brush module 3250", tocLevel: 0 },
+      { title: "1.5hp 3M brush motor", tocLevel: 1 },
+      { title: "3M 15:1 ratio gear reducer & 3M 40:1 ratio gear reducer", tocLevel: 1 },
+      { title: "1.5\" 2-bolt normal duty bearing", tocLevel: 1 },
+      { title: "Brush module 3250-14 spray pipes", tocLevel: 1 },
+      { title: "5010 brass 1/4\" mnpt nozzle", tocLevel: 2 },
+      { title: "3M-14 ECO-motion bristle wrap-brush", tocLevel: 1 },
+      { title: "13.5\" shock absorber", tocLevel: 2 },
+      { title: "3M wrap brush stabilizer & 13.5\" shock absorber", tocLevel: 2 },
+      { title: "Medium duty flange coupler", tocLevel: 2 },
+      { title: "3M-14 ECO-motion bristle side-brush", tocLevel: 1 },
+      { title: "Flange coupler", tocLevel: 2 },
+      { title: "Brush module 3250 - flange couplers - installation", tocLevel: 1 },
+      { title: "3M dual roof mop - straight & angled racks", tocLevel: 1 }
+    ]
   }
 ];
 
