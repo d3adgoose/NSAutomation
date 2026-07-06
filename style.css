@@ -554,6 +554,81 @@ button:disabled {
   margin-bottom: 6px;
 }
 
+
+.toc-template-modal-content {
+  width: 900px;
+  max-width: 95%;
+}
+
+.toc-template-list {
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+.toc-template-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.toc-template-table th,
+.toc-template-table td {
+  border: 1px solid #ccc;
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.toc-template-table th {
+  background: #f4f7fb;
+}
+
+.toc-template-table td:last-child {
+  width: 110px;
+  text-align: right;
+}
+
+.toc-template-table summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.toc-template-level-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.toc-template-level-row {
+  display: grid;
+  grid-template-columns: 78px minmax(180px, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.toc-template-level-badge {
+  display: inline-block;
+  border: 1px solid #bfd0df;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: #eef5fb;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .toc-template-level-row {
+    grid-template-columns: 1fr;
+  }
+
+  .toc-template-table th,
+  .toc-template-table td {
+    padding: 8px;
+  }
+}
+
 .subsection-entry-row {
   display: flex;
   justify-content: space-between;
@@ -568,6 +643,11 @@ button:disabled {
 
 .subsection-entry-info {
   font-size: 14px;
+}
+
+.toc-entry-missing-page {
+  color: #b42318;
+  font-weight: 700;
 }
 
 .subsection-count {

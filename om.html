@@ -43,7 +43,6 @@
             <li>
               Upload PDFs using <strong>Choose Files</strong> or by
               <strong>dragging and dropping</strong> files into the upload area.
-              You can also use <strong>Import Submittal PDF</strong> to pull sections from a completed submittal.
               Do not include a cover page or table of contents - these are generated automatically.
             </li>
 
@@ -83,7 +82,7 @@
           </p>
 
           <ul>
-            <li>Imported submittal TOCs can use bullet rows for sections and dash rows for subsections.</li>
+            <li>TOC templates can add common section and subsection names before building.</li>
             <li>Datasheets can be reordered before building the PDF.</li>
             <li>Files without a recognized keyword default to Datasheets.</li>
           </ul>
@@ -94,23 +93,11 @@
       <h2>Upload PDFs</h2>
 
       <div class="button-row upload-toolbar">
-        <input
-          type="file"
-          id="submittalImport"
-          class="hidden"
-          accept="application/pdf"
-        />
-
-        <button onclick="openSubmittalImportModal()">
-          Import Submittal PDF
-        </button>
         <button onclick="renameTOCSections()">Rename Roman Numerals</button>
         <button class="delete-btn" onclick="clearUploadedPDFs()">
           Clear PDFs
         </button>
       </div>
-
-      <p id="submittalImportStatus" class="warranty-status" aria-live="polite"></p>
 
       <div id="dropZone" class="drop-zone upload-drop-zone">
         <p><strong>Drag & Drop PDFs Here</strong></p>
@@ -228,39 +215,6 @@
       </p>
     </section>
   </main>
-
-  <div id="submittalImportModal" class="modal hidden">
-    <div class="modal-content">
-      <h2>Import Submittal PDF</h2>
-      <p>
-        Drop in a completed Submittal packet and import the sections needed for
-        this O&amp;M packet.
-      </p>
-
-      <div id="submittalImportDropZone" class="drop-zone import-drop-zone">
-        <p><strong>Drop Complete Submittal PDF Here</strong></p>
-        <button onclick="document.getElementById('submittalImport').click()">
-          Choose PDF
-        </button>
-      </div>
-
-      <div
-        id="submittalImportDetectedSections"
-        class="import-summary hidden"
-        aria-live="polite"
-      ></div>
-
-      <div class="button-row">
-        <button onclick="confirmSubmittalImport()">Import Detected Sections</button>
-        <button class="secondary" onclick="closeSubmittalImportModal()">Close</button>
-      </div>
-
-      <p id="submittalImportModalStatus" class="warranty-status" aria-live="polite">
-        No PDF selected.
-      </p>
-    </div>
-  </div>
-
   <div id="warrantyPromptModal" class="modal hidden">
     <div class="modal-content warranty-modal-content">
       <h2>Warranty Sheet</h2>
@@ -434,6 +388,10 @@
               Add TOC Entry
             </button>
 
+            <button class="secondary" onclick="openTOCTemplateModal()">
+              Template
+            </button>
+
             <button
               class="secondary"
               onclick="closeSubsectionModal()"
@@ -452,6 +410,23 @@
 
     </div>
   </div>
+  <div id="tocTemplateModal" class="modal hidden">
+    <div class="modal-content toc-template-modal-content">
+      <h2>TOC Template</h2>
+      <p>
+        Choose a template to add the rows, then edit each row to assign its PDF page.
+      </p>
+
+      <div id="tocTemplatePreviewList" class="toc-template-list"></div>
+
+      <p id="tocTemplateStatus" class="warranty-status" aria-live="polite"></p>
+
+      <div class="button-row">
+        <button class="secondary" onclick="closeTOCTemplateModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="appPromptModal" class="modal hidden">
     <div class="modal-content app-prompt-modal-content">
       <h2 id="appPromptTitle">Action Needed</h2>

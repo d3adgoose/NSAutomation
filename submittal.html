@@ -79,7 +79,7 @@
           <ul>
             <li>Revision Remarks are not numbered and do not appear in the TOC.</li>
             <li>Datasheets can be reordered before building the PDF.</li>
-            <li>Imported submittal TOCs can use bullet rows for sections and dash rows for subsections.</li>
+            <li>TOC templates can add common section and subsection names before building.</li>
           </ul>
         </div>
       </details>
@@ -419,6 +419,10 @@
                 Add TOC Entry
               </button>
 
+              <button class="secondary" onclick="openTOCTemplateModal()">
+                Template
+              </button>
+
               <button
                 class="secondary"
                 onclick="closeSubsectionModal()"
@@ -435,6 +439,23 @@
 
       </div>
 
+    </div>
+  </div>
+
+  <div id="tocTemplateModal" class="modal hidden">
+    <div class="modal-content toc-template-modal-content">
+      <h2>TOC Template</h2>
+      <p>
+        Choose a template to add the rows, then edit each row to assign its PDF page.
+      </p>
+
+      <div id="tocTemplatePreviewList" class="toc-template-list"></div>
+
+      <p id="tocTemplateStatus" class="warranty-status" aria-live="polite"></p>
+
+      <div class="button-row">
+        <button class="secondary" onclick="closeTOCTemplateModal()">Close</button>
+      </div>
     </div>
   </div>
 
