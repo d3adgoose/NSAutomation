@@ -189,9 +189,13 @@
 
 <div class="button-row">
   <button onclick="buildPacket()">Build PDF</button>
+        <button id="builderUndoButton" class="secondary" type="button" onclick="undoBuilderAction()" disabled>Undo</button>
+        <button id="builderRedoButton" class="secondary" type="button" onclick="redoBuilderAction()" disabled>Redo</button>
   <button onclick="exportCSV()">Export CSV</button>
 </div>
       </div>
+
+      <p id="builderHistoryStatus" class="builder-history-status" aria-live="polite">No changes to undo yet.</p>
 
       <p id="packetBuildStatus" class="warranty-status" aria-live="polite">
         Ready to build.
@@ -372,7 +376,7 @@
           />
 
           <label>Level</label>
-          <select id="tocEntryLevel" onchange="updateTOCParentDropdown()">
+          <select id="tocEntryLevel" onchange="updateTOCLevelFromSelect()">
             <option value="0">Level 0 - Main item</option>
             <option value="1">Level 1 - Under Level 0</option>
             <option value="2">Level 2 - Under Level 1</option>
@@ -432,6 +436,18 @@
 
       <div class="button-row">
         <button class="secondary" onclick="closeTOCTemplateModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="finalBuildPreviewModal" class="modal hidden">
+    <div class="modal-content final-build-preview-modal-content">
+      <h2>Preview Build</h2>
+      <p id="finalBuildPreviewStatus" class="warranty-status" aria-live="polite">Loading preview...</p>
+      <div id="finalBuildPreviewPages" class="final-build-preview-pages"></div>
+      <div class="button-row preview-modal-actions">
+        <button onclick="confirmFinalBuildPreview()">Build PDF</button>
+        <button class="secondary" onclick="closeFinalBuildPreviewModal()">Edit</button>
       </div>
     </div>
   </div>

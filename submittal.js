@@ -1,11 +1,17 @@
 let pdfLibrary = [];
 let pendingBuild = false;
+let finalBuildPreviewAccepted = false;
+let finalBuildPreviewCache = null;
 let customSectionLabels = {};
 const sourcePDFBytesCache = new WeakMap();
 let romanCoverPageBytesPromise = null;
 let warrantyPromptHandled = false;
 let selectedManagedPages = new Set();
 let currentBuildPdfDoc = null;
+const builderUndoStack = [];
+const builderRedoStack = [];
+let builderHistoryFieldSnapshots = new Map();
+const BUILDER_HISTORY_LIMIT = 50;
 let editingTOCEntryId = "";
 const PDF_PARENT_TOC_ID = "__pdf_parent__";
 const TOC_ENTRY_TEMPLATES = [
@@ -250,6 +256,7 @@ if (pdfUpload) {
 document.addEventListener("DOMContentLoaded", () => {
   const dropZone = document.getElementById("dropZone");
   renderPacketHistory();
+  setupBuilderHistoryControls();
 
   if (!dropZone) return;
 
@@ -384,6 +391,7 @@ function getSectionFileOrder(item) {
 }
 
 async function renameTOCSections() {
+  let sectionRenameUndoRecorded = false;
   const isOM =
     typeof isOMPacket === "function" &&
     isOMPacket();
@@ -414,6 +422,10 @@ async function renameTOCSections() {
     const cleanName = newName.trim();
 
     if (cleanName) {
+      if (!sectionRenameUndoRecorded) {
+        recordBuilderUndoState();
+        sectionRenameUndoRecorded = true;
+      }
       customSectionLabels[section] = cleanName;
     }
   }
@@ -493,6 +505,7 @@ async function renamePdfTitle(id) {
     return;
   }
 
+    recordBuilderUndoState();
     item.displayTitle = cleanTitle;
 
     const detectedSection = guessPacketSection(cleanTitle);
@@ -525,6 +538,9 @@ function updateUploadedPDFSection(id, newSection) {
   const item = pdfLibrary.find(x => x.id === id);
   if (!item) return;
 
+  if (item.packetSection === newSection) return;
+
+  recordBuilderUndoState();
   const previousSection = item.packetSection;
   item.packetSection = newSection;
   item.documentType = guessDocumentType(newSection);
@@ -887,6 +903,7 @@ async function deleteSelectedPages() {
 
     if (!(await showConfirmModal("Delete Pages", `Delete ${selectedPages.length} selected page(s)?`, "Delete"))) return;
 
+    recordBuilderUndoState();
     const deletedPageSet = new Set(selectedPages);
     const keptIndexes = sourcePdf.getPageIndices().filter(
       pageIndex => !deletedPageSet.has(pageIndex + 1)
@@ -933,6 +950,7 @@ async function deleteSelectedPages() {
 }
 
 function removeUploadedPDF(id) {
+  recordBuilderUndoState();
   const removedItem = pdfLibrary.find(item => item.id === id);
   pdfLibrary = pdfLibrary.filter(item => item.id !== id);
 
@@ -947,6 +965,7 @@ function removeUploadedPDF(id) {
 async function clearUploadedPDFs() {
   if (!(await showConfirmModal("Clear Uploaded PDFs", "Clear all uploaded PDFs from the packet builder?", "Clear"))) return;
 
+  recordBuilderUndoState();
   pdfLibrary = [];
 
   const pdfUpload = document.getElementById("pdfUpload");
@@ -960,6 +979,8 @@ async function clearUploadedPDFs() {
   }
 
   pendingBuild = false;
+  finalBuildPreviewAccepted = false;
+  finalBuildPreviewCache = null;
   warrantyPromptHandled = false;
   renderUploadedPdfList();
   updatePacketBuildStatus();
@@ -1336,6 +1357,175 @@ function getPacketBuilderState(includedCount = 0) {
   };
 }
 
+function cloneBuilderHistoryItem(item) {
+  return {
+    ...item,
+    file: item.file || null,
+    tocEntries: (item.tocEntries || []).map(entry => ({ ...entry }))
+  };
+}
+
+function getLivePacketBuilderSnapshot() {
+  const snapshot = getPacketBuilderState(pdfLibrary.filter(item => item.include !== false).length);
+  snapshot.pdfLibrary = pdfLibrary.map(cloneBuilderHistoryItem);
+  snapshot.pageNumberMode = getPageNumberMode();
+  return snapshot;
+}
+
+function areBuilderSnapshotsEqual(a, b) {
+  if (!a || !b) return false;
+  const stripFiles = snapshot => JSON.stringify({
+    fields: snapshot.fields || {},
+    pageNumberMode: snapshot.pageNumberMode || "normal",
+    customSectionLabels: snapshot.customSectionLabels || {},
+    pdfLibrary: (snapshot.pdfLibrary || []).map(item => ({
+      ...item,
+      file: item.file ? "[file]" : null,
+      tocEntries: (item.tocEntries || []).map(entry => ({ ...entry }))
+    }))
+  });
+  return stripFiles(a) === stripFiles(b);
+}
+
+function updateBuilderHistoryControls() {
+  const undoButton = document.getElementById("builderUndoButton");
+  const redoButton = document.getElementById("builderRedoButton");
+  const status = document.getElementById("builderHistoryStatus");
+
+  if (undoButton) undoButton.disabled = builderUndoStack.length === 0;
+  if (redoButton) redoButton.disabled = builderRedoStack.length === 0;
+  if (status) {
+    status.textContent = builderUndoStack.length || builderRedoStack.length
+      ? `${builderUndoStack.length} undo / ${builderRedoStack.length} redo`
+      : "No changes to undo yet.";
+  }
+}
+
+function recordBuilderUndoState() {
+  const snapshot = getLivePacketBuilderSnapshot();
+  const last = builderUndoStack[builderUndoStack.length - 1];
+  if (areBuilderSnapshotsEqual(snapshot, last)) return;
+
+  builderUndoStack.push(snapshot);
+  if (builderUndoStack.length > BUILDER_HISTORY_LIMIT) builderUndoStack.shift();
+  builderRedoStack.length = 0;
+  updateBuilderHistoryControls();
+}
+
+function applyPacketBuilderSnapshot(snapshot) {
+  if (!snapshot) return;
+
+  pdfLibrary = (snapshot.pdfLibrary || []).map(item => ({
+    ...item,
+    id: item.id || crypto.randomUUID(),
+    file: restoreFileFromHistory(item),
+    tocEntries: (item.tocEntries || []).map(entry => ({ ...entry })),
+    tocEntriesReviewed: !!item.tocEntriesReviewed,
+    include: item.include !== false,
+    hideParentTOC: !!item.hideParentTOC
+  }));
+
+  customSectionLabels = { ...(snapshot.customSectionLabels || {}) };
+  pendingBuild = false;
+  finalBuildPreviewAccepted = false;
+  finalBuildPreviewCache = null;
+  warrantyPromptHandled = false;
+  selectedManagedPages = new Set();
+
+  Object.entries(snapshot.fields || {}).forEach(([id, value]) => {
+    const field = document.getElementById(id);
+    if (field) field.value = value || "";
+  });
+
+  const mode = snapshot.pageNumberMode || "normal";
+  const modeInput = document.querySelector(`input[name="pageNumberMode"][value="${mode}"]`);
+  if (modeInput) modeInput.checked = true;
+
+  const activeId = document.getElementById("activeSubsectionPdfId")?.value;
+  renderUploadedPdfList();
+  if (activeId && pdfLibrary.some(item => item.id === activeId)) {
+    renderCurrentSubsectionList();
+    updateTOCParentDropdown();
+  }
+  updatePacketBuildStatus("Change restored. Review the builder before building.");
+}
+
+function undoBuilderAction() {
+  if (builderUndoStack.length === 0) return;
+  const current = getLivePacketBuilderSnapshot();
+  const previous = builderUndoStack.pop();
+  builderRedoStack.push(current);
+  applyPacketBuilderSnapshot(previous);
+  updateBuilderHistoryControls();
+}
+
+function redoBuilderAction() {
+  if (builderRedoStack.length === 0) return;
+  const current = getLivePacketBuilderSnapshot();
+  const next = builderRedoStack.pop();
+  builderUndoStack.push(current);
+  applyPacketBuilderSnapshot(next);
+  updateBuilderHistoryControls();
+}
+
+function resetBuilderHistory() {
+  builderUndoStack.length = 0;
+  builderRedoStack.length = 0;
+  builderHistoryFieldSnapshots = new Map();
+  updateBuilderHistoryControls();
+}
+
+function setupBuilderHistoryControls() {
+  const fieldIds = [
+    "projectNumber",
+    "projectName",
+    "projectLocation",
+    "projectAddress",
+    "washType",
+    "systemName",
+    "revision"
+  ];
+
+  fieldIds.forEach(id => {
+    const field = document.getElementById(id);
+    if (!field) return;
+
+    const capture = () => builderHistoryFieldSnapshots.set(id, getLivePacketBuilderSnapshot());
+    const commit = () => {
+      const before = builderHistoryFieldSnapshots.get(id);
+      const after = getLivePacketBuilderSnapshot();
+      if (before && !areBuilderSnapshotsEqual(before, after)) {
+        builderUndoStack.push(before);
+        if (builderUndoStack.length > BUILDER_HISTORY_LIMIT) builderUndoStack.shift();
+        builderRedoStack.length = 0;
+        updateBuilderHistoryControls();
+      }
+      builderHistoryFieldSnapshots.delete(id);
+    };
+
+    field.addEventListener("focus", capture);
+    field.addEventListener("change", commit);
+    field.addEventListener("blur", commit);
+  });
+
+  document.querySelectorAll('input[name="pageNumberMode"]').forEach(input => {
+    const capturePageMode = () => builderHistoryFieldSnapshots.set("pageNumberMode", getLivePacketBuilderSnapshot());
+    input.addEventListener("focus", capturePageMode);
+    input.addEventListener("pointerdown", capturePageMode);
+    input.addEventListener("keydown", capturePageMode);
+    input.addEventListener("change", () => {
+      const before = builderHistoryFieldSnapshots.get("pageNumberMode") || getLivePacketBuilderSnapshot();
+      builderUndoStack.push(before);
+      if (builderUndoStack.length > BUILDER_HISTORY_LIMIT) builderUndoStack.shift();
+      builderRedoStack.length = 0;
+      builderHistoryFieldSnapshots.delete("pageNumberMode");
+      updateBuilderHistoryControls();
+    });
+  });
+
+  updateBuilderHistoryControls();
+}
+
 function hasActivePacketBuilderState() {
   const hasFiles = pdfLibrary.length > 0;
   const hasFields = [
@@ -1391,6 +1581,8 @@ async function restorePacketBuilderState(builderState) {
 
   customSectionLabels = { ...(builderState.customSectionLabels || {}) };
   pendingBuild = false;
+  finalBuildPreviewAccepted = false;
+  finalBuildPreviewCache = null;
   warrantyPromptHandled = false;
   selectedManagedPages = new Set();
 
@@ -1405,6 +1597,7 @@ async function restorePacketBuilderState(builderState) {
   [
     "warrantyPromptModal",
     "datasheetOrderModal",
+    "finalBuildPreviewModal",
     "subsectionModal",
     "pageManagerModal"
   ].forEach(id => {
@@ -1778,6 +1971,153 @@ function adjustNormalTOCPageNumbersForInsertedPages(
   });
 }
 
+function setFinalBuildPreviewStatus(message) {
+  const status = document.getElementById("finalBuildPreviewStatus");
+  if (status) status.textContent = message || "";
+}
+
+function clearFinalBuildPreviewPages() {
+  const pages = document.getElementById("finalBuildPreviewPages");
+  if (pages) pages.innerHTML = "";
+}
+
+async function renderFinalBuildPdfPreview(bytes) {
+  const container = document.getElementById("finalBuildPreviewPages");
+  if (!container) return;
+  container.innerHTML = "";
+
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  setFinalBuildPreviewStatus("Rendering preview pages...");
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    setFinalBuildPreviewStatus(`Rendering page ${pageNumber} of ${pdf.numPages}...`);
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+
+    const label = document.createElement("div");
+    label.className = "page-preview-label";
+    label.textContent = `Page ${pageNumber}`;
+    container.appendChild(label);
+
+    const pageWrap = document.createElement("div");
+    pageWrap.className = "converter-preview-page-wrap final-build-preview-page-wrap";
+    pageWrap.dataset.pageNumber = String(pageNumber);
+    pageWrap.dataset.viewportScale = String(viewport.scale || 1);
+    pageWrap.style.width = `${viewport.width}px`;
+    pageWrap.style.maxWidth = "100%";
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "converter-preview-page final-build-preview-page";
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    pageWrap.appendChild(canvas);
+    container.appendChild(pageWrap);
+
+    await page.render({
+      canvasContext: canvas.getContext("2d", { willReadFrequently: true }),
+      viewport
+    }).promise;
+  }
+
+  setFinalBuildPreviewStatus(`Preview ready. ${pdf.numPages} page(s) in the full build.`);
+}
+
+async function openFinalBuildPreviewModal(previewData) {
+  const modal = document.getElementById("finalBuildPreviewModal");
+  if (!modal) return false;
+  finalBuildPreviewCache = previewData;
+  clearFinalBuildPreviewPages();
+  setFinalBuildPreviewStatus("Loading preview...");
+  modal.classList.remove("hidden");
+  updatePacketBuildStatus("Review the PDF preview before creating the final file.");
+
+  try {
+    await renderFinalBuildPdfPreview(previewData.pdfBytes);
+  } catch (previewError) {
+    console.error("Could not render final build preview:", previewError);
+    setFinalBuildPreviewStatus("Preview could not be displayed, but the PDF is ready to build.");
+  }
+  return true;
+}
+
+function closeFinalBuildPreviewModal() {
+  const modal = document.getElementById("finalBuildPreviewModal");
+  if (modal) modal.classList.add("hidden");
+  clearFinalBuildPreviewPages();
+  finalBuildPreviewAccepted = false;
+  finalBuildPreviewCache = null;
+  pendingBuild = false;
+  warrantyPromptHandled = false;
+  updatePacketBuildStatus("Build preview closed. Make edits, then build again when ready.");
+}
+
+async function finishPacketBuildFromPreview(previewData) {
+  const buildLabel = previewData.buildLabel || getPacketBuildLabel();
+  const { pdfBytes, outputName, included } = previewData;
+
+  updatePacketBuildStatus("Saving local history copy...");
+  try {
+    await savePacketHistoryEntry({
+      pdfBytes,
+      fileName: outputName,
+      includedCount: included.length
+    });
+  } catch (historyError) {
+    console.warn("Could not save packet history:", historyError);
+    updatePacketHistoryStatus(
+      historyError.message || "Could not save this PDF to local history."
+    );
+  }
+
+  updatePacketBuildStatus("Downloading final PDF...");
+  downloadFile(pdfBytes, outputName, "application/pdf");
+  console.log("Download function ran.");
+  warrantyPromptHandled = false;
+
+  if (
+    typeof supabaseClient !== "undefined" &&
+    typeof mergeSubmittalIntoLibrary === "function"
+  ) {
+    try {
+      await mergeSubmittalIntoLibrary(included);
+    } catch (e) {
+      console.error("Error merging into library", e);
+    }
+  }
+
+  finalBuildPreviewCache = null;
+  resetPacketBuilder();
+  updatePacketBuildStatus(`${buildLabel} downloaded. Ready for the next build.`);
+}
+
+async function confirmFinalBuildPreview() {
+  const previewData = finalBuildPreviewCache;
+  const modal = document.getElementById("finalBuildPreviewModal");
+  if (modal) modal.classList.add("hidden");
+  clearFinalBuildPreviewPages();
+  finalBuildPreviewAccepted = true;
+  pendingBuild = false;
+
+  if (!previewData) {
+    pendingBuild = true;
+    buildPacket();
+    return;
+  }
+
+  try {
+    await finishPacketBuildFromPreview(previewData);
+  } catch (error) {
+    console.error("Could not finish previewed build:", error);
+    finalBuildPreviewAccepted = false;
+    finalBuildPreviewCache = null;
+    warrantyPromptHandled = false;
+    const message = getBuildErrorMessage(previewData.buildLabel || getPacketBuildLabel(), error, "finishing the previewed build");
+    updatePacketBuildStatus(message);
+    await showMessageModal("Build Paused", message);
+  }
+}
+
 async function buildPacket() {
   const buildLabel = getPacketBuildLabel();
   let buildContext = "starting the build";
@@ -1800,8 +2140,10 @@ async function buildPacket() {
     return;
   }
 
+  finalBuildPreviewAccepted = false;
+  finalBuildPreviewCache = null;
   pendingBuild = false;
-  updatePacketBuildStatus(`Building ${buildLabel}...`);
+  updatePacketBuildStatus(`Building ${buildLabel} preview...`);
 
   try {
   buildContext = "creating a new PDF";
@@ -2016,43 +2358,18 @@ async function buildPacket() {
       ? getOMOutputFileName()
       : getOutputFileName();
 
-  buildContext = "saving the local history copy";
-  updatePacketBuildStatus("Saving local history copy...");
-  try {
-    await savePacketHistoryEntry({
-      pdfBytes,
-      fileName: outputName,
-      includedCount: included.length
-    });
-  } catch (historyError) {
-    console.warn("Could not save packet history:", historyError);
-    updatePacketHistoryStatus(
-      historyError.message || "Could not save this PDF to local history."
-    );
-  }
-
-  updatePacketBuildStatus("Downloading final PDF...");
-  downloadFile(pdfBytes, outputName, "application/pdf");
-  console.log("Download function ran.");
-  warrantyPromptHandled = false;
-
-  if (
-    typeof supabaseClient !== "undefined" &&
-    typeof mergeSubmittalIntoLibrary === "function"
-  ) {
-    try {
-      await mergeSubmittalIntoLibrary(included);
-    } catch (e) {
-      console.error("Error merging into library", e);
-    }
-  }
-
-  buildContext = "resetting the builder";
-  resetPacketBuilder();
-  updatePacketBuildStatus(`${buildLabel} downloaded. Ready for the next build.`);
+  buildContext = "showing the final PDF preview";
+  await openFinalBuildPreviewModal({
+    pdfBytes,
+    outputName,
+    included,
+    buildLabel
+  });
   } catch (error) {
     console.error(`Could not build ${buildLabel}:`, error);
     pendingBuild = false;
+    finalBuildPreviewAccepted = false;
+    finalBuildPreviewCache = null;
     warrantyPromptHandled = false;
     const message = getBuildErrorMessage(buildLabel, error, buildContext);
     updatePacketBuildStatus(message);
@@ -2062,7 +2379,10 @@ async function buildPacket() {
 
 function resetPacketBuilder() {
   pdfLibrary = [];
+  resetBuilderHistory();
   pendingBuild = false;
+  finalBuildPreviewAccepted = false;
+  finalBuildPreviewCache = null;
   warrantyPromptHandled = false;
   customSectionLabels = {};
 
@@ -2087,6 +2407,7 @@ function resetPacketBuilder() {
   [
     "warrantyPromptModal",
     "datasheetOrderModal",
+    "finalBuildPreviewModal",
     "subsectionModal",
     "pageManagerModal"
   ].forEach(id => {
@@ -2937,6 +3258,7 @@ function openSectionOrderModal(sectionGroups) {
 }
 
 function confirmDatasheetOrder() {
+  recordBuilderUndoState();
   const groups = Array.from(
     document.querySelectorAll("#datasheetOrderList .section-order-list")
   );
@@ -2991,6 +3313,7 @@ async function openSubsectionModal(id) {
   }
   if (hideParent) {
     hideParent.onchange = () => {
+      recordBuilderUndoState();
       item.hideParentTOC = hideParent.checked;
       cleanInvalidTOCParents(item);
       renderCurrentSubsectionList();
@@ -3026,7 +3349,10 @@ async function openSubsectionModal(id) {
   await renderPDFPagePreviews(item);
 }
 
-function closeSubsectionModal() {
+async function closeSubsectionModal() {
+  const item = getActiveSubsectionItem();
+  if (await warnIncompleteTemplateTOCEntries(item)) return;
+
   const modal = document.getElementById("subsectionModal");
   if (modal) modal.classList.add("hidden");
   closeTOCTemplateModal();
@@ -3170,6 +3496,36 @@ function getIncompleteTOCEntries() {
   );
 }
 
+function getIncompleteTemplateTOCEntries(item) {
+  return (item?.tocEntries || []).filter(entry =>
+    entry.requiresPageBeforeClose && !hasValidTOCSourcePage(entry)
+  );
+}
+
+function focusFirstIncompleteTemplateTOCEntry(item) {
+  const first = getIncompleteTemplateTOCEntries(item)[0];
+  if (!first) return;
+
+  const row = document.querySelector(`[data-toc-entry-id="${first.id}"]`);
+  if (row) {
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.add("toc-tree-row-attention");
+    window.setTimeout(() => row.classList.remove("toc-tree-row-attention"), 1600);
+  }
+}
+
+async function warnIncompleteTemplateTOCEntries(item) {
+  const missing = getIncompleteTemplateTOCEntries(item);
+  if (missing.length === 0) return false;
+
+  focusFirstIncompleteTemplateTOCEntry(item);
+  await showMessageModal(
+    "Template Pages Required",
+    `${missing.length} template TOC row(s) still need a PDF page. Add pages to the rows marked Template page required, or remove those rows before closing Format TOC.`
+  );
+  return true;
+}
+
 function openTOCTemplateModal() {
   const item = getActiveSubsectionItem();
   const modal = document.getElementById("tocTemplateModal");
@@ -3237,21 +3593,26 @@ function renderTOCTemplatePreview() {
     const levelList = document.createElement("div");
     levelList.className = "toc-template-level-list";
 
-    template.entries.forEach(entry => {
+        template.entries.forEach(entry => {
+      const levelNumber = Math.max(0, Math.min(2, Number(entry.tocLevel || 0)));
       const entryRow = document.createElement("div");
-      entryRow.className = "toc-template-level-row";
+      entryRow.className = `toc-template-level-row toc-template-level-${levelNumber}`;
+      entryRow.style.setProperty("--toc-level", String(levelNumber));
+
+      const rail = document.createElement("span");
+      rail.className = "toc-template-level-rail";
+
+      const name = document.createElement("span");
+      name.className = "toc-template-level-name";
+      name.textContent = entry.title || "";
 
       const level = document.createElement("span");
       level.className = "toc-template-level-badge";
-      level.textContent = "Level " + Number(entry.tocLevel || 0);
+      level.textContent = "Level " + levelNumber;
 
-      const name = document.createElement("span");
-      name.textContent = entry.title || "";
-
-      entryRow.append(level, name);
+      entryRow.append(rail, name, level);
       levelList.appendChild(entryRow);
     });
-
     details.appendChild(levelList);
     levelsCell.appendChild(details);
 
@@ -3277,6 +3638,7 @@ async function applyTOCTemplate(templateId) {
 
   if (!item || !template) return;
 
+  recordBuilderUndoState();
   item.hideParentTOC = true;
   const hideParent = document.getElementById("hideParentTOC");
   if (hideParent) hideParent.checked = true;
@@ -3288,7 +3650,8 @@ async function applyTOCTemplate(templateId) {
     entryType: Number(entry.tocLevel || 0) === 0 ? "section" : "subsection",
     tocLevel: Number(entry.tocLevel || 0),
     parentId: "",
-    detectedTOCEntry: false
+    detectedTOCEntry: false,
+    requiresPageBeforeClose: true
   }));
 
   const lastParentByLevel = new Map();
@@ -3323,6 +3686,10 @@ async function applyTOCTemplate(templateId) {
   renderCurrentSubsectionList();
   updateTOCParentDropdown();
   if (status) status.textContent = "Template added. Edit the rows marked Page required before building.";
+}
+
+function updateTOCLevelFromSelect() {
+  updateTOCParentDropdown();
 }
 
 function updateTOCParentDropdown(selectedParentId = "") {
@@ -3497,12 +3864,14 @@ async function saveTOCEntry() {
     if (duplicateAction === "skip") return;
 
     if (duplicateAction === "replace") {
+      recordBuilderUndoState();
       duplicateEntry.title = title;
       duplicateEntry.sourcePage = pageNumber;
       duplicateEntry.entryType = tocLevel === 0 ? "section" : "subsection";
       duplicateEntry.tocLevel = tocLevel;
       duplicateEntry.parentId = tocLevel === 0 ? "" : parentId;
       duplicateEntry.detectedTOCEntry = false;
+      duplicateEntry.requiresPageBeforeClose = false;
       item.tocEntriesReviewed = true;
 
       if (existingEntry) {
@@ -3519,6 +3888,8 @@ async function saveTOCEntry() {
     }
   }
 
+  recordBuilderUndoState();
+
   if (existingEntry) {
     existingEntry.title = title;
     existingEntry.sourcePage = pageNumber;
@@ -3526,6 +3897,7 @@ async function saveTOCEntry() {
     existingEntry.tocLevel = tocLevel;
     existingEntry.parentId = tocLevel === 0 ? "" : parentId;
     existingEntry.detectedTOCEntry = false;
+    existingEntry.requiresPageBeforeClose = false;
     item.tocEntriesReviewed = true;
     cleanInvalidTOCParents(item);
   } else {
@@ -3535,7 +3907,8 @@ async function saveTOCEntry() {
       sourcePage: pageNumber,
       entryType: tocLevel === 0 ? "section" : "subsection",
       tocLevel,
-      parentId: tocLevel === 0 ? "" : parentId
+      parentId: tocLevel === 0 ? "" : parentId,
+      requiresPageBeforeClose: false
     });
     item.tocEntriesReviewed = true;
   }
@@ -3648,6 +4021,7 @@ function promoteTOCChildrenBeforeRemoval(item, removedEntry) {
 }
 
 function removeSubsectionEntry(entryId) {
+  recordBuilderUndoState();
   const activeId = document.getElementById("activeSubsectionPdfId").value;
   const item = pdfLibrary.find(x => x.id === activeId);
   if (!item) return;
@@ -3666,6 +4040,26 @@ function removeSubsectionEntry(entryId) {
   updateTOCParentDropdown();
 }
 
+function getTOCEntryTreeRows(item) {
+  const entries = orderTOCEntriesForDisplay(item.tocEntries || []);
+  return entries.map(entry => ({
+    entry,
+    level: Math.max(0, Math.min(2, Number(entry.tocLevel || 0))),
+    parentTitle: getTOCParentTitle(item, entry.parentId)
+  }));
+}
+
+function getTOCLevelLabel(item, entry, level) {
+  return level === 2 ? `${getLevelTwoLetter(item, entry)} Level 2` : `Level ${level}`;
+}
+
+function createTOCTreeMetaPill(text, className = "") {
+  const pill = document.createElement("span");
+  pill.className = `toc-tree-pill ${className}`.trim();
+  pill.textContent = text;
+  return pill;
+}
+
 function renderCurrentSubsectionList() {
   const activeId = document.getElementById("activeSubsectionPdfId").value;
   const list = document.getElementById("currentSubsectionList");
@@ -3675,49 +4069,72 @@ function renderCurrentSubsectionList() {
   const item = pdfLibrary.find(x => x.id === activeId);
 
   if (!item || !item.tocEntries || item.tocEntries.length === 0) {
-    list.innerHTML = "<p>No subsections added yet.</p>";
+    list.className = "toc-tree-list";
+    list.innerHTML = '<p class="toc-tree-empty">No TOC entries added yet.</p>';
     updateTOCParentDropdown();
     return;
   }
 
   list.innerHTML = "";
+  list.className = "toc-tree-list";
 
-  orderTOCEntriesForDisplay(item.tocEntries)
-    .forEach(entry => {
-      const row = document.createElement("div");
-      row.className = "subsection-entry-row";
+  getTOCEntryTreeRows(item).forEach(({ entry, level, parentTitle }) => {
+    const row = document.createElement("div");
+    row.className = `toc-tree-row toc-tree-level-${level}`;
+    row.dataset.tocEntryId = entry.id;
+    if (!hasValidTOCSourcePage(entry)) row.classList.add("toc-tree-row-missing-page");
+    if (entry.requiresPageBeforeClose && !hasValidTOCSourcePage(entry)) row.classList.add("toc-tree-row-required");
+    row.style.setProperty("--toc-level", String(level));
 
-      row.innerHTML = `
-        <div class="subsection-entry-info">
-          <strong>
-            ${Number(entry.tocLevel || 0) === 2
-              ? `${getLevelTwoLetter(item, entry)} Level 2`
-              : `Level ${entry.tocLevel ?? 0}`}
-          </strong>
+    const rail = document.createElement("div");
+    rail.className = "toc-tree-rail";
 
-          <div>
-            Parent: ${getTOCParentTitle(item, entry.parentId)}
-          </div>
-          <br>
-          <span class="${hasValidTOCSourcePage(entry) ? "" : "toc-entry-missing-page"}">
-            ${hasValidTOCSourcePage(entry) ? `Page ${entry.sourcePage}` : "Page required"}
-          </span>
-          <br>
-          ${entry.title}
-        </div>
+    const content = document.createElement("div");
+    content.className = "toc-tree-content";
 
-        <div class="button-row">
-          <button onclick="editSubsectionEntry('${entry.id}')">
-            Edit
-          </button>
-          <button class="remove-pdf-btn" onclick="removeSubsectionEntry('${entry.id}')">
-            Remove
-          </button>
-        </div>
-      `;
+    const header = document.createElement("div");
+    header.className = "toc-tree-header";
 
-      list.appendChild(row);
-    });
+    const title = document.createElement("strong");
+    title.className = "toc-tree-title";
+    title.textContent = entry.title || "Untitled TOC entry";
+
+    const levelBadge = document.createElement("span");
+    levelBadge.className = "toc-tree-level-badge";
+    levelBadge.textContent = getTOCLevelLabel(item, entry, level);
+
+    header.append(title, levelBadge);
+
+    const meta = document.createElement("div");
+    meta.className = "toc-tree-meta";
+    meta.append(
+      createTOCTreeMetaPill(
+        hasValidTOCSourcePage(entry) ? `PDF page ${entry.sourcePage}` : (entry.requiresPageBeforeClose ? "Template page required" : "Page required"),
+        hasValidTOCSourcePage(entry) ? "" : "toc-entry-missing-page"
+      ),
+      createTOCTreeMetaPill(level === 0 ? "Top level" : `Under ${parentTitle}`)
+    );
+
+    content.append(header, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "toc-tree-actions";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.textContent = "Edit";
+    editButton.addEventListener("click", () => editSubsectionEntry(entry.id));
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "remove-pdf-btn";
+    removeButton.textContent = "Remove";
+    removeButton.addEventListener("click", () => removeSubsectionEntry(entry.id));
+
+    actions.append(editButton, removeButton);
+    row.append(rail, content, actions);
+    list.appendChild(row);
+  });
 }
 
 async function appendPDF(finalPdf, file, options = {}) {
