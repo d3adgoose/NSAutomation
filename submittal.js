@@ -221,6 +221,7 @@ async function handleDroppedFiles(fileList) {
       notes: "",
       datasheetOrder: null,
       tocEntries: [],
+      tocEntriesReviewed: false,
       hideParentTOC: false
     };
 
@@ -233,10 +234,17 @@ async function handleDroppedFiles(fileList) {
       }
 
       if (action === "replace") {
+        const previousTOCEntries = duplicateItem.tocEntries || [];
+        const hasOnlyScannedEntries =
+          previousTOCEntries.length > 0 &&
+          previousTOCEntries.every(entry => entry.detectedTOCEntry);
+        const keepPreviousTOCEntries = previousTOCEntries.length > 0 && !hasOnlyScannedEntries;
+
         Object.assign(duplicateItem, {
           ...newItem,
           id: duplicateItem.id,
-          tocEntries: duplicateItem.tocEntries || [],
+          tocEntries: keepPreviousTOCEntries ? previousTOCEntries : [],
+          tocEntriesReviewed: keepPreviousTOCEntries ? !!duplicateItem.tocEntriesReviewed : false,
           hideParentTOC: !!duplicateItem.hideParentTOC,
           include: true
         });
@@ -406,9 +414,21 @@ async function renamePdfTitle(id) {
 
     const detectedSection = guessPacketSection(cleanTitle);
     const detectedType = guessDocumentType(cleanTitle);
+    const previousSection = item.packetSection;
 
     item.packetSection = detectedSection;
     item.documentType = detectedType;
+
+    if (previousSection !== detectedSection) {
+      const entries = item.tocEntries || [];
+      const hasOnlyScannedEntries = entries.length > 0 && entries.every(entry => entry.detectedTOCEntry);
+      if (hasOnlyScannedEntries) {
+        item.tocEntries = [];
+        item.tocEntriesReviewed = false;
+      } else if (entries.length === 0) {
+        item.tocEntriesReviewed = false;
+      }
+    }
 
     if (detectedSection !== "Datasheets") {
       item.datasheetOrder = null;
@@ -422,8 +442,20 @@ function updateUploadedPDFSection(id, newSection) {
   const item = pdfLibrary.find(x => x.id === id);
   if (!item) return;
 
+  const previousSection = item.packetSection;
   item.packetSection = newSection;
   item.documentType = guessDocumentType(newSection);
+
+  if (previousSection !== newSection) {
+    const entries = item.tocEntries || [];
+    const hasOnlyScannedEntries = entries.length > 0 && entries.every(entry => entry.detectedTOCEntry);
+    if (hasOnlyScannedEntries) {
+      item.tocEntries = [];
+      item.tocEntriesReviewed = false;
+    } else if (entries.length === 0) {
+      item.tocEntriesReviewed = false;
+    }
+  }
 
   if (newSection !== "Datasheets") {
     item.datasheetOrder = null;
@@ -443,7 +475,7 @@ function renderUploadedPdfList() {
     const row = document.createElement("div");
     row.className = "uploaded-pdf-row";
 
-    const canFormatTOC = item.packetSection !== "Warranty";
+    const canFormatTOC = true;
     const sectionOptions = packetSections
       .filter(section =>
         !["Cover Page", "Table of Contents"].includes(section)
@@ -459,14 +491,6 @@ function renderUploadedPdfList() {
       ? `
         <button onclick="openSubsectionModal('${item.id}')">
           Format TOC
-        </button>
-      `
-      : "";
-
-    const managePdfButton = !canFormatTOC
-      ? `
-        <button onclick="openPageManager('${item.id}')">
-          Manage PDF
         </button>
       `
       : "";
@@ -505,7 +529,6 @@ function renderUploadedPdfList() {
         </button>
 
         ${subsectionButton}
-        ${managePdfButton}
 
         <button
           class="remove-pdf-btn"
@@ -576,27 +599,6 @@ function formatTOCEntryCount(entries = []) {
 
   parts.push(`${counts.subsections} subsection(s)`);
   return parts.join(", ");
-}
-
-async function openPageManager(id) {
-  const item = pdfLibrary.find(entry => entry.id === id);
-  const modal = document.getElementById("pageManagerModal");
-  const activeId = document.getElementById("activePageManagerPdfId");
-  const title = document.getElementById("pageManagerTitle");
-
-  if (!item || !modal || !activeId || !title) return;
-
-  activeId.value = id;
-  title.textContent = item.displayTitle || item.fileName;
-  selectedManagedPages = new Set();
-  modal.classList.remove("hidden");
-
-  await renderPageManagerPreviews(item);
-}
-
-function closePageManager() {
-  document.getElementById("pageManagerModal")?.classList.add("hidden");
-  selectedManagedPages = new Set();
 }
 
 function getActivePageManagerItem() {
@@ -1305,6 +1307,7 @@ async function restorePacketBuilderState(builderState) {
     documentType: guessDocumentType(detectionName),
     packetSection: guessPacketSection(detectionName),
     tocEntries: Array.isArray(item.tocEntries) ? item.tocEntries : [],
+    tocEntriesReviewed: !!item.tocEntriesReviewed,
     include: item.include !== false,
     hideParentTOC: !!item.hideParentTOC
   };
@@ -1575,6 +1578,138 @@ function getPrintedPageNumber(pageIndex, noNumberPageIndexes = []) {
   return pageIndex + 1 - skippedBefore;
 }
 
+function getPacketTOCSectionDefinitions() {
+  const isOM =
+    typeof isOMPacket === "function" &&
+    isOMPacket();
+
+  if (isOM && typeof OM_SECTION_ORDER !== "undefined" && Array.isArray(OM_SECTION_ORDER)) {
+    return OM_SECTION_ORDER;
+  }
+
+  return [
+    "Warranty",
+    "Datasheets",
+    "Control Panel Components",
+    "Shop Drawings",
+    "Appendix"
+  ];
+}
+
+function getFilteredTOCItemsForSection(items) {
+  return items;
+}
+
+function normalizeDetectedTOCEntry(item, detectedEntry) {
+  const tocLevel = Number(detectedEntry.tocLevel || 0);
+  const parentId = tocLevel > 0 && !item.hideParentTOC ? PDF_PARENT_TOC_ID : "";
+
+  return {
+    id: crypto.randomUUID(),
+    title: detectedEntry.title,
+    sourcePage: Number(detectedEntry.sourcePage || 1),
+    entryType: tocLevel === 0 ? "section" : "subsection",
+    tocLevel,
+    parentId,
+    detectedTOCEntry: true
+  };
+}
+
+async function scanTOCEntriesForEditor(item) {
+  if (!item || item.tocEntriesReviewed || (item.tocEntries || []).length > 0) return;
+
+  const detectedEntries = await detectTOCSubsections(
+    item.file,
+    item.packetSection,
+    1,
+    0
+  );
+
+  item.tocEntries = detectedEntries.map(entry => normalizeDetectedTOCEntry(item, entry));
+  item.tocEntriesReviewed = true;
+}
+
+function estimateInsertedTOCPageCount(tocItems = [], sectionTargets = {}) {
+  const isOM =
+    typeof isOMPacket === "function" &&
+    isOMPacket();
+  const height = 792;
+  const topMargin = 50;
+  const footerMargin = 65;
+  const startY = height - topMargin;
+  let y = isOM ? startY - 185 : startY - 160;
+  let insertedPageCount = 0;
+
+  function continueOnNextTOCPage() {
+    insertedPageCount++;
+    y = height - topMargin - 30 - 28;
+  }
+
+  getPacketTOCSectionDefinitions().forEach(section => {
+    const items = tocItems.filter(item => item.section === section);
+    const sectionTarget = sectionTargets[section];
+    if (items.length === 0 && !sectionTarget) return;
+
+    const sectionLabel = getSectionLabel(section);
+
+    if (y < footerMargin + 25) {
+      continueOnNextTOCPage();
+    }
+
+    y -= 14;
+
+    getFilteredTOCItemsForSection(items, sectionLabel).forEach(() => {
+      if (y < footerMargin) {
+        continueOnNextTOCPage();
+      }
+
+      y -= 12;
+    });
+
+    y -= 4;
+  });
+
+  return insertedPageCount;
+}
+
+function adjustNormalTOCPageNumbersForInsertedPages(
+  tocItems,
+  sectionTargets,
+  firstInsertedTOCPageIndex,
+  insertedTOCPageCount,
+  noNumberPageIndexes
+) {
+  if (getPageNumberMode() !== "normal" || insertedTOCPageCount <= 0) return;
+
+  function getAdjustedPageNumber(targetPageIndex) {
+    if (!Number.isInteger(Number(targetPageIndex))) return null;
+
+    const shift =
+      Number(targetPageIndex) >= firstInsertedTOCPageIndex
+        ? insertedTOCPageCount
+        : 0;
+
+    return getPrintedPageNumber(
+      Number(targetPageIndex) + shift,
+      noNumberPageIndexes
+    );
+  }
+
+  Object.values(sectionTargets || {}).forEach(sectionTarget => {
+    const pageNumber = getAdjustedPageNumber(sectionTarget.targetPageIndex);
+    if (pageNumber !== null) {
+      sectionTarget.pageNumber = pageNumber;
+    }
+  });
+
+  (tocItems || []).forEach(item => {
+    const pageNumber = getAdjustedPageNumber(item.targetPageIndex);
+    if (pageNumber !== null) {
+      item.startPage = pageNumber;
+    }
+  });
+}
+
 async function buildPacket() {
   const buildLabel = getPacketBuildLabel();
   let buildContext = "starting the build";
@@ -1720,8 +1855,7 @@ async function buildPacket() {
       finalNoNumberPageIndexes
     );
 
-    // Warranty document titles are added only when tocDetection finds them.
-    if (!item.hideParentTOC && item.packetSection !== "Warranty") {
+    if (!item.hideParentTOC) {
       tocItems.push({
         title: item.displayTitle,
         section: item.packetSection,
@@ -1746,7 +1880,7 @@ async function buildPacket() {
         }));
 
       tocItems.push(...manualEntries);
-    } else {
+    } else if (!item.tocEntriesReviewed) {
       buildContext = `detecting TOC entries for ${getSectionLabel(item.packetSection)}: ${itemTitle}`;
       const detectedSubsections =
         await detectTOCSubsections(
@@ -1767,6 +1901,16 @@ async function buildPacket() {
     buildContext = `marking imported subsection pages for ${itemTitle}`;
     markImportedSubsectionPages(finalPdf, addedIndexes, item);
   }
+
+  const firstInsertedTOCPageIndex = finalPdf.getPages().indexOf(tocPage) + 1;
+  const insertedTOCPageCount = estimateInsertedTOCPageCount(tocItems, sectionTargets);
+  adjustNormalTOCPageNumbersForInsertedPages(
+    tocItems,
+    sectionTargets,
+    firstInsertedTOCPageIndex,
+    insertedTOCPageCount,
+    finalNoNumberPageIndexes
+  );
 
   buildContext = "drawing the table of contents";
   await drawTOCOnExistingPage(
@@ -2146,6 +2290,7 @@ async function continueWarrantyPrompt() {
       packetSection: "Warranty",
       include: true,
       hideParentTOC: true,
+      tocEntriesReviewed: false,
       notes:
         `Materials: ${materialYears} year(s); ` +
         `Labor: ${duration} ${unit}`,
@@ -2779,6 +2924,14 @@ async function openSubsectionModal(id) {
   }
   if (tocEntryType) tocEntryType.value = "section";
 
+  previewList.innerHTML = "Scanning TOC entries...";
+
+  try {
+    await scanTOCEntriesForEditor(item);
+  } catch (error) {
+    console.warn("TOC scan failed:", error);
+  }
+
   previewList.innerHTML = "Loading page previews...";
 
   const tocEntryLevel = document.getElementById("tocEntryLevel");
@@ -2925,24 +3078,46 @@ async function getSubmittalImportSummary(file) {
   const bytes = await file.arrayBuffer();
   const sourcePdf = await PDFDocument.load(bytes);
   const pageCount = sourcePdf.getPageCount();
+  const generatedPageIndexes = await getImportedGeneratedPageIndexes(
+    bytes,
+    sourcePdf
+  );
   const sectionMarkers = await detectImportedPacketSections(bytes, sourcePdf);
   const tocSectionRanges = await getImportedTOCSectionRanges(bytes, pageCount);
+  const inferredRanges = await inferImportedMissingSectionRanges(
+    bytes,
+    tocSectionRanges,
+    sectionMarkers,
+    pageCount,
+    generatedPageIndexes
+  );
+  const generatedOMRanges = await detectGeneratedOMImportPageSets(
+    bytes,
+    pageCount,
+    generatedPageIndexes
+  );
   const sections = [
     {
       section: "Warranty",
-      range: getImportedSectionRange(sectionMarkers, "Warranty", pageCount),
+      range:
+        generatedOMRanges.Warranty ||
+        tocSectionRanges.Warranty ||
+        getImportedSectionRange(sectionMarkers, "Warranty", pageCount),
       subsections: []
     },
     {
       section: "Datasheets",
       range:
+        generatedOMRanges.Datasheets ||
         tocSectionRanges.Datasheets ||
+        inferredRanges.Datasheets ||
         getImportedSectionRange(sectionMarkers, "Datasheets", pageCount),
       subsections: []
     },
     {
       section: "Shop Drawings",
       range:
+        generatedOMRanges["Shop Drawings"] ||
         tocSectionRanges["Shop Drawings"] ||
         getImportedSectionRange(sectionMarkers, "Shop Drawings", pageCount),
       subsections: []
@@ -2951,6 +3126,11 @@ async function getSubmittalImportSummary(file) {
 
   for (const item of sections) {
     if (!item.range) continue;
+
+    item.displayPageText = getImportedDisplayPageText(
+      item.range,
+      generatedPageIndexes
+    );
 
     if (item.section === "Datasheets") {
       item.subsections = await getImportedDatasheetRanges(
@@ -2996,7 +3176,7 @@ function renderSubmittalImportSummary(summary) {
 
     const title = document.createElement("strong");
     title.textContent = item.range
-      ? `${item.section} - pages ${item.range.startPageIndex + 1}-${item.range.endPageIndex}`
+      ? `${item.section} - ${item.displayPageText || getImportedDisplayPageText(item.range)}`
       : `${item.section} - not detected`;
     sectionBlock.appendChild(title);
 
@@ -3006,7 +3186,9 @@ function renderSubmittalImportSummary(summary) {
       subsections.forEach((subsection, index) => {
         const listItem = document.createElement("li");
         const title = subsection.title || `${item.section} ${index + 1}`;
-        const nestedEntries = subsection.tocEntries || [];
+        const nestedEntries = (subsection.tocEntries || []).filter(entry =>
+          normalizeImportedSectionText(entry.title) !== normalizeImportedSectionText(title)
+        );
         listItem.textContent = nestedEntries.length > 0
           ? `${title} (${formatTOCEntryCount(nestedEntries)})`
           : title;
@@ -3054,9 +3236,10 @@ async function importSubmittalFile(file, options = {}) {
     document.getElementById("submittalImportModalStatus") || status;
   const importWarranty = options.importWarranty !== false;
   const importDatasheets = options.importDatasheets !== false;
+  const importShopDrawings = options.importShopDrawings !== false;
 
   if (!file) return;
-  if (!importWarranty && !importDatasheets) {
+  if (!importWarranty && !importDatasheets && !importShopDrawings) {
     if (modalStatus) {
       modalStatus.textContent = "Select at least one section to import.";
     }
@@ -3078,35 +3261,57 @@ async function importSubmittalFile(file, options = {}) {
   try {
     const bytes = await file.arrayBuffer();
     const sourcePdf = await PDFDocument.load(bytes);
+    const generatedPageIndexes = await getImportedGeneratedPageIndexes(
+      bytes,
+      sourcePdf
+    );
     const sectionMarkers = await detectImportedPacketSections(bytes, sourcePdf);
     const tocSectionRanges = await getImportedTOCSectionRanges(
       bytes,
       sourcePdf.getPageCount()
     );
+    const inferredRanges = await inferImportedMissingSectionRanges(
+      bytes,
+      tocSectionRanges,
+      sectionMarkers,
+      sourcePdf.getPageCount(),
+      generatedPageIndexes
+    );
+    const generatedOMRanges = await detectGeneratedOMImportPageSets(
+      bytes,
+      sourcePdf.getPageCount(),
+      generatedPageIndexes
+    );
     const importedItems = [];
 
     const warrantyRange = importWarranty
-      ? getImportedSectionRange(
+      ? generatedOMRanges.Warranty ||
+        tocSectionRanges.Warranty ||
+        getImportedSectionRange(
           sectionMarkers,
           "Warranty",
           sourcePdf.getPageCount()
         )
       : null;
     const datasheetRange = importDatasheets
-      ? tocSectionRanges.Datasheets ||
+      ? generatedOMRanges.Datasheets ||
+        tocSectionRanges.Datasheets ||
+        inferredRanges.Datasheets ||
         getImportedSectionRange(
           sectionMarkers,
           "Datasheets",
           sourcePdf.getPageCount()
         )
       : null;
-    const shopDrawingsRange =
-      tocSectionRanges["Shop Drawings"] ||
-      getImportedSectionRange(
-        sectionMarkers,
-        "Shop Drawings",
-        sourcePdf.getPageCount()
-      );
+    const shopDrawingsRange = importShopDrawings
+      ? generatedOMRanges["Shop Drawings"] ||
+        tocSectionRanges["Shop Drawings"] ||
+        getImportedSectionRange(
+          sectionMarkers,
+          "Shop Drawings",
+          sourcePdf.getPageCount()
+        )
+      : null;
     console.table([
       { section: "Warranty", ...(warrantyRange || {}) },
       { section: "Datasheets", ...(datasheetRange || {}) },
@@ -3117,7 +3322,8 @@ async function importSubmittalFile(file, options = {}) {
       const warrantyFile = await extractImportedSection(
         sourcePdf,
         warrantyRange,
-        "Imported Submittal - Warranty.pdf"
+        "Imported Submittal - Warranty.pdf",
+        { skipPageIndexes: generatedPageIndexes }
       );
 
       importedItems.push(createImportedLibraryItem({
@@ -3137,7 +3343,8 @@ async function importSubmittalFile(file, options = {}) {
           bytes,
           sourcePdf,
           sourceName: file.name,
-          datasheetRange
+          datasheetRange,
+          generatedPageIndexes
         }))
       );
     }
@@ -3152,14 +3359,15 @@ async function importSubmittalFile(file, options = {}) {
           packetSection: "Shop Drawings",
           documentType: "Shop Drawing",
           fallbackTitle: "Imported Submittal Shop Drawings",
-          filePrefix: "Imported Submittal - Shop Drawings"
+          filePrefix: "Imported Submittal - Shop Drawings",
+          generatedPageIndexes
         }))
       );
     }
 
     if (importedItems.length === 0) {
       throw new Error(
-        "No Warranty, Datasheets, or Shop Drawings entries were detected in the Submittal PDF."
+        "No Datasheets or Shop Drawings entries were detected in the Submittal PDF."
       );
     }
 
@@ -3219,6 +3427,7 @@ function createImportedLibraryItem({
     datasheetOrder,
     tocEntries,
     hideParentTOC,
+    tocEntriesReviewed: Array.isArray(tocEntries) && tocEntries.length > 0,
     importedFromSubmittal: true
   };
 }
@@ -3227,7 +3436,8 @@ async function createImportedDatasheetItems({
   bytes,
   sourcePdf,
   sourceName,
-  datasheetRange
+  datasheetRange,
+  generatedPageIndexes = new Set()
 }) {
   const subsectionRanges = await getImportedDatasheetRanges(
     bytes,
@@ -3244,7 +3454,8 @@ async function createImportedDatasheetItems({
       const datasheetFile = await extractImportedSection(
         sourcePdf,
         range,
-        sanitizeImportedFileName(`${index + 1} - ${title}.pdf`)
+        sanitizeImportedFileName(`${index + 1} - ${title}.pdf`),
+        { skipPageIndexes: generatedPageIndexes }
       );
 
       items.push(createImportedLibraryItem({
@@ -3265,7 +3476,8 @@ async function createImportedDatasheetItems({
   const datasheetFile = await extractImportedSection(
     sourcePdf,
     datasheetRange,
-    "Imported Submittal - Datasheets.pdf"
+    "Imported Submittal - Datasheets.pdf",
+    { skipPageIndexes: generatedPageIndexes }
   );
 
   return [
@@ -3289,7 +3501,8 @@ async function createImportedSectionItems({
   packetSection,
   documentType,
   fallbackTitle,
-  filePrefix
+  filePrefix,
+  generatedPageIndexes = new Set()
 }) {
   const subsectionRanges = await detectImportedSubsectionRangesFromCompleteTOC(
     bytes,
@@ -3306,7 +3519,8 @@ async function createImportedSectionItems({
       const subsectionFile = await extractImportedSection(
         sourcePdf,
         range,
-        sanitizeImportedFileName(`${index + 1} - ${title}.pdf`)
+        sanitizeImportedFileName(`${index + 1} - ${title}.pdf`),
+        { skipPageIndexes: generatedPageIndexes }
       );
 
       items.push(createImportedLibraryItem({
@@ -3316,7 +3530,8 @@ async function createImportedSectionItems({
         documentType,
         packetSection,
         hideParentTOC: false,
-        datasheetOrder: packetSection === "Datasheets" ? -1000 + index : null
+        datasheetOrder: packetSection === "Datasheets" ? -1000 + index : null,
+        tocEntries: range.tocEntries || []
       }));
     }
 
@@ -3326,7 +3541,8 @@ async function createImportedSectionItems({
   const sectionFile = await extractImportedSection(
     sourcePdf,
     sectionRange,
-    `${filePrefix}.pdf`
+    `${filePrefix}.pdf`,
+    { skipPageIndexes: generatedPageIndexes }
   );
 
   return [
@@ -3343,6 +3559,20 @@ async function createImportedSectionItems({
 }
 
 async function getImportedDatasheetRanges(bytes, sourcePdf, datasheetRange) {
+  if (datasheetRange?.preferPageContentSubsections) {
+    const contentRanges = await detectImportedDatasheetRangesFromPageContent(
+      bytes,
+      datasheetRange
+    );
+    if (contentRanges.length > 1) return contentRanges;
+  }
+
+  const tocRanges = await detectImportedDatasheetRangesFromCompleteTOC(
+    bytes,
+    datasheetRange
+  );
+  if (tocRanges.length > 3) return tocRanges;
+
   const metadataRanges = getImportedDatasheetMetadataRanges(
     sourcePdf,
     datasheetRange
@@ -3350,7 +3580,177 @@ async function getImportedDatasheetRanges(bytes, sourcePdf, datasheetRange) {
 
   if (metadataRanges.length > 0) return metadataRanges;
 
-  return detectImportedDatasheetRangesFromCompleteTOC(bytes, datasheetRange);
+  const contentRanges = await detectImportedDatasheetRangesFromPageContent(
+    bytes,
+    datasheetRange
+  );
+  if (contentRanges.length > 1) return contentRanges;
+
+  return tocRanges;
+}
+async function detectImportedDatasheetRangesFromPageContent(bytes, datasheetRange) {
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  const markers = [];
+
+  for (const pageIndex of getImportedRangePageIndexes(datasheetRange)) {
+    const page = await pdf.getPage(pageIndex + 1);
+    const content = await page.getTextContent();
+    const lines = buildImportedTextLines(content.items);
+    const normalizedPageText = normalizeImportedSectionText(lines.join(" "));
+
+    if (!isImportedContentPageBeforeSection(normalizedPageText)) continue;
+
+    const title = getImportedDatasheetPageTitle(lines, pageIndex, datasheetRange);
+    if (!title) continue;
+
+    const previous = markers[markers.length - 1];
+    if (
+      previous &&
+      normalizeImportedSectionText(previous.title) === normalizeImportedSectionText(title)
+    ) {
+      continue;
+    }
+
+    markers.push({
+      pageIndex,
+      title,
+      tocLevel: "section"
+    });
+  }
+
+  return buildRangesFromImportedMarkers(markers, datasheetRange);
+}
+
+function getImportedDatasheetPageTitle(lines, pageIndex, datasheetRange) {
+  const candidates = (lines || [])
+    .map(line => cleanImportedRangeTitle(line))
+    .filter(Boolean)
+    .filter(title => isUsefulImportedDatasheetTitle(title));
+
+  if (candidates.length) return candidates[0];
+
+  return null;
+}
+
+function isUsefulImportedDatasheetTitle(title) {
+  const normalized = normalizeImportedSectionText(title);
+  if (!normalized || normalized.length < 3) return false;
+  if (/^\d+$/.test(normalized)) return false;
+  if (/^\d+\s+rev\b/i.test(String(title || ""))) return false;
+  if (/\brev\.?\s*\d+\b/i.test(String(title || "")) && /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(String(title || ""))) return false;
+  if (/^\*?\s*item\b/i.test(String(title || "")) && /\bsee\b/i.test(String(title || ""))) return false;
+  if (normalized === "page" || normalized === "page no") return false;
+  if (normalized.includes("table of contents")) return false;
+  if (normalized.includes("kenton county school")) return false;
+  if (normalized.includes("warranty transit")) return false;
+  if (normalized.startsWith("quantity ")) return false;
+  if (normalized.startsWith("multiplier ")) return false;
+  if (/^s f\b/.test(normalized)) return false;
+  if (/^no\s+[a-z0-9]/.test(normalized)) return false;
+  if (normalized.startsWith("ingredient cas")) return false;
+  if (normalized.startsWith("encl de cc rating")) return false;
+  if (normalized.startsWith("line amperes")) return false;
+  if (normalized.startsWith("performance graph")) return false;
+  if (normalized.startsWith("product information packet")) return false;
+  if (normalized.startsWith("proprietary")) return false;
+  if (normalized.startsWith("primed")) return false;
+  if (normalized.startsWith("accessories part number")) return false;
+  if (normalized.startsWith("product detail")) return false;
+  if (normalized.startsWith("performance data")) return false;
+  if (normalized.startsWith("general characteristics")) return false;
+  if (normalized.startsWith("close coupled")) return false;
+  if (normalized.startsWith("elastomeric")) return false;
+  if (normalized === "warning") return false;
+  if (normalized.startsWith("equipment alignment")) return false;
+  if (normalized.startsWith("high density linear")) return false;
+  if (normalized.startsWith("use 8 digits") || normalized.startsWith("use 8-digits")) return false;
+  if (/^[a-z]{1,4}\d+[a-z0-9-]*$/.test(normalized)) return false;
+  if (/^pk\d+/i.test(normalized)) return false;
+  if (/^[\d.]+\s*a(?:\s|$)/i.test(normalized)) return false;
+  if (normalized.includes("classification classification")) return false;
+  if (normalized.includes("digits part numbers")) return false;
+  if (normalized.includes("parts list")) return false;
+  if (normalized.includes("lb ft")) return false;
+  if (normalized.includes("rpm") && normalized.includes("hz") && normalized.includes("ph")) return false;
+  if (normalized.startsWith("235 west florence")) return false;
+  if (normalized.startsWith("urethane")) return false;
+  if (normalized.startsWith("clearance")) return false;
+  if (normalized.startsWith("because of")) return false;
+  if (normalized.startsWith("dimensions and part numbers")) return false;
+  if (normalized === "polyethylene") return false;
+  if (/^sf\d/.test(normalized)) return false;
+  if (/^\d+(?:\s+\d+)*\s+a\b/.test(normalized)) return false;
+  if (/^\d+(?:\s+\d+)*\s+lb\b/.test(normalized)) return false;
+  if (normalized.includes("copyright")) return false;
+  if (normalized.startsWith("ph ")) return false;
+  if (normalized.startsWith("date ")) return false;
+  if (normalized.startsWith("des usable")) return false;
+  if (normalized === "enclosure") return false;
+  if (normalized.includes("tefc") && normalized.includes("amb")) return false;
+  if (normalized.startsWith("all rotating power")) return false;
+  if (normalized.startsWith("for sizes")) return false;
+  if (normalized === "hdlpe") return false;
+  if (/^\d+(?:\s+\d+)+\s*(?:a|in)?$/.test(normalized)) return false;
+  if (/^[a-z0-9]{2,}(?:\s+[a-z0-9]{2,}){2,}$/.test(normalized) && !hasImportedEquipmentTitleTerm(normalized)) return false;
+  if (normalized.includes("ac induction motor performance data")) return false;
+  if (normalized.includes("full load torque") && normalized.includes("starting current")) return false;
+  if (normalized.startsWith("the coupling cover is constructed")) return false;
+  if (normalized.startsWith("failure to secure")) return false;
+  if (normalized.startsWith("note omega")) return false;
+  if (normalized === "standard") return false;
+  if (normalized.startsWith("hz 60")) return false;
+  if (/^\d+\s+\d+\s+\d+/.test(normalized) && !hasImportedEquipmentTitleTerm(normalized)) return false;
+  if (/^[a-z0-9]{6,}(?:\s+[a-z0-9]{2,}){1,4}$/.test(normalized) && !hasImportedEquipmentTitleTerm(normalized)) return false;
+  if (normalized === "code") return false;
+  if (normalized === "commercial") return false;
+  if (normalized.startsWith("do not start motor")) return false;
+  if (normalized.includes("yield strength")) return false;
+  if (/^[a-z0-9]{4,}$/.test(normalized) && !hasImportedEquipmentTitleTerm(normalized)) return false;
+  if (/^[a-z0-9]{2,}(?:\s+[a-z0-9]{1,}){1,5}$/.test(normalized) && !hasImportedEquipmentTitleTerm(normalized)) return false;
+  if (normalized.includes("manufacturers of vehicle cleaning equipment")) return false;
+  if (normalized.includes("ns corporation")) return false;
+  if (normalized.includes("n s corporation")) return false;
+  if (normalized.includes("ave crocker")) return false;
+  if (normalized.includes("valencia california")) return false;
+  if (normalized.includes("quality management system")) return false;
+  if (normalized.includes("certified by dnv")) return false;
+  if (normalized.includes("product submittal")) return false;
+  if (normalized.includes("operation maintenance manual")) return false;
+  if (normalized === "datasheets" || normalized === "data sheets") return false;
+  if (normalized === "shop drawings" || normalized === "shop drawing") return false;
+  return true;
+}
+
+function hasImportedEquipmentTitleTerm(normalizedTitle) {
+  return [
+    "air panel",
+    "assembly",
+    "brush",
+    "bulkhead",
+    "control panel",
+    "coupling",
+    "cylinder",
+    "electrical",
+    "festoon",
+    "filter",
+    "gear reducer",
+    "hose",
+    "motor",
+    "nautica",
+    "nozzle",
+    "panel",
+    "pipe",
+    "plumbing",
+    "pneumatic",
+    "proximity",
+    "pump",
+    "reclaim",
+    "sensor",
+    "solenoid",
+    "tank",
+    "valve",
+    "washer"
+  ].some(term => normalizedTitle.includes(term));
 }
 
 function getImportedDatasheetMetadataRanges(sourcePdf, datasheetRange) {
@@ -3378,18 +3778,234 @@ function getImportedDatasheetMetadataRanges(sourcePdf, datasheetRange) {
   return buildRangesFromImportedMarkers(markers, datasheetRange);
 }
 
+async function detectGeneratedOMImportPageSets(bytes, totalPages, generatedPageIndexes = new Set()) {
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  const pages = [];
+
+  for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+    const page = await pdf.getPage(pageIndex + 1);
+    const content = await page.getTextContent();
+    const lines = buildImportedTextLines(content.items);
+    const normalizedText = normalizeImportedSectionText(lines.join(" "));
+    pages.push({ pageIndex, lines, normalizedText });
+  }
+
+  const equipmentDividerIndex = pages.find(item =>
+    ["equipment datasheets", "datasheets", "data sheets"].some(sectionTitle =>
+      isGeneratedOMSectionDivider(item.normalizedText, sectionTitle)
+    )
+  )?.pageIndex;
+  const shopDividerIndex = pages.find(item =>
+    isGeneratedOMSectionDivider(item.normalizedText, "shop drawings")
+  )?.pageIndex;
+  const warrantyStartIndex = pages.find(item =>
+    item.normalizedText.includes("expressed warranty") ||
+    (
+      item.normalizedText.includes("warranty transit") &&
+      !item.normalizedText.includes("table of contents")
+    )
+  )?.pageIndex;
+
+  if (shopDividerIndex == null) return {};
+
+  const datasheetSearchStartIndex = warrantyStartIndex ?? equipmentDividerIndex ?? -1;
+  const firstDatasheetBeforeShop = pages.find(item =>
+    item.pageIndex > datasheetSearchStartIndex &&
+    item.pageIndex < shopDividerIndex &&
+    isGeneratedOMDatasheetStartPage(item.lines, item.normalizedText)
+  )?.pageIndex;
+  const firstDatasheetAfterShop = pages.find(item =>
+    item.pageIndex > shopDividerIndex &&
+    isGeneratedOMDatasheetStartPage(item.lines, item.normalizedText)
+  )?.pageIndex;
+
+  const ranges = {};
+  if (warrantyStartIndex != null) {
+    const warrantyEndIndex = firstDatasheetBeforeShop ?? shopDividerIndex;
+    ranges.Warranty = {
+      pageIndexes: buildSequentialPageIndexes(warrantyStartIndex, warrantyEndIndex),
+      startPageIndex: warrantyStartIndex,
+      endPageIndex: warrantyEndIndex
+    };
+  }
+
+  const datasheetPageIndexes = [];
+  if (firstDatasheetBeforeShop != null) {
+    datasheetPageIndexes.push(...buildSequentialPageIndexes(firstDatasheetBeforeShop, shopDividerIndex));
+  }
+  if (firstDatasheetAfterShop != null) {
+    datasheetPageIndexes.push(...buildSequentialPageIndexes(firstDatasheetAfterShop, totalPages));
+  }
+  if (datasheetPageIndexes.length) {
+    ranges.Datasheets = {
+      pageIndexes: datasheetPageIndexes,
+      startPageIndex: Math.min(...datasheetPageIndexes),
+      endPageIndex: Math.max(...datasheetPageIndexes) + 1,
+      preferPageContentSubsections: true
+    };
+  }
+
+  if (firstDatasheetAfterShop != null && firstDatasheetAfterShop > shopDividerIndex + 1) {
+    const drawingStartIndex = shopDividerIndex + 1;
+    ranges["Shop Drawings"] = {
+      pageIndexes: buildSequentialPageIndexes(drawingStartIndex, firstDatasheetAfterShop),
+      startPageIndex: drawingStartIndex,
+      endPageIndex: firstDatasheetAfterShop
+    };
+  }
+
+  return ranges;
+}
+
+function buildSequentialPageIndexes(startPageIndex, endPageIndex) {
+  const pageIndexes = [];
+  for (let pageIndex = startPageIndex; pageIndex < endPageIndex; pageIndex++) {
+    pageIndexes.push(pageIndex);
+  }
+  return pageIndexes;
+}
+
+function isGeneratedOMSectionDivider(normalizedText, sectionTitle) {
+  if (!normalizedText || normalizedText.length > 500) return false;
+  if (normalizedText.includes("table of contents")) return false;
+  return normalizedText.includes(sectionTitle) && (
+    normalizedText.includes("manufacturers of vehicle cleaning equipment") ||
+    normalizedText.includes("ave crocker") ||
+    normalizedText.includes("rev")
+  );
+}
+
+function isGeneratedOMDatasheetStartPage(lines, normalizedText) {
+  if (!normalizedText || isImportedPacketDividerPageText(normalizedText)) return false;
+  if (normalizedText.includes("shop drawings") || normalizedText.includes("equipment layout")) return false;
+  const usefulLines = (lines || []).filter(line => isUsefulImportedDatasheetTitle(line));
+  if (!usefulLines.length) return false;
+  const first = normalizeImportedSectionText(usefulLines[0]);
+  return (
+    first.includes("nautica") ||
+    first.includes("assembly") ||
+    first.includes("motor") ||
+    first.includes("pump") ||
+    first.includes("tank") ||
+    first.includes("valve") ||
+    first.includes("sensor") ||
+    first.includes("hose") ||
+    first.includes("bulkhead") ||
+    first.includes("anchor") ||
+    normalizedText.includes("ns part") ||
+    normalizedText.includes("product features")
+  );
+}
+
+async function inferImportedMissingSectionRanges(
+  bytes,
+  tocSectionRanges,
+  sectionMarkers,
+  totalPages,
+  generatedPageIndexes = new Set()
+) {
+  const ranges = {};
+  if (tocSectionRanges.Datasheets) return ranges;
+
+  const shopRange = tocSectionRanges["Shop Drawings"] ||
+    getImportedSectionRange(sectionMarkers, "Shop Drawings", totalPages);
+  if (!shopRange || shopRange.startPageIndex <= 0) return ranges;
+
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  let firstDatasheetLikePageIndex = null;
+  let firstContentPageIndex = null;
+
+  for (let pageNumber = 1; pageNumber <= shopRange.startPageIndex; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const lines = buildImportedTextLines(content.items);
+    const normalizedPageText = normalizeImportedSectionText(lines.join(" "));
+
+    if (!isImportedContentPageBeforeSection(normalizedPageText)) continue;
+
+    const pageIndex = pageNumber - 1;
+    if (firstContentPageIndex == null) firstContentPageIndex = pageIndex;
+    if (
+      firstDatasheetLikePageIndex == null &&
+      isImportedDatasheetContentPage(normalizedPageText)
+    ) {
+      firstDatasheetLikePageIndex = pageIndex;
+    }
+  }
+
+  const firstDetectedPageIndex = firstDatasheetLikePageIndex ?? firstContentPageIndex;
+  const generatedBeforeShop = Array.from(generatedPageIndexes || [])
+    .filter(pageIndex => pageIndex < shopRange.startPageIndex);
+  const firstAfterGeneratedFrontMatter = generatedBeforeShop.length
+    ? Math.max(...generatedBeforeShop) + 1
+    : 0;
+  const conservativeFrontMatterEnd = shopRange.startPageIndex > 4 ? 4 : 0;
+  const startPageIndex = firstDetectedPageIndex == null
+    ? null
+    : Math.max(
+        firstDetectedPageIndex,
+        firstAfterGeneratedFrontMatter,
+        conservativeFrontMatterEnd
+      );
+
+  if (startPageIndex != null && startPageIndex < shopRange.startPageIndex) {
+    ranges.Datasheets = {
+      startPageIndex,
+      endPageIndex: shopRange.startPageIndex
+    };
+  }
+
+  return ranges;
+}
+
+function isImportedContentPageBeforeSection(normalizedPageText) {
+  if (!normalizedPageText || normalizedPageText.length < 20) return false;
+  if (normalizedPageText.includes("table of contents")) return false;
+  if (isImportedPacketCoverPageText(normalizedPageText)) return false;
+  if (isImportedPacketDividerPageText(normalizedPageText)) return false;
+  if (normalizedPageText.includes("shop drawings")) return false;
+  if (normalizedPageText.includes("shop drawing")) return false;
+  if (/^\d+$/.test(normalizedPageText)) return false;
+  return true;
+}
+
+function isImportedDatasheetContentPage(normalizedPageText) {
+  if (!normalizedPageText || normalizedPageText.length < 80) return false;
+  if (normalizedPageText.includes("layout")) return false;
+  if (normalizedPageText.includes("shop drawing")) return false;
+
+  const hits = [
+    "model",
+    "specification",
+    "specifications",
+    "dimensions",
+    "technical data",
+    "product data",
+    "data sheet",
+    "datasheet",
+    "capacity",
+    "voltage",
+    "horsepower",
+    "flow rate",
+    "operating pressure",
+    "material",
+    "part number"
+  ].filter(term => normalizedPageText.includes(term)).length;
+
+  return hits >= 2;
+}
+
 async function detectImportedDatasheetRangesFromCompleteTOC(bytes, datasheetRange) {
   const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
   const tocItems = await detectImportedTOCEntries(pdf);
-  const datasheetItems = tocItems
-    .filter(item =>
+  const datasheetItems = alignImportedTOCItemsToParentRange(
+    tocItems.filter(item =>
       item.section === "Datasheets" &&
-      !item.isSectionHeading
-    )
-    .filter(item =>
-      item.pageIndex >= datasheetRange.startPageIndex &&
-      item.pageIndex < datasheetRange.endPageIndex
-    );
+      !item.isSectionHeading &&
+      isLikelyImportedDatasheetTOCEntry(item)
+    ),
+    datasheetRange
+  );
 
   return buildHierarchicalImportedRanges(datasheetItems, datasheetRange);
 }
@@ -3402,18 +4018,43 @@ async function detectImportedSubsectionRangesFromCompleteTOC(
   const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
   const tocItems = await detectImportedTOCEntries(pdf);
 
-  return buildRangesFromImportedMarkers(
-    tocItems
-      .filter(item =>
-        item.section === packetSection &&
-        !item.isSectionHeading
-      )
-      .filter(item =>
-        item.pageIndex >= parentRange.startPageIndex &&
-        item.pageIndex < parentRange.endPageIndex
-      ),
+  const sectionItems = alignImportedTOCItemsToParentRange(
+    tocItems.filter(item =>
+      item.section === packetSection &&
+      !item.isSectionHeading
+    ),
     parentRange
   );
+
+  return buildRangesFromImportedMarkers(sectionItems, parentRange);
+}
+
+function alignImportedTOCItemsToParentRange(items, parentRange) {
+  const validItems = items
+    .filter(item => item.pageIndex != null)
+    .map(item => ({ ...item }));
+
+  if (!validItems.length || !parentRange) return [];
+
+  const inRangeItems = validItems.filter(item =>
+    item.pageIndex >= parentRange.startPageIndex &&
+    item.pageIndex < parentRange.endPageIndex
+  );
+  if (inRangeItems.length) return inRangeItems;
+
+  const firstPrintedIndex = Math.min(...validItems.map(item => item.pageIndex));
+  const shift = parentRange.startPageIndex - firstPrintedIndex;
+
+  return validItems
+    .map(item => ({
+      ...item,
+      originalPageIndex: item.pageIndex,
+      pageIndex: item.pageIndex + shift
+    }))
+    .filter(item =>
+      item.pageIndex >= parentRange.startPageIndex &&
+      item.pageIndex < parentRange.endPageIndex
+    );
 }
 
 async function detectImportedDatasheetRangesFromTOC(bytes, datasheetRange) {
@@ -3516,16 +4157,48 @@ function buildImportedTextRows(items) {
     .filter(row => row.text);
 }
 
+function getImportedChildRangePageIndexes(parentRange, startPageIndex, endPageIndex) {
+  return getImportedRangePageIndexes(parentRange)
+    .filter(pageIndex =>
+      pageIndex >= startPageIndex &&
+      pageIndex < endPageIndex
+    );
+}
+
 function buildRangesFromImportedMarkers(markers, parentRange) {
-  const uniqueMarkers = [];
-  const seenPages = new Set();
+  const markersByPage = new Map();
 
   markers
+    .filter(marker => marker.pageIndex != null)
     .sort((a, b) => a.pageIndex - b.pageIndex)
     .forEach(marker => {
-      if (seenPages.has(marker.pageIndex)) return;
-      seenPages.add(marker.pageIndex);
-      uniqueMarkers.push(marker);
+      if (!markersByPage.has(marker.pageIndex)) {
+        markersByPage.set(marker.pageIndex, []);
+      }
+      markersByPage.get(marker.pageIndex).push(marker);
+    });
+
+  const uniqueMarkers = Array.from(markersByPage.entries())
+    .map(([pageIndex, pageMarkers]) => {
+      const primaryMarker = pageMarkers[0];
+      const tocEntries = pageMarkers
+        .filter(marker => marker.title)
+        .filter(marker =>
+          normalizeImportedSectionText(marker.title) !==
+          normalizeImportedSectionText(primaryMarker.title)
+        )
+        .map(marker => ({
+          id: crypto.randomUUID(),
+          title: cleanImportedRangeTitle(marker.title),
+          sourcePage: 1,
+          entryType: marker.tocLevel === "subsection" ? "subsection" : "section"
+        }));
+
+      return {
+        ...primaryMarker,
+        pageIndex,
+        tocEntries
+      };
     });
 
   if (uniqueMarkers.length === 0) return [];
@@ -3535,7 +4208,13 @@ function buildRangesFromImportedMarkers(markers, parentRange) {
       startPageIndex: marker.pageIndex,
       endPageIndex:
         uniqueMarkers[index + 1]?.pageIndex ?? parentRange.endPageIndex,
-      title: marker.title
+      title: cleanImportedRangeTitle(marker.title),
+      pageIndexes: getImportedChildRangePageIndexes(
+        parentRange,
+        marker.pageIndex,
+        uniqueMarkers[index + 1]?.pageIndex ?? parentRange.endPageIndex
+      ),
+      tocEntries: marker.tocEntries || []
     }))
     .filter(range => range.startPageIndex < range.endPageIndex);
 }
@@ -3557,6 +4236,11 @@ function buildHierarchicalImportedRanges(markers, parentRange) {
       const nextSection = sectionMarkers[index + 1];
       const startPageIndex = marker.pageIndex;
       const endPageIndex = nextSection?.pageIndex ?? parentRange.endPageIndex;
+      const pageIndexes = getImportedChildRangePageIndexes(
+        parentRange,
+        startPageIndex,
+        endPageIndex
+      );
       const tocEntries = sortedMarkers
         .filter(child =>
           child.tocLevel === "subsection" &&
@@ -3565,19 +4249,28 @@ function buildHierarchicalImportedRanges(markers, parentRange) {
         )
         .map(child => ({
           id: crypto.randomUUID(),
-          title: child.title,
-          sourcePage: child.pageIndex - startPageIndex + 1,
+          title: cleanImportedRangeTitle(child.title),
+          sourcePage: Math.max(1, child.pageIndex - startPageIndex + 1),
           entryType: "subsection"
         }));
 
       return {
         startPageIndex,
         endPageIndex,
-        title: marker.title,
+        title: cleanImportedRangeTitle(marker.title),
+        pageIndexes,
         tocEntries
       };
     })
-    .filter(range => range.startPageIndex < range.endPageIndex);
+    .filter(range => range.startPageIndex < range.endPageIndex && range.pageIndexes.length > 0);
+}
+function cleanImportedRangeTitle(title) {
+  return cleanImportedTOCTitle(
+    String(title || "")
+      .replace(/\s+\d+\s*$/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 function sanitizeImportedFileName(fileName) {
@@ -3623,8 +4316,19 @@ function getImportedSectionTitleMap() {
     ["sequence of operations", "Sequence of Operations"],
     ["parts list", "Parts List"],
     ["equipment datasheets", "Datasheets"],
+    ["equipment datasheet", "Datasheets"],
+    ["equipment data sheets", "Datasheets"],
+    ["equipment data sheet", "Datasheets"],
     ["equipment data", "Datasheets"],
+    ["product data", "Datasheets"],
+    ["product datasheets", "Datasheets"],
+    ["product datasheet", "Datasheets"],
+    ["product data sheets", "Datasheets"],
+    ["product data sheet", "Datasheets"],
+    ["data sheets", "Datasheets"],
+    ["data sheet", "Datasheets"],
     ["datasheets", "Datasheets"],
+    ["datasheet", "Datasheets"],
     ["control panel components", "Control Panel Components"],
     ["electrical schematics", "Electrical Schematics"],
     ["shop drawings", "Shop Drawings"],
@@ -3743,7 +4447,96 @@ async function detectImportedTOCEntries(pdf) {
     })));
   }
 
-  return entries;
+  return normalizeImportedTOCEntrySections(entries);
+}
+
+function normalizeImportedTOCEntrySections(entries) {
+  const normalizedEntries = entries.map(entry => ({ ...entry }));
+  const shopHeadingIndex = normalizedEntries.findIndex(entry =>
+    entry.section === "Shop Drawings" && entry.isSectionHeading
+  );
+  if (shopHeadingIndex < 0) return normalizedEntries;
+
+  const datasheetHeadingIndex = normalizedEntries.findIndex(entry =>
+    entry.section === "Datasheets" && entry.isSectionHeading
+  );
+  const datasheetSearchStartIndex = datasheetHeadingIndex >= 0
+    ? datasheetHeadingIndex + 1
+    : 0;
+  const datasheetStartIndex = normalizedEntries.findIndex((entry, index) =>
+    index >= datasheetSearchStartIndex &&
+    index < shopHeadingIndex &&
+    !entry.isSectionHeading &&
+    (entry.section === "Warranty" || entry.section === "Datasheets") &&
+    isLikelyImportedDatasheetTOCEntry(entry)
+  );
+  if (datasheetStartIndex < 0) return normalizedEntries;
+
+  for (let index = datasheetStartIndex; index < shopHeadingIndex; index++) {
+    const entry = normalizedEntries[index];
+    if (entry.isSectionHeading) continue;
+    if (entry.section === "Testing Checklist and Testing Procedures") continue;
+    if (isLikelyWarrantyTOCEntry(entry)) continue;
+    entry.section = "Datasheets";
+  }
+
+  return normalizedEntries;
+}
+function isLikelyImportedDatasheetTOCEntry(entry) {
+  const title = normalizeImportedSectionText(entry?.title || "");
+  if (!title) return false;
+  if (isLikelyWarrantyTOCEntry(entry)) return false;
+  if (title.includes("procedure")) return false;
+  if (title.includes("operation") && title.length < 25) return false;
+
+  return (
+    /\b\d+(?:\.\d+)?\s*(?:hp|v|psi|gal|gpm|od|mm|m|m18|m30)\b/.test(title) ||
+    title.includes("nautica") ||
+    title.includes("plumbing system") ||
+    title.includes("pneumatic system") ||
+    title.includes("electrical system") ||
+    title.includes("preventative maintenance") ||
+    title.includes("recommended spare parts") ||
+    title.includes("activation system") ||
+    title.includes("undercarriage wash") ||
+    title.includes("high pressure wheel washer") ||
+    title.includes("pumps") ||
+    title.includes("barrel screen filter") ||
+    title.includes("foot valve") ||
+    title.includes("running steel track") ||
+    title.includes("festoon") ||
+    title.includes("anchor bolts") ||
+    title.includes("soap pump") ||
+    title.includes("motor") ||
+    title.includes("gear reducer") ||
+    title.includes("brush") ||
+    title.includes("assembly") ||
+    title.includes("valve") ||
+    title.includes("nozzle") ||
+    title.includes("pump") ||
+    title.includes("filter") ||
+    title.includes("regulator") ||
+    title.includes("solenoid") ||
+    title.includes("sensor") ||
+    title.includes("cylinder") ||
+    title.includes("hose") ||
+    title.includes("tubing") ||
+    title.includes("anchor bolt") ||
+    title.includes("tank") ||
+    title.includes("bulkhead") ||
+    title.includes("float switch") ||
+    title.includes("spare parts")
+  );
+}
+
+function isLikelyWarrantyTOCEntry(entry) {
+  const title = normalizeImportedSectionText(entry?.title || "");
+  return (
+    title === "caution" ||
+    title.includes("warranty") ||
+    title.includes("warranty procedures") ||
+    title.includes("manufacturer s limited warranty")
+  );
 }
 
 function isLikelyImportedTOCRow(row, parsed) {
@@ -3785,19 +4578,18 @@ async function getImportedTOCSectionRanges(bytes, totalPages) {
           entry.pageIndex >= sectionEntry.pageIndex
         )
       );
+    if (sectionEntry.pageIndex == null && !firstChildEntry) return;
+
+    const startPageIndex = sectionEntry.isSectionHeading
+      ? firstChildEntry?.pageIndex ?? sectionEntry.pageIndex + 1
+      : sectionEntry.pageIndex;
     const nextSectionEntry = entries
       .slice(sectionEntryIndex + 1)
       .find(entry =>
-        entry.isSectionHeading &&
         entry.section !== section &&
         entry.pageIndex != null &&
-        sectionEntry.pageIndex != null &&
-        entry.pageIndex > sectionEntry.pageIndex
+        entry.pageIndex > startPageIndex
       );
-    if (sectionEntry.pageIndex == null && !firstChildEntry) return;
-
-    const startPageIndex = firstChildEntry?.pageIndex ??
-      sectionEntry.pageIndex + (sectionEntry.isSectionHeading ? 1 : 0);
     const endPageIndex = nextSectionEntry?.pageIndex ?? totalPages;
     const safeStartPageIndex = Math.max(
       0,
@@ -3816,12 +4608,99 @@ async function getImportedTOCSectionRanges(bytes, totalPages) {
     }
   });
 
+  applyImportedTOCPageSetCorrections(entries, ranges, totalPages);
+
   console.table(Object.entries(ranges).map(([section, range]) => ({
     section,
     ...range
   })));
 
   return ranges;
+}
+
+function applyImportedTOCPageSetCorrections(entries, ranges, totalPages) {
+  const shopHeadingIndex = entries.findIndex(entry =>
+    entry.section === "Shop Drawings" && entry.isSectionHeading
+  );
+  if (shopHeadingIndex < 0) return;
+
+  const shopHeadingPageIndex = getSafeImportedTOCPageIndex(
+    entries[shopHeadingIndex]?.pageIndex,
+    totalPages
+  );
+  const shopStartPageIndex = getSafeImportedTOCPageIndex(
+    ranges["Shop Drawings"]?.startPageIndex,
+    totalPages
+  ) ?? (shopHeadingPageIndex == null ? null : shopHeadingPageIndex + 1);
+  if (shopStartPageIndex == null) return;
+
+  const protectedDatasheetEndIndex = getSafeImportedTOCPageIndex(
+    ranges.Warranty?.endPageIndex,
+    totalPages
+  ) ?? 0;
+
+  const datasheetMarkers = entries
+    .slice(0, shopHeadingIndex)
+    .filter(entry =>
+      entry.section === "Datasheets" &&
+      !entry.isSectionHeading &&
+      isLikelyImportedDatasheetTOCEntry(entry)
+    )
+    .map(entry => getSafeImportedTOCPageIndex(entry.pageIndex, totalPages))
+    .filter(pageIndex => pageIndex != null)
+    .sort((a, b) => a - b);
+  if (datasheetMarkers.length < 2) return;
+
+  const preShopDatasheetStart = datasheetMarkers.find(pageIndex =>
+    pageIndex >= protectedDatasheetEndIndex &&
+    pageIndex < shopStartPageIndex
+  );
+  const postShopDatasheetStart = datasheetMarkers.find(pageIndex =>
+    pageIndex > shopStartPageIndex
+  );
+  const datasheetPageIndexes = [];
+
+  if (preShopDatasheetStart != null) {
+    const preShopEnd = shopHeadingPageIndex != null
+      ? shopHeadingPageIndex
+      : shopStartPageIndex;
+    datasheetPageIndexes.push(
+      ...buildSequentialPageIndexes(preShopDatasheetStart, preShopEnd)
+    );
+  }
+
+  if (postShopDatasheetStart != null) {
+    datasheetPageIndexes.push(
+      ...buildSequentialPageIndexes(postShopDatasheetStart, totalPages)
+    );
+  }
+
+  const importableDatasheetPageIndexes = datasheetPageIndexes.filter(pageIndex =>
+    pageIndex >= protectedDatasheetEndIndex
+  );
+
+  if (importableDatasheetPageIndexes.length > 0) {
+    ranges.Datasheets = {
+      pageIndexes: importableDatasheetPageIndexes,
+      startPageIndex: Math.min(...importableDatasheetPageIndexes),
+      endPageIndex: Math.max(...importableDatasheetPageIndexes) + 1
+    };
+  }
+
+  if (postShopDatasheetStart != null && postShopDatasheetStart > shopStartPageIndex) {
+    ranges["Shop Drawings"] = {
+      pageIndexes: buildSequentialPageIndexes(shopStartPageIndex, postShopDatasheetStart),
+      startPageIndex: shopStartPageIndex,
+      endPageIndex: postShopDatasheetStart
+    };
+  }
+}
+
+function getSafeImportedTOCPageIndex(pageIndex, totalPages) {
+  const value = Number(pageIndex);
+  if (!Number.isFinite(value)) return null;
+  if (value < 0 || value >= totalPages) return null;
+  return value;
 }
 
 function parseImportedTOCLine(line, printedPageOffset) {
@@ -3892,29 +4771,26 @@ function parseImportedTOCHeadingLine(line) {
 }
 
 function parseImportedTOCRow(row, printedPageOffset) {
-  const numberPart = [...row.parts]
+  const parts = [...(row.parts || [])]
+    .map(part => ({ ...part, text: String(part.text || "").trim() }))
+    .filter(part => part.text)
+    .sort((a, b) => a.x - b.x);
+  const numberPart = [...parts]
     .reverse()
-    .find(part => /\d+\s*$/.test(part.text.trim()));
+    .find(part => /^\d+\s*$/.test(part.text));
 
   if (!numberPart) return null;
 
-  const numberMatch = numberPart.text.trim().match(/(\d+)\s*$/);
-  const pageNumberText = numberMatch?.[1];
-  if (!pageNumberText) return null;
-
-  const titleParts = row.parts
+  const pageNumberText = numberPart.text.trim();
+  const title = parts
     .filter(part => part.x < numberPart.x)
     .map(part => part.text)
     .join(" ");
-  const embeddedTitle = numberPart.text
-    .replace(/(\d+)\s*$/, "")
-    .trim();
-  const title = titleParts || embeddedTitle;
 
   if (!cleanImportedTOCTitle(title) || /^page no\.?$/i.test(title)) return null;
 
   return parseImportedTOCLine(
-    `${title} ${pageNumberText}`,
+    title + " " + pageNumberText,
     printedPageOffset
   );
 }
@@ -3941,6 +4817,7 @@ function resolveImportedTOCSectionTitle(title) {
   if (normalizedTitle.includes("data sheet")) return "Datasheets";
   if (normalizedTitle.includes("datasheet")) return "Datasheets";
   if (normalizedTitle.includes("equipment data")) return "Datasheets";
+  if (normalizedTitle.includes("product data")) return "Datasheets";
   if (normalizedTitle.includes("shop drawing")) return "Shop Drawings";
   if (normalizedTitle === "drawings" || normalizedTitle.endsWith(" drawings")) {
     return "Shop Drawings";
@@ -4111,15 +4988,30 @@ function isImportedDatasheetsMarkerPage(normalizedPageText) {
 
   return (
     normalizedPageText === "datasheets" ||
+    normalizedPageText === "datasheet" ||
     normalizedPageText === "data sheets" ||
+    normalizedPageText === "data sheet" ||
     normalizedPageText === "equipment datasheets" ||
+    normalizedPageText === "equipment datasheet" ||
+    normalizedPageText === "equipment data sheets" ||
+    normalizedPageText === "equipment data sheet" ||
     normalizedPageText === "equipment data" ||
-    /^([ivxlcdm]+ )?(datasheets|data sheets|equipment datasheets|equipment data)$/.test(
+    normalizedPageText === "product data" ||
+    normalizedPageText === "product datasheets" ||
+    normalizedPageText === "product datasheet" ||
+    normalizedPageText === "product data sheets" ||
+    normalizedPageText === "product data sheet" ||
+    /^([ivxlcdm]+ )?(datasheets|datasheet|data sheets|data sheet|equipment datasheets|equipment datasheet|equipment data sheets|equipment data sheet|equipment data|product data|product datasheets|product datasheet|product data sheets|product data sheet)$/.test(
       normalizedPageText
     ) ||
     compactText === "datasheets" ||
+    compactText === "datasheet" ||
     compactText === "equipmentdatasheets" ||
-    compactText === "equipmentdata"
+    compactText === "equipmentdatasheet" ||
+    compactText === "equipmentdata" ||
+    compactText === "productdata" ||
+    compactText === "productdatasheets" ||
+    compactText === "productdatasheet"
   );
 }
 
@@ -4136,9 +5028,18 @@ function resolveImportedSparseSectionMarker(normalizedPageText) {
     ["testing", "Testing Checklist and Testing Procedures"],
     ["datasheets", "Datasheets"],
     ["datasheet", "Datasheets"],
-    ["equipment datasheets", "Datasheets"],
     ["data sheets", "Datasheets"],
+    ["data sheet", "Datasheets"],
+    ["equipment datasheets", "Datasheets"],
+    ["equipment datasheet", "Datasheets"],
+    ["equipment data sheets", "Datasheets"],
+    ["equipment data sheet", "Datasheets"],
     ["equipment data", "Datasheets"],
+    ["product data", "Datasheets"],
+    ["product datasheets", "Datasheets"],
+    ["product datasheet", "Datasheets"],
+    ["product data sheets", "Datasheets"],
+    ["product data sheet", "Datasheets"],
     ["control panel components", "Control Panel Components"],
     ["electrical schematics", "Electrical Schematics"],
     ["shop drawings", "Shop Drawings"],
@@ -4180,7 +5081,12 @@ function resolveImportedSectionTitle(title, sectionTitleMap) {
   ) {
     return "Testing Checklist and Testing Procedures";
   }
-  if (title.includes("datasheet") || title.includes("equipment data")) {
+  if (
+    title.includes("datasheet") ||
+    title.includes("data sheet") ||
+    title.includes("equipment data") ||
+    title.includes("product data")
+  ) {
     return "Datasheets";
   }
   return null;
@@ -4204,9 +5110,204 @@ function getImportedSectionRange(markers, section, totalPages) {
   return { startPageIndex, endPageIndex };
 }
 
-async function extractImportedSection(sourcePdf, range, fileName) {
+function getImportedRangePageIndexes(range) {
+  if (!range) return [];
+  if (Array.isArray(range.pageIndexes)) {
+    return [...new Set(range.pageIndexes)]
+      .map(Number)
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+  }
+  const pageIndexes = [];
+  for (
+    let pageIndex = Math.max(0, Number(range.startPageIndex) || 0);
+    pageIndex < Math.max(0, Number(range.endPageIndex) || 0);
+    pageIndex++
+  ) {
+    pageIndexes.push(pageIndex);
+  }
+  return pageIndexes;
+}
+
+function getImportedEffectivePageIndexes(range, skipPageIndexes = new Set()) {
+  if (!range) return [];
+
+  const skipSet = skipPageIndexes instanceof Set
+    ? skipPageIndexes
+    : new Set(skipPageIndexes || []);
+  return getImportedRangePageIndexes(range)
+    .filter(pageIndex => !skipSet.has(pageIndex));
+}
+
+function getImportedDisplayPageText(range, skipPageIndexes = new Set()) {
+  const pageNumbers = getImportedEffectivePageIndexes(range, skipPageIndexes)
+    .map(pageIndex => pageIndex + 1);
+
+  if (!pageNumbers.length) return "no importable pages";
+
+  const groups = [];
+  let groupStart = pageNumbers[0];
+  let previous = pageNumbers[0];
+
+  for (let index = 1; index < pageNumbers.length; index++) {
+    const pageNumber = pageNumbers[index];
+    if (pageNumber === previous + 1) {
+      previous = pageNumber;
+      continue;
+    }
+
+    groups.push(groupStart === previous ? String(groupStart) : `${groupStart}-${previous}`);
+    groupStart = pageNumber;
+    previous = pageNumber;
+  }
+
+  groups.push(groupStart === previous ? String(groupStart) : `${groupStart}-${previous}`);
+  return `pages ${groups.join(", ")}`;
+}
+
+async function getImportedGeneratedPageIndexes(bytes, sourcePdf) {
+  const generatedPageIndexes = new Set();
+  const PDFName = window.PDFLib.PDFName;
+  const markerKey = PDFName.of("PacketSection");
+  const generatedMetadataSections = new Set([
+    "Cover Page",
+    "Table of Contents",
+    ...(typeof packetSections !== "undefined" && Array.isArray(packetSections)
+      ? packetSections
+      : [])
+  ]);
+
+  sourcePdf.getPages().forEach((page, pageIndex) => {
+    const markerValue = page.node.get(markerKey)?.decodeText?.();
+    if (generatedMetadataSections.has(markerValue)) {
+      generatedPageIndexes.add(pageIndex);
+    }
+  });
+
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  let previousWasPacketTOC = false;
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const lines = buildImportedTextLines(content.items);
+    const normalizedPageText = normalizeImportedSectionText(
+      lines.join(" ")
+    );
+    const isPacketTOC =
+      isImportedPacketTOCPageText(normalizedPageText, lines) ||
+      (
+        previousWasPacketTOC &&
+        isImportedPacketTOCContinuationPageText(lines, normalizedPageText)
+      );
+
+    if (
+      isImportedPacketCoverPageText(normalizedPageText) ||
+      isPacketTOC ||
+      isImportedPacketDividerPageText(normalizedPageText)
+    ) {
+      generatedPageIndexes.add(pageNumber - 1);
+    }
+
+    previousWasPacketTOC = isPacketTOC;
+  }
+
+  return generatedPageIndexes;
+}
+
+function isImportedPacketCoverPageText(normalizedPageText) {
+  if (!normalizedPageText || normalizedPageText.length > 900) return false;
+
+  return (
+    normalizedPageText.includes("product submittal") ||
+    normalizedPageText.includes("operation maintenance manual")
+  ) && (
+    normalizedPageText.includes("ns corporation") ||
+    normalizedPageText.includes("n s corporation") ||
+    normalizedPageText.includes("vehicle wash system")
+  );
+}
+
+function isImportedPacketTOCPageText(normalizedPageText, lines = []) {
+  if (!normalizedPageText.includes("table of contents")) return false;
+
+  const knownSectionHits = [
+    "warranty",
+    "equipment datasheets",
+    "datasheets",
+    "control panel components",
+    "electrical schematics",
+    "shop drawings"
+  ].filter(title => normalizedPageText.includes(title)).length;
+
+  return (
+    normalizedPageText.includes("product submittal") ||
+    normalizedPageText.includes("operation maintenance manual") ||
+    normalizedPageText.includes("page no") ||
+    knownSectionHits >= 2
+  );
+}
+
+function isImportedPacketTOCContinuationPageText(lines = [], normalizedPageText = "") {
+  if (!normalizedPageText || normalizedPageText.length > 2000) return false;
+
+  const tocLikeLineCount = lines.filter(line => {
+    const text = String(line || "");
+    return (
+      /\.{2,}|…|\. \./.test(text) &&
+      /\d+\s*$/.test(text.trim())
+    );
+  }).length;
+
+  return (
+    tocLikeLineCount >= 3 ||
+    (/^[ivxlcdm]+\b/i.test(normalizedPageText) && tocLikeLineCount >= 1)
+  );
+}
+
+function isImportedPacketDividerPageText(normalizedPageText) {
+  if (!normalizedPageText || normalizedPageText.length > 650) return false;
+  if (resolveImportedSparseSectionMarker(normalizedPageText)) return true;
+
+  const hasNSPacketFooter =
+    normalizedPageText.includes("manufacturers of vehicle cleaning equipment since 1961") ||
+    normalizedPageText.includes("ave crocker") ||
+    normalizedPageText.includes("ns corporation") ||
+    normalizedPageText.includes("n s corporation");
+  if (!hasNSPacketFooter) return false;
+
+  const bodyText = getImportedPacketDividerBodyText(normalizedPageText);
+  if (!bodyText || bodyText.length > 90) return false;
+
+  return Array.from(getImportedSectionTitleMap().keys()).some(title =>
+    bodyText === title ||
+    /^[ivxlcdm]+\s+/.test(bodyText) &&
+      bodyText.replace(/^[ivxlcdm]+\s+/, "") === title
+  );
+}
+
+function getImportedPacketDividerBodyText(normalizedPageText) {
+  return String(normalizedPageText || "")
+    .replace(/\b\d{3,5}\s+(?:ave|avenue)\s+crocker\b/g, " ")
+    .replace(/\b\d{3,5}\s+west\s+florence\s+ave\b/g, " ")
+    .replace(/\bvalencia\s+california\b/g, " ")
+    .replace(/\binglewood\s+california\b/g, " ")
+    .replace(/\bmanufacturers\s+of\s+vehicle\s+cleaning\s+equipment\s+since\s+1961\b/g, " ")
+    .replace(/\bquality\s+management\s+system\b/g, " ")
+    .replace(/\bcertified\s+by\s+dnv\s+iso\b/g, " ")
+    .replace(/\bph\b|\bfax\b|\brev(?:ision)?\b|\bca\b|\bor\b/g, " ")
+    .replace(/\b\d+\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function extractImportedSection(sourcePdf, range, fileName, options = {}) {
   const outputPdf = await PDFDocument.create();
   const pageIndexes = [];
+  const explicitPageIndexes = getImportedRangePageIndexes(range);
+  const skipPageIndexes = options.skipPageIndexes instanceof Set
+    ? options.skipPageIndexes
+    : new Set(options.skipPageIndexes || []);
   const totalPages = sourcePdf.getPageCount();
   const startPageIndex = Math.max(
     0,
@@ -4223,12 +5324,16 @@ async function extractImportedSection(sourcePdf, range, fileName) {
     );
   }
 
-  for (
-    let pageIndex = startPageIndex;
-    pageIndex < endPageIndex;
-    pageIndex++
-  ) {
+  explicitPageIndexes.forEach(pageIndex => {
+    if (pageIndex < startPageIndex || pageIndex >= endPageIndex) return;
+    if (skipPageIndexes.has(pageIndex)) return;
     pageIndexes.push(pageIndex);
+  });
+
+  if (pageIndexes.length === 0) {
+    throw new Error(
+      `Could not extract ${fileName}: the detected range only contained generated packet pages.`
+    );
   }
 
   const copiedPages = await outputPdf.copyPages(sourcePdf, pageIndexes);
@@ -4537,6 +5642,8 @@ async function saveTOCEntry() {
       duplicateEntry.entryType = tocLevel === 0 ? "section" : "subsection";
       duplicateEntry.tocLevel = tocLevel;
       duplicateEntry.parentId = tocLevel === 0 ? "" : parentId;
+      duplicateEntry.detectedTOCEntry = false;
+      item.tocEntriesReviewed = true;
 
       if (existingEntry) {
         promoteTOCChildrenBeforeRemoval(item, existingEntry);
@@ -4561,6 +5668,8 @@ async function saveTOCEntry() {
     existingEntry.entryType = tocLevel === 0 ? "section" : "subsection";
     existingEntry.tocLevel = tocLevel;
     existingEntry.parentId = tocLevel === 0 ? "" : parentId;
+    existingEntry.detectedTOCEntry = false;
+    item.tocEntriesReviewed = true;
     cleanInvalidTOCParents(item);
   } else {
     item.tocEntries.push({
@@ -4571,6 +5680,7 @@ async function saveTOCEntry() {
       tocLevel,
       parentId: tocLevel === 0 ? "" : parentId
     });
+    item.tocEntriesReviewed = true;
   }
 
   item.tocEntries.sort((a, b) =>
@@ -4691,6 +5801,7 @@ function removeSubsectionEntry(entryId) {
   const removedEntry = (item.tocEntries || []).find(entry => entry.id === entryId);
   promoteTOCChildrenBeforeRemoval(item, removedEntry);
   item.tocEntries = (item.tocEntries || []).filter(entry => entry.id !== entryId);
+  item.tocEntriesReviewed = true;
   cleanInvalidTOCParents(item);
 
   if (editingTOCEntryId === entryId) {
@@ -5042,38 +6153,16 @@ async function drawTOCOnExistingPage(
     font: times
   });
 
-  const sectionDefinitions = isOM
-    ? [
-        "Warranty",
-        "Safety Procedures",
-        "Maintenance",
-        "Testing Checklist and Testing Procedures",
-        "Sequence of Operations",
-        "Parts List",
-        "Datasheets",
-        "Control Panel Components",
-        "Electrical Schematics",
-        "Shop Drawings",
-        "Manuals",
-        "Appendix"
-      ]
-    : [
-        "Warranty",
-        "Datasheets",
-        "Control Panel Components",
-        "Shop Drawings",
-        "Appendix"
-      ];
+  const sectionDefinitions = getPacketTOCSectionDefinitions();
 
   let sectionNumber = 0;
   const displayedPageNumbers = new Set();
 
   sectionDefinitions.forEach(section => {
     const items = tocItems.filter(item => item.section === section);
-
-    if (items.length === 0) return;
-
     const sectionTarget = sectionTargets[section];
+
+    if (items.length === 0 && !sectionTarget) return;
     const roman = sectionTarget?.roman || toRoman(sectionNumber + 1);
     sectionNumber++;
 
@@ -5147,14 +6236,7 @@ async function drawTOCOnExistingPage(
 
     y -= 14;
 
-    const filteredItems = items.filter((item, index) => {
-      if (index !== 0) return true;
-
-      const itemTitle = item.title.trim().toLowerCase();
-      const sectionTitle = sectionLabel.trim().toLowerCase();
-
-      return !item.isParentTOC || itemTitle !== sectionTitle;
-    });
+    const filteredItems = getFilteredTOCItemsForSection(items, sectionLabel);
 
         filteredItems.forEach(item => {
         // Move to a new TOC page before drawing into the footer

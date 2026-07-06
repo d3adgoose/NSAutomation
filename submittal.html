@@ -59,7 +59,7 @@
             </li>
 
             <li>
-              Use <strong>Format TOC</strong> on any non-warranty PDF to add levels.
+              Use <strong>Format TOC</strong> on any PDF to review scanned entries, add levels, and remove pages.
             </li>
 
             <li>
@@ -77,7 +77,6 @@
           </p>
 
           <ul>
-            <li>Use <strong>Manage PDF</strong> to remove pages from warranty documents.</li>
             <li>Revision Remarks are not numbered and do not appear in the TOC.</li>
             <li>Datasheets can be reordered before building the PDF.</li>
             <li>Imported submittal TOCs can use bullet rows for sections and dash rows for subsections.</li>
@@ -181,6 +180,11 @@
         </label>
       </div>
     </div>
+
+      <div class="button-row">
+        <button onclick="buildPacket()">Build PDF</button>
+        <button onclick="exportCSV()">Export CSV</button>
+      </div>
 
       <p id="packetBuildStatus" class="warranty-status" aria-live="polite">
         Ready to build.
@@ -337,27 +341,6 @@
         <button onclick="confirmDatasheetOrder()">Continue Building PDF</button>
         <button class="secondary" onclick="closeDatasheetOrderModal()">Cancel</button>
       </div>
-    </div>
-  </div>
-
-  <div id="pageManagerModal" class="modal hidden">
-    <div class="modal-content page-manager-modal-content">
-      <div class="page-manager-header">
-        <div>
-          <h2 id="pageManagerTitle">Manage PDF Pages</h2>
-          <p id="pageManagerStatus" class="warranty-status" aria-live="polite">No pages loaded.</p>
-        </div>
-        <div class="page-manager-actions">
-          <button onclick="selectAllManagedPages()">Select All</button>
-          <button class="secondary" onclick="clearManagedPageSelection()">Clear Selection</button>
-          <button onclick="extractSelectedPages()">Extract Selected</button>
-          <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
-          <button class="secondary" onclick="closePageManager()">Close</button>
-        </div>
-      </div>
-
-      <input type="hidden" id="activePageManagerPdfId" />
-      <div id="pageManagerPreviewList" class="page-manager-grid"></div>
     </div>
   </div>
 

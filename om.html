@@ -63,8 +63,8 @@
             </li>
 
             <li>
-              Use <strong>Format TOC</strong> on any non-warranty PDF to add sections
-              and subsections. Section rows become main TOC entries; subsection rows
+              Use <strong>Format TOC</strong> on any PDF to review scanned entries, add sections
+              and subsections, and remove pages. Section rows become main TOC entries; subsection rows
               appear indented under them.
             </li>
 
@@ -84,7 +84,6 @@
 
           <ul>
             <li>Imported submittal TOCs can use bullet rows for sections and dash rows for subsections.</li>
-            <li>Use <strong>Manage PDF</strong> to remove pages from warranty documents.</li>
             <li>Datasheets can be reordered before building the PDF.</li>
             <li>Files without a recognized keyword default to Datasheets.</li>
           </ul>
@@ -360,28 +359,7 @@
     </div>
   </div>
 
-  <div id="pageManagerModal" class="modal hidden">
-    <div class="modal-content page-manager-modal-content">
-      <div class="page-manager-header">
-        <div>
-          <h2 id="pageManagerTitle">Manage PDF Pages</h2>
-          <p id="pageManagerStatus" class="warranty-status" aria-live="polite">No pages loaded.</p>
-        </div>
-        <div class="page-manager-actions">
-          <button onclick="selectAllManagedPages()">Select All</button>
-          <button class="secondary" onclick="clearManagedPageSelection()">Clear Selection</button>
-          <button onclick="extractSelectedPages()">Extract Selected</button>
-          <button class="remove-pdf-btn" onclick="deleteSelectedPages()">Delete Selected</button>
-          <button class="secondary" onclick="closePageManager()">Close</button>
-        </div>
-      </div>
-
-      <input type="hidden" id="activePageManagerPdfId" />
-      <div id="pageManagerPreviewList" class="page-manager-grid"></div>
-    </div>
-  </div>
-
- <div id="subsectionModal" class="modal hidden">
+  <div id="subsectionModal" class="modal hidden">
     <div class="modal-content large-modal">
 
       <h2 id="subsectionModalTitle">Format TOC</h2>
