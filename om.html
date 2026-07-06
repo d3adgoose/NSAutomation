@@ -41,7 +41,7 @@
         <div class="instructions-box">
           <ol>
             <li>
-              Upload PDFs using <strong>Choose Files</strong> or by
+              Upload PDFs using <strong>Choose PDFs</strong> or by
               <strong>dragging and dropping</strong> files into the upload area.
               Do not include a cover page or table of contents - these are generated automatically.
             </li>
@@ -54,17 +54,24 @@
               <strong>parts list</strong>, <strong>datasheet</strong> or <strong>spec</strong>,
               <strong>control panel</strong>, <strong>electrical schematic</strong>,
               <strong>shop drawing</strong>, <strong>manual</strong>, and <strong>appendix</strong>.
+              Files without a recognized keyword default to Datasheets.
             </li>
 
             <li>
-              Verify each PDF is assigned to the correct section, then use
+              Verify each PDF is assigned to the correct Roman Section, then use
               <strong>Rename File</strong> to change how it appears in the Table of Contents.
+              Use <strong>Undo</strong> and <strong>Redo</strong> to step back through pre-build changes.
             </li>
 
             <li>
-              Use <strong>Format TOC</strong> on any PDF to review scanned entries, add sections
-              and subsections, and remove pages. Section rows become main TOC entries; subsection rows
-              appear indented under them.
+              Use <strong>Format TOC</strong> to review scanned entries in a tree, add Level 0, Level 1,
+              and Level 2 rows, choose parent rows, assign PDF pages, and remove unwanted rows or pages.
+            </li>
+
+            <li>
+              Use <strong>Template</strong> inside Format TOC to add common level names. Template rows start
+              with blank pages, so add a page to each row marked <strong>Template page required</strong> or remove
+              that row before closing Format TOC.
             </li>
 
             <li>
@@ -74,7 +81,8 @@
             </li>
 
             <li>
-              Click <strong>Build PDF</strong> to generate the final O&M manual.
+              Click <strong>Build PDF</strong>, review the full PDF preview, then choose
+              <strong>Build PDF</strong> to download or <strong>Edit</strong> to return to the builder.
             </li>
           </ol>
           <p>
@@ -82,9 +90,9 @@
           </p>
 
           <ul>
-            <li>TOC templates can add common section and subsection names before building.</li>
-            <li>Datasheets can be reordered before building the PDF.</li>
-            <li>Files without a recognized keyword default to Datasheets.</li>
+            <li>Sections with multiple included PDFs can be reordered before building.</li>
+            <li>Normal PDF page numbers account for generated TOC pages automatically.</li>
+            <li>Revision Remarks are not numbered and do not appear in the TOC.</li>
           </ul>
         </div>
       </details>
