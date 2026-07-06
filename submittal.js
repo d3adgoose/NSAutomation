@@ -41,9 +41,9 @@ const TOC_ENTRY_TEMPLATES = [
   },
   {
     id: "brush-module-5m-400",
-    name: "brush module 5M-400",
+    name: "Brush module 5M-400",
     entries: [
-      { title: "brush module 5M-400", tocLevel: 0 },
+      { title: "Brush module 5M-400", tocLevel: 0 },
       { title: "2hp system-5M brush motor", tocLevel: 1 },
       { title: "5M gear reducer (15:1 & 40:1 ratios)", tocLevel: 1 },
       { title: "1-1/2\" 2-bolt heavy duty bearing", tocLevel: 1 },
