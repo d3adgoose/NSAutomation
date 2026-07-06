@@ -40,6 +40,24 @@ const TOC_ENTRY_TEMPLATES = [
     ]
   },
   {
+    id: "brush-module-5m-400",
+    name: "brush module 5M-400",
+    entries: [
+      { title: "brush module 5M-400", tocLevel: 0 },
+      { title: "2hp system-5M brush motor", tocLevel: 1 },
+      { title: "5M gear reducer (15:1 & 40:1 ratios)", tocLevel: 1 },
+      { title: "1-1/2\" 2-bolt heavy duty bearing", tocLevel: 1 },
+      { title: "5M-400-12.5 spray pipe", tocLevel: 1 },
+      { title: "5010 brass 1/4\" mnpt nozzle", tocLevel: 2 },
+      { title: "5M-12.5 ECO-motion bristle wrap brush", tocLevel: 1 },
+      { title: "wrap brush adjustment", tocLevel: 2 },
+      { title: "Heavy duty flange coupler", tocLevel: 2 },
+      { title: "Heavy duty flange coupler installation", tocLevel: 2 },
+      { title: "13-1/2\" shock absorber", tocLevel: 2 },
+      { title: "alum. 5M angled 50-slotted rack", tocLevel: 1 }
+    ]
+  },
+  {
     id: "brush-module-5m-420",
     name: "Brush Module 5M-420",
     entries: [
@@ -3178,8 +3196,20 @@ function renderTOCTemplatePreview() {
 
   container.replaceChildren();
 
-  if (TOC_ENTRY_TEMPLATES.length === 0) {
-    container.innerHTML = "<p>No templates are available yet.</p>";
+  const searchInput = document.getElementById("tocTemplateSearch");
+  const searchTerm = String(searchInput?.value || "").trim().toLowerCase();
+  const templates = TOC_ENTRY_TEMPLATES
+    .filter(template => {
+      if (!searchTerm) return true;
+      return [
+        template.name,
+        ...(template.entries || []).map(entry => entry.title)
+      ].some(value => String(value || "").toLowerCase().includes(searchTerm));
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+  if (templates.length === 0) {
+    container.innerHTML = "<p>No templates match your search.</p>";
     return;
   }
 
@@ -3192,7 +3222,7 @@ function renderTOCTemplatePreview() {
 
   const tbody = document.createElement("tbody");
 
-  TOC_ENTRY_TEMPLATES.forEach(template => {
+  templates.forEach(template => {
     const row = document.createElement("tr");
 
     const templateCell = document.createElement("td");

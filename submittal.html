@@ -449,6 +449,15 @@
         Choose a template to add the rows, then edit each row to assign its PDF page.
       </p>
 
+      <label for="tocTemplateSearch">Search templates</label>
+      <input
+        id="tocTemplateSearch"
+        class="toc-template-search"
+        type="search"
+        placeholder="Search by template or row name"
+        oninput="renderTOCTemplatePreview()"
+      />
+
       <div id="tocTemplatePreviewList" class="toc-template-list"></div>
 
       <p id="tocTemplateStatus" class="warranty-status" aria-live="polite"></p>
