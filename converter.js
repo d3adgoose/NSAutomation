@@ -212,28 +212,7 @@ function getConverterExcelFileKey(file) {
 function updateConverterStatus(message = "") {
   const status = document.getElementById("converterStatus");
   if (!status) return;
-
-  if (message) {
-    status.textContent = message;
-    return;
-  }
-
-  const pdfText = converterPdfFile
-    ? `PDF: ${converterPdfFile.name}`
-    : "No PDF selected";
-
-  const excelText = converterExcelFiles.length
-    ? `Excel: ${converterExcelFiles.length === 1 ? converterExcelFiles[0].name : `${converterExcelFiles.length} files`}`
-    : "No Excel selected";
-
-  const foundCount = converterMatches.filter(match => (match.foundPages || []).length || (match.ocrFoundPages || []).length).length;
-  const changeCount = converterMatches.length;
-  const pageCount = converterChangedPages.length;
-  const changeText = changeCount > 0
-    ? `Changes: ${foundCount}/${changeCount} found on ${pageCount} page(s)`
-    : "Changes: 0";
-
-  status.textContent = `${pdfText} | ${excelText} | ${changeText}`;
+  status.textContent = message || "";
 }
 
 function runConverterTask(task, failureMessage) {
@@ -3278,7 +3257,7 @@ function clearConverterFiles() {
   document.getElementById("converterPreviewJumpList")?.replaceChildren();
 
   resetConverterPreview();
-  updateConverterStatus("No files selected yet.");
+  updateConverterStatus();
 }
 
 function resetConverterPreview() {

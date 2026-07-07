@@ -1090,6 +1090,35 @@ button:disabled {
   font-size: 13px;
 }
 
+.library-build-level-cell {
+  display: grid;
+  gap: 6px;
+  min-width: 190px;
+}
+
+.library-build-level-cell select {
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.library-level-summary {
+  color: #555;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.library-table-wrap .pdf-attachment-card {
+  min-width: 320px;
+}
+
+.library-table-wrap .attachment-actions {
+  align-items: stretch;
+}
+
+.library-table-wrap .attachment-actions button {
+  flex: 1 1 130px;
+}
+
 .selected-library-pdf {
   margin: 10px 0 18px;
   font-size: 14px;
@@ -1347,6 +1376,16 @@ button:disabled {
 .library-page-manager-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr));
   gap: 18px;
+}
+
+.database-format-levels-layout {
+  align-items: start;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.database-format-levels-layout .library-page-manager-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
 }
 
 .page-manager-card {
@@ -1912,26 +1951,29 @@ button:disabled {
 
 .library-merge-actions {
   margin-left: auto;
-  display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
-  gap: 10px;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr);
+  gap: 8px;
+  width: min(100%, 560px);
 }
 
 .library-merge-actions input {
-  width: 260px;
-  min-width: 220px;
+  width: 100%;
+  min-width: 0;
 }
 
 .library-merge-buttons {
   display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
 .library-merge-actions button,
 .library-merge-buttons button {
   white-space: nowrap;
+  min-width: 0;
+  width: 100%;
+  padding-inline: 12px;
 }
 
 .database-upload-card h2,
@@ -2026,7 +2068,7 @@ button:disabled {
 
 .library-table-wrap table {
   margin: 0;
-  min-width: 980px;
+  min-width: 1180px;
 }
 
 .library-table-wrap th {
@@ -2038,6 +2080,19 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .library-card-header {
+    display: grid;
+  }
+
+  .library-merge-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .library-merge-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .library-filters {
     grid-template-columns: 1fr;
   }
@@ -2726,6 +2781,16 @@ tr:hover {
   background: var(--ns-surface-muted);
   padding: 8px 10px;
   color: var(--ns-muted);
+}
+
+.warranty-status:empty,
+.builder-history-status:empty,
+.subsection-page-selection-status:empty,
+.toc-template-page-status:empty,
+.preview-build-status:empty,
+.converter-status:empty,
+.database-status:empty {
+  display: none;
 }
 
 .toc-entry-missing-page,

@@ -65,14 +65,14 @@
             </li>
 
             <li>
-              Use <strong>Format TOC</strong> to review scanned entries in a tree, add Level 0, Level 1,
+              Use <strong>Format Levels</strong> to review scanned entries in a tree, add Level 0, Level 1,
               and Level 2 rows, choose parent rows, assign PDF pages, and remove unwanted rows or pages.
             </li>
 
             <li>
-              Use <strong>Template</strong> inside Format TOC to add common level names. Template rows start
+              Use <strong>Template</strong> inside Format Levels to add common level names. Template rows start
               with blank pages, so add a page to each row marked <strong>Template page required</strong> or remove
-              that row before closing Format TOC.
+              that row before closing Format Levels.
             </li>
 
             <li>
@@ -125,9 +125,7 @@
       </div>
 
       <div id="uploadedPdfList"></div>
-      <p id="uploadedPdfCount" class="warranty-status" aria-live="polite">
-        0 PDFs uploaded.
-      </p>
+      <p id="uploadedPdfCount" class="warranty-status" aria-live="polite"></p>
     </section>
 
     <section class="card">
@@ -204,11 +202,9 @@
 </div>
       </div>
 
-      <p id="builderHistoryStatus" class="builder-history-status" aria-live="polite">No changes to undo yet.</p>
+      <p id="builderHistoryStatus" class="builder-history-status" aria-live="polite"></p>
 
-      <p id="packetBuildStatus" class="warranty-status" aria-live="polite">
-        Ready to build.
-      </p>
+      <p id="packetBuildStatus" class="warranty-status" aria-live="polite"></p>
     </section>
 
     <section class="card">
@@ -329,7 +325,7 @@
   <div id="subsectionModal" class="modal hidden">
     <div class="modal-content large-modal">
 
-      <h2 id="subsectionModalTitle">Format TOC</h2>
+      <h2 id="subsectionModalTitle">Format Levels</h2>
 
       <p>
         Preview the PDF pages, select a page, name the TOC entry,
@@ -367,6 +363,13 @@
               </small>
             </span>
           </label>
+
+          <label>PDF Name Level</label>
+          <select id="pdfParentTOCLevel" onchange="updatePDFParentTOCLevelFromSelect()">
+            <option value="0">Level 0 - Main item</option>
+            <option value="1">Level 1 - Under Level 0</option>
+            <option value="2">Level 2 - Under Level 1</option>
+          </select>
         </div>
           <label>Selected Page</label>
 

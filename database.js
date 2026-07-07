@@ -5,6 +5,38 @@ let currentUser = null;
 let useRemoteDatabase = false;
 const libraryPDFBlobCache = new Map();
 
+function openDatabaseMessageModal(title = "Action Needed", message = "") {
+  return new Promise(resolve => {
+    const modal = document.getElementById("appPromptModal");
+    const titleEl = document.getElementById("appPromptTitle");
+    const messageEl = document.getElementById("appPromptMessage");
+    const actionsEl = document.getElementById("appPromptActions");
+
+    if (!modal || !titleEl || !messageEl || !actionsEl) {
+      alert(message || title);
+      resolve();
+      return;
+    }
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    actionsEl.innerHTML = "";
+
+    const okButton = document.createElement("button");
+    okButton.type = "button";
+    okButton.textContent = "OK";
+    okButton.addEventListener("click", () => {
+      modal.classList.add("hidden");
+      actionsEl.innerHTML = "";
+      resolve();
+    });
+
+    actionsEl.appendChild(okButton);
+    modal.classList.remove("hidden");
+    okButton.focus();
+  });
+}
+
 function openLoginModal() {
   const modal = document.getElementById("loginModal");
   if (modal) modal.classList.remove("hidden");
@@ -118,9 +150,102 @@ async function sendLoginLink() {
 const DOCUMENTS_TABLE = "documents";
 const DOCUMENTS_BUCKET = "document-library";
 const DATABASE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
+const DATABASE_PDF_PARENT_TOC_ID = "__pdf_parent__";
 
 function guessPacketSectionForLibrary(fileName = "") {
   return guessPacketSectionFromName(fileName);
+}
+
+function normalizeLibraryTOCLevel(value) {
+  const level = Number(value);
+  return [0, 1, 2].includes(level) ? level : 0;
+}
+
+function getLibraryMetaFromTags(tags = "") {
+  const metaLine = String(tags || "")
+    .split(/\r?\n/)
+    .find(line => line.trim().startsWith("ns-meta:"));
+
+  if (!metaLine) return {};
+
+  try {
+    return JSON.parse(metaLine.trim().replace(/^ns-meta:/, ""));
+  } catch (error) {
+    console.warn("Could not read library metadata:", error);
+    return {};
+  }
+}
+
+function getLibraryTagsWithMeta(tags = "", meta = {}) {
+  const visibleTags = String(tags || "")
+    .split(/\r?\n/)
+    .filter(line => line.trim() && !line.trim().startsWith("ns-meta:"));
+  const cleanMeta = {
+    tocLevel: normalizeLibraryTOCLevel(meta.tocLevel),
+    hideParentTOC: !!meta.hideParentTOC,
+    tocEntries: Array.isArray(meta.tocEntries)
+      ? meta.tocEntries.map(entry => ({
+          id: entry.id || crypto.randomUUID(),
+          title: entry.title || "",
+          sourcePage: Number(entry.sourcePage || 1),
+          entryType: Number(entry.tocLevel || 0) === 0 ? "section" : "subsection",
+          tocLevel: normalizeLibraryTOCLevel(entry.tocLevel),
+          parentId: entry.parentId || "",
+          detectedTOCEntry: false
+        }))
+      : []
+  };
+
+  return [
+    ...visibleTags,
+    `ns-meta:${JSON.stringify(cleanMeta)}`
+  ].join("\n");
+}
+
+function getLibraryPacketSection(item) {
+  return item.packetSection || guessPacketSectionForLibrary(item.fileName || item.displayTitle || "");
+}
+
+function cleanLibraryBuilderTitle(value = "") {
+  const leafName = String(value || "")
+    .trim()
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .pop() || "";
+
+  return leafName.replace(/\.pdf$/i, "").trim();
+}
+
+function getLibraryBuilderDisplayTitle(item = {}) {
+  return cleanLibraryBuilderTitle(item.fileName) ||
+    cleanLibraryBuilderTitle(item.attachmentFileName) ||
+    cleanLibraryBuilderTitle(item.displayTitle) ||
+    "Database PDF";
+}
+
+function libraryHasLevelZeroEntry(item = {}) {
+  return (item.tocEntries || []).some(entry =>
+    normalizeLibraryTOCLevel(entry.tocLevel) === 0
+  );
+}
+
+function getLibraryHideParentValidationMessage(item = {}) {
+  if (!item.hideParentTOC || libraryHasLevelZeroEntry(item)) return "";
+
+  return `"${getLibraryBuilderDisplayTitle(item)}" is set to hide the PDF name in the TOC, but it does not have a Level 0 entry. Open Format Levels in the database and add a Level 0 heading, or turn off Hide PDF name in TOC.`;
+}
+
+function getLibraryBuilderTOCEntries(item = {}) {
+  const workingItem = {
+    ...item,
+    tocEntries: Array.isArray(item.tocEntries)
+      ? item.tocEntries.map(entry => ({ ...entry }))
+      : []
+  };
+
+  cleanInvalidLibraryLevelParents(workingItem);
+  return orderLibraryLevelEntries(workingItem.tocEntries)
+    .map(entry => ({ ...entry }));
 }
 
 async function loadLibraryDB() {
@@ -164,15 +289,7 @@ function saveLibraryDB() {
 function updateDatabaseStatus(message = "") {
   const status = document.getElementById("databaseStatus");
   if (!status) return;
-
-  if (message) {
-    status.textContent = message;
-    return;
-  }
-
-  const attachedCount = libraryDB.filter(item => item.storagePath).length;
-  status.textContent =
-    `Ready. ${libraryDB.length} document(s) loaded | ${attachedCount} PDF attachment(s).`;
+  status.textContent = message || "";
 }
 
 function updateLibraryCount(visibleCount = libraryDB.length) {
@@ -181,11 +298,15 @@ function updateLibraryCount(visibleCount = libraryDB.length) {
 
   const attachedCount = libraryDB.filter(item => item.storagePath).length;
   const selectedCount = selectedLibraryPDFIds.size;
-  count.textContent =
-    `${visibleCount} shown | ${libraryDB.length} documents | ${attachedCount} PDFs | ${selectedCount} selected`;
+  count.textContent = libraryDB.length || selectedCount
+    ? `${visibleCount} shown | ${libraryDB.length} documents | ${attachedCount} PDFs | ${selectedCount} selected`
+    : "";
 }
 
 function fromSupabaseDocument(row) {
+  const meta = getLibraryMetaFromTags(row.tags || "");
+  const detectionName = row.file_name || row.display_title || "";
+
   return {
     id: row.id,
     uploadDate: row.created_at
@@ -194,7 +315,10 @@ function fromSupabaseDocument(row) {
     fileName: row.file_name || "",
     displayTitle: row.display_title || "",
     documentType: row.document_type || "Other",
-    packetSection: row.packet_section || "",
+    packetSection: row.packet_section || guessPacketSectionForLibrary(detectionName),
+    tocLevel: normalizeLibraryTOCLevel(meta.tocLevel),
+    hideParentTOC: !!meta.hideParentTOC,
+    tocEntries: Array.isArray(meta.tocEntries) ? meta.tocEntries : [],
     manufacturer: row.manufacturer || "",
     modelNumber: row.model_number || "",
     tags: row.tags || "",
@@ -209,10 +333,14 @@ function toSupabaseDocument(item) {
     file_name: item.fileName || "",
     display_title: item.displayTitle || "",
     document_type: item.documentType || "Other",
-    packet_section: item.packetSection || guessPacketSectionForLibrary(item.fileName || item.displayTitle || ""),
+    packet_section: getLibraryPacketSection(item),
     manufacturer: item.manufacturer || "",
     model_number: item.modelNumber || "",
-    tags: item.tags || "",
+    tags: getLibraryTagsWithMeta(item.tags || "", {
+      tocLevel: item.tocLevel,
+      hideParentTOC: item.hideParentTOC,
+      tocEntries: item.tocEntries || []
+    }),
     notes: item.notes || "",
     storage_path: item.storagePath || "",
     //updated_at: new Date().toISOString()
@@ -246,6 +374,15 @@ function renderLibraryDB() {
         ${opt}
       </option>
     `).join("");
+    const sectionOptions = packetSections
+      .filter(section => !["Cover Page", "Table of Contents"].includes(section))
+      .map(section => `
+        <option value="${section}" ${section === getLibraryPacketSection(item) ? "selected" : ""}>
+          ${section}
+        </option>
+      `)
+      .join("");
+    const levelCount = (item.tocEntries || []).length;
 
     row.innerHTML = `
       <td>
@@ -279,6 +416,20 @@ function renderLibraryDB() {
       </td>
 
       <td>
+        <div class="library-build-level-cell">
+          <select
+            aria-label="Builder section"
+            onchange="updateLibraryDBItem('${item.id}', 'packetSection', this.value)">
+            ${sectionOptions}
+          </select>
+          <span class="library-level-summary">
+            ${levelCount} formatted level row${levelCount === 1 ? "" : "s"}
+            ${item.hideParentTOC ? " | PDF name hidden" : ""}
+          </span>
+        </div>
+      </td>
+
+      <td>
         <input
           value="${escapeHTML(item.notes || "")}"
           onchange="updateLibraryDBItem('${item.id}', 'notes', this.value)"
@@ -299,7 +450,15 @@ function renderLibraryDB() {
 
                 <div class="table-action-buttons attachment-actions">
                   <button onclick="previewLibraryPDF('${item.id}')">
-                    Manage PDF
+                    Format Levels
+                  </button>
+
+                  <button onclick="addLibraryPDFToBuilder('${item.id}', 'submittal')">
+                    Add to Submittal
+                  </button>
+
+                  <button onclick="addLibraryPDFToBuilder('${item.id}', 'om')">
+                    Add to O&amp;M
                   </button>
 
                   <button onclick="downloadLibraryPDF('${item.id}')">
@@ -505,8 +664,10 @@ function setPendingLibraryPdf(file) {
   const fileNameInput = document.getElementById("libFileName");
   const titleInput = document.getElementById("libDisplayTitle");
   const docTypeSelect = document.getElementById("libDocumentType");
+  const sectionSelect = document.getElementById("libPacketSection");
 
   const cleanName = file.name.replace(/\.pdf$/i, "");
+  const guessedSection = guessPacketSectionForLibrary(file.name);
 
   if (fileNameInput && !fileNameInput.value.trim()) {
     fileNameInput.value = file.name;
@@ -515,6 +676,11 @@ function setPendingLibraryPdf(file) {
   if (docTypeSelect) {
     docTypeSelect.value = guessDocumentTypeForLibrary(file.name);
   }
+
+  if (sectionSelect) {
+    sectionSelect.value = guessedSection;
+  }
+
 }
 
 function clearLibraryUpload() {
@@ -608,7 +774,7 @@ async function addLibraryEntry(entry, options = {}) {
     return;
   }
 
-  libraryPDFBlobCache.delete(id);
+  if (entry.id) libraryPDFBlobCache.delete(entry.id);
   await loadLibraryDB();
 }
 
@@ -898,7 +1064,7 @@ function exportLibraryCSV() {
     i.fileName,
     i.displayTitle,
     i.documentType,
-    i.packetSection,
+    getLibraryPacketSection(i),
     i.notes,
     i.storagePath
   ]);
@@ -917,6 +1083,11 @@ async function mergeSubmittalIntoLibrary(items) {
       displayTitle: i.displayTitle || "",
       documentType: i.documentType || "Other",
       packetSection: i.packetSection || guessPacketSectionForLibrary(i.fileName || i.displayTitle || ""),
+      tocLevel: 0,
+      hideParentTOC: !!i.hideParentTOC,
+      tocEntries: Array.isArray(i.tocEntries)
+        ? i.tocEntries.map(entry => ({ ...entry }))
+        : [],
       notes: "",
       storagePath: ""
     };
@@ -952,6 +1123,9 @@ async function addLibraryEntryFromForm() {
   const fileName = document.getElementById("libFileName").value.trim();
   const displayTitle = document.getElementById("libDisplayTitle").value.trim();
   const documentType = document.getElementById("libDocumentType").value;
+  const packetSection =
+    document.getElementById("libPacketSection")?.value ||
+    guessPacketSectionForLibrary(fileName || displayTitle || "");
   const notes = document.getElementById("libNotes").value.trim();
 
   if (!displayTitle && !fileName && !pendingLibraryPdf) {
@@ -967,7 +1141,10 @@ async function addLibraryEntryFromForm() {
     fileName: finalFileName,
     displayTitle,
     documentType,
-    packetSection: guessPacketSectionForLibrary(finalFileName || displayTitle || ""),
+    packetSection,
+    tocLevel: 0,
+    hideParentTOC: false,
+    tocEntries: [],
     notes,
     storagePath: ""
   };
@@ -995,6 +1172,7 @@ async function addLibraryEntryFromForm() {
 
   document.getElementById("libFileName").value = "";
   document.getElementById("libDisplayTitle").value = "";
+  document.getElementById("libPacketSection").value = "Datasheets";
   document.getElementById("libNotes").value = "";
 
   clearLibraryUpload();
@@ -1033,6 +1211,112 @@ async function getLibraryPDFBlob(item) {
 
   libraryPDFBlobCache.set(item.id, data);
   return data;
+}
+
+async function saveLibraryPDFToBuilder(item, target) {
+  const targetLabel = target === "om" ? "O&M" : "Submittal";
+
+  updateDatabaseStatus(`Adding ${item.fileName || "PDF"} to ${targetLabel} builder...`);
+  const blob = await getLibraryPDFBlob(item);
+
+  await saveBuilderHandoffItem(
+    target === "om" ? "om" : "submittal",
+    {
+      source: "database",
+      sourceLibraryId: item.id,
+      fileName: item.attachmentFileName || item.fileName || "database-file.pdf",
+      displayTitle: getLibraryBuilderDisplayTitle(item),
+      documentType: item.documentType || "Other",
+      packetSection: getLibraryPacketSection(item),
+      tocLevel: 0,
+      hideParentTOC: !!item.hideParentTOC,
+      tocEntries: getLibraryBuilderTOCEntries(item),
+      notes: item.notes || ""
+    },
+    blob
+  );
+}
+
+function openBuilderTarget(target) {
+  window.location.href = target === "om"
+    ? "om.html?from=database"
+    : "submittal.html?from=database";
+}
+
+function validateLibraryBuilderHandoff() {
+  if (typeof saveBuilderHandoffItem !== "function") {
+    alert("Builder handoff is not available in this browser.");
+    updateDatabaseStatus("Builder handoff is not available in this browser.");
+    return false;
+  }
+
+  return true;
+}
+
+async function validateLibraryItemsForBuilder(items = []) {
+  const invalidItem = items.find(item => getLibraryHideParentValidationMessage(item));
+  if (!invalidItem) return true;
+
+  const message = getLibraryHideParentValidationMessage(invalidItem);
+  await showLibraryMessage("Fix Database Levels", message);
+  updateDatabaseStatus(message);
+  return false;
+}
+
+async function addLibraryPDFToBuilder(id, target) {
+  const item = libraryDB.find(x => x.id === id);
+  const targetLabel = target === "om" ? "O&M" : "Submittal";
+
+  if (!item || !item.storagePath) {
+    alert("Attach a PDF before adding it to a builder.");
+    updateDatabaseStatus("Attach a PDF before adding it to a builder.");
+    return;
+  }
+
+  if (!validateLibraryBuilderHandoff()) return;
+  if (!(await validateLibraryItemsForBuilder([item]))) return;
+
+  try {
+    await saveLibraryPDFToBuilder(item, target);
+    updateDatabaseStatus(`Opening ${targetLabel} builder...`);
+    openBuilderTarget(target);
+  } catch (error) {
+    console.error("Could not add database PDF to builder:", error);
+    alert(`Could not add this PDF to the ${targetLabel} builder.`);
+    updateDatabaseStatus(`Could not add PDF to ${targetLabel}: ${error.message || "Please try again."}`);
+  }
+}
+
+async function addSelectedLibraryPDFsToBuilder(target) {
+  const targetLabel = target === "om" ? "O&M" : "Submittal";
+  const selectedItems = Array.from(selectedLibraryPDFIds)
+    .map(id => libraryDB.find(item => item.id === id))
+    .filter(item => item && item.storagePath);
+
+  if (selectedItems.length === 0) {
+    alert("Select at least one PDF with an attachment.");
+    updateDatabaseStatus("Select at least one PDF with an attachment.");
+    return;
+  }
+
+  if (!validateLibraryBuilderHandoff()) return;
+  if (!(await validateLibraryItemsForBuilder(selectedItems))) return;
+
+  try {
+    for (const [index, item] of selectedItems.entries()) {
+      updateDatabaseStatus(
+        `Adding ${index + 1} of ${selectedItems.length} selected PDFs to ${targetLabel} builder...`
+      );
+      await saveLibraryPDFToBuilder(item, target);
+    }
+
+    updateDatabaseStatus(`Opening ${targetLabel} builder with ${selectedItems.length} PDF(s)...`);
+    openBuilderTarget(target);
+  } catch (error) {
+    console.error(`Could not add selected database PDFs to ${targetLabel}:`, error);
+    alert(`Could not add the selected PDFs to the ${targetLabel} builder.`);
+    updateDatabaseStatus(`Could not add selected PDFs to ${targetLabel}: ${error.message || "Please try again."}`);
+  }
 }
 
 let activePreviewLibraryItem = null;
@@ -1111,6 +1395,7 @@ async function previewLibraryPDF(id) {
 
       pageCard.addEventListener("click", event => {
         if (event.target === checkbox) return;
+        setLibraryLevelSelectedPage(pageNumber);
         updateSelection(!checkbox.checked);
       });
 
@@ -1127,6 +1412,10 @@ async function previewLibraryPDF(id) {
     }
 
     updateLibraryPreviewStatus();
+    clearLibraryLevelForm();
+    updateLibraryHideParentTOCControl();
+    renderLibraryLevelEntryList();
+    updateLibraryLevelParentDropdown();
   } catch (error) {
     console.error("Preview failed:", error);
     alert("Could not preview PDF.");
@@ -1146,6 +1435,350 @@ function updateLibraryPreviewStatus() {
 
   status.textContent =
     `${selectedLibraryPreviewPages.size} of ${activeLibraryPreviewPageCount} page(s) selected`;
+}
+
+function setLibraryLevelSelectedPage(pageNumber) {
+  const input = document.getElementById("libraryLevelPageNumber");
+  if (input) input.value = String(pageNumber);
+}
+
+function normalizeLibraryLevelEntry(entry = {}) {
+  const tocLevel = normalizeLibraryTOCLevel(entry.tocLevel);
+
+  return {
+    id: entry.id || crypto.randomUUID(),
+    title: String(entry.title || "").trim(),
+    sourcePage: Number(entry.sourcePage || 1),
+    entryType: tocLevel === 0 ? "section" : "subsection",
+    tocLevel,
+    parentId: tocLevel === 0 ? "" : entry.parentId || "",
+    detectedTOCEntry: false
+  };
+}
+
+function orderLibraryLevelEntries(entries = []) {
+  return [...entries]
+    .map(normalizeLibraryLevelEntry)
+    .sort((a, b) =>
+      Number(a.sourcePage || 0) - Number(b.sourcePage || 0) ||
+      Number(a.tocLevel || 0) - Number(b.tocLevel || 0)
+    );
+}
+
+function getLibraryLevelParentTitle(parentId) {
+  if (!parentId || !activePreviewLibraryItem) return "N/A";
+  if (parentId === DATABASE_PDF_PARENT_TOC_ID) {
+    return getLibraryBuilderDisplayTitle(activePreviewLibraryItem);
+  }
+
+  const parent = (activePreviewLibraryItem.tocEntries || [])
+    .find(entry => entry.id === parentId);
+  return parent ? parent.title : "N/A";
+}
+
+function cleanInvalidLibraryLevelParents(item) {
+  if (!item) return;
+
+  const entries = item.tocEntries || [];
+  const validIds = new Set(entries.map(entry => entry.id));
+
+  entries.forEach(entry => {
+    const level = normalizeLibraryTOCLevel(entry.tocLevel);
+
+    if (level === 0) {
+      entry.parentId = "";
+      return;
+    }
+
+    const usesVisiblePdfParent =
+      level - 1 === 0 &&
+      entry.parentId === DATABASE_PDF_PARENT_TOC_ID &&
+      !item.hideParentTOC;
+
+    if (usesVisiblePdfParent) return;
+
+    const parent = entries.find(candidate => candidate.id === entry.parentId);
+    const expectedParentLevel = level - 1;
+
+    if (!entry.parentId || !validIds.has(entry.parentId) || normalizeLibraryTOCLevel(parent?.tocLevel) !== expectedParentLevel) {
+      entry.parentId = "";
+    }
+  });
+}
+
+function getDefaultLibraryLevelParentId(options = [], currentParentId = "") {
+  if (currentParentId && options.some(entry => entry.id === currentParentId)) {
+    return currentParentId;
+  }
+
+  return options.length ? options[options.length - 1].id : "";
+}
+
+function updateLibraryLevelParentDropdown(selectedParentId = "") {
+  const levelSelect = document.getElementById("libraryLevelValue");
+  const parentSelect = document.getElementById("libraryLevelParent");
+  const editId = document.getElementById("activeLibraryLevelEntryId")?.value || "";
+  const currentParentId = selectedParentId || parentSelect.value || "";
+
+  if (!activePreviewLibraryItem || !levelSelect || !parentSelect) return;
+
+  const level = normalizeLibraryTOCLevel(levelSelect.value);
+  parentSelect.innerHTML = "";
+
+  if (level === 0) {
+    parentSelect.disabled = true;
+    parentSelect.innerHTML = `<option value="">N/A</option>`;
+    return;
+  }
+
+  const expectedParentLevel = level - 1;
+  const options = [];
+
+  if (expectedParentLevel === 0 && !activePreviewLibraryItem.hideParentTOC) {
+    options.push({
+      id: DATABASE_PDF_PARENT_TOC_ID,
+      title: getLibraryBuilderDisplayTitle(activePreviewLibraryItem)
+    });
+  }
+
+  options.push(...orderLibraryLevelEntries(activePreviewLibraryItem.tocEntries || [])
+    .filter(entry =>
+      entry.id !== editId &&
+      normalizeLibraryTOCLevel(entry.tocLevel) === expectedParentLevel
+    ));
+
+  parentSelect.disabled = options.length === 0;
+  parentSelect.appendChild(new Option(options.length ? "Select parent" : "No parent available", ""));
+
+  options.forEach(entry => {
+    const label = entry.id === DATABASE_PDF_PARENT_TOC_ID
+      ? `PDF Name: ${entry.title}`
+      : entry.title;
+    parentSelect.appendChild(new Option(label, entry.id));
+  });
+
+  parentSelect.value = getDefaultLibraryLevelParentId(options, currentParentId);
+}
+
+function clearLibraryLevelForm() {
+  const fields = {
+    activeLibraryLevelEntryId: "",
+    libraryLevelPageNumber: "",
+    libraryLevelTitle: "",
+    libraryLevelValue: "0"
+  };
+
+  Object.entries(fields).forEach(([id, value]) => {
+    const field = document.getElementById(id);
+    if (field) field.value = value;
+  });
+
+  const action = document.getElementById("libraryLevelActionButton");
+  if (action) action.textContent = "Add Level";
+  updateLibraryLevelParentDropdown();
+}
+
+function updateLibraryHideParentTOCControl() {
+  const checkbox = document.getElementById("libraryHideParentTOC");
+  if (!checkbox || !activePreviewLibraryItem) return;
+
+  checkbox.checked = !!activePreviewLibraryItem.hideParentTOC;
+}
+
+async function updateLibraryHideParentTOCFromCheckbox() {
+  const checkbox = document.getElementById("libraryHideParentTOC");
+  if (!checkbox || !activePreviewLibraryItem) return;
+
+  if (checkbox.checked && !libraryHasLevelZeroEntry(activePreviewLibraryItem)) {
+    checkbox.checked = false;
+    await showLibraryMessage(
+      "Level 0 Required",
+      "Add at least one Level 0 entry before hiding the PDF name in the TOC."
+    );
+    return;
+  }
+
+  activePreviewLibraryItem.hideParentTOC = checkbox.checked;
+  cleanInvalidLibraryLevelParents(activePreviewLibraryItem);
+  await persistActiveLibraryLevelEntries();
+  renderLibraryLevelEntryList();
+  updateLibraryLevelParentDropdown();
+}
+
+async function showLibraryMessage(title, message) {
+  await openDatabaseMessageModal(title, message);
+}
+
+function renderLibraryLevelEntryList() {
+  const list = document.getElementById("libraryLevelEntryList");
+  if (!list || !activePreviewLibraryItem) return;
+
+  const entries = orderLibraryLevelEntries(activePreviewLibraryItem.tocEntries || []);
+  list.innerHTML = "";
+
+  if (entries.length === 0) {
+    list.innerHTML = `<p class="toc-tree-empty">No levels added yet.</p>`;
+    return;
+  }
+
+  entries.forEach(entry => {
+    const row = document.createElement("div");
+    row.className = "toc-tree-row";
+    row.style.setProperty("--toc-level", String(normalizeLibraryTOCLevel(entry.tocLevel)));
+    row.dataset.libraryLevelEntryId = entry.id;
+
+    row.innerHTML = `
+      <span class="toc-tree-rail"></span>
+
+      <div>
+        <div class="toc-tree-title">
+          <span class="toc-tree-level-badge">Level ${normalizeLibraryTOCLevel(entry.tocLevel)}</span>
+          ${escapeHTML(entry.title)}
+        </div>
+        <div class="toc-tree-meta">
+          PDF page ${entry.sourcePage} - Parent ${escapeHTML(getLibraryLevelParentTitle(entry.parentId))}
+        </div>
+      </div>
+
+      <div class="toc-tree-actions">
+        <button type="button" onclick="editLibraryLevelEntry('${entry.id}')">Edit</button>
+        <button type="button" class="remove-pdf-btn" onclick="removeLibraryLevelEntry('${entry.id}')">Remove</button>
+      </div>
+    `;
+
+    list.appendChild(row);
+  });
+}
+
+async function persistActiveLibraryLevelEntries() {
+  if (!activePreviewLibraryItem) return;
+
+  const { error } = await supabaseClient
+    .from(DOCUMENTS_TABLE)
+    .update(toSupabaseDocument(activePreviewLibraryItem))
+    .eq("id", activePreviewLibraryItem.id);
+
+  if (error) {
+    console.error("Could not save library levels:", error);
+    alert("Could not save formatted levels.");
+    return;
+  }
+
+  const libraryItem = libraryDB.find(item => item.id === activePreviewLibraryItem.id);
+  if (libraryItem) {
+    libraryItem.tocEntries = activePreviewLibraryItem.tocEntries || [];
+    libraryItem.hideParentTOC = !!activePreviewLibraryItem.hideParentTOC;
+  }
+
+  renderLibraryDB();
+}
+
+async function saveLibraryLevelEntry() {
+  if (!activePreviewLibraryItem) return;
+
+  const entryId = document.getElementById("activeLibraryLevelEntryId")?.value || "";
+  const title = document.getElementById("libraryLevelTitle")?.value.trim() || "";
+  const pageNumber = Number(document.getElementById("libraryLevelPageNumber")?.value || 0);
+  const tocLevel = normalizeLibraryTOCLevel(document.getElementById("libraryLevelValue")?.value);
+  const parentId = tocLevel === 0 ? "" : document.getElementById("libraryLevelParent")?.value || "";
+
+  if (!pageNumber || pageNumber < 1) {
+    await showLibraryMessage("Page Required", "Select a page.");
+    return;
+  }
+
+  if (!title) {
+    await showLibraryMessage("TOC Name Required", "Enter a TOC name.");
+    return;
+  }
+
+  if (tocLevel > 0 && !parentId) {
+    await showLibraryMessage("Parent Required", `Select a Level ${tocLevel - 1} parent first.`);
+    return;
+  }
+
+  const entries = activePreviewLibraryItem.tocEntries || [];
+  const existing = entries.find(entry => entry.id === entryId);
+  const nextEntry = normalizeLibraryLevelEntry({
+    id: entryId || crypto.randomUUID(),
+    title,
+    sourcePage: pageNumber,
+    tocLevel,
+    parentId
+  });
+
+  if (existing) {
+    Object.assign(existing, nextEntry);
+  } else {
+    entries.push(nextEntry);
+  }
+
+  activePreviewLibraryItem.tocEntries = orderLibraryLevelEntries(entries);
+  cleanInvalidLibraryLevelParents(activePreviewLibraryItem);
+
+  if (getLibraryHideParentValidationMessage(activePreviewLibraryItem)) {
+    await showLibraryMessage(
+      "Level 0 Required",
+      "This PDF is set to hide the PDF name in the TOC, so it needs at least one Level 0 entry."
+    );
+    return;
+  }
+
+  await persistActiveLibraryLevelEntries();
+  clearLibraryLevelForm();
+  renderLibraryLevelEntryList();
+  updateLibraryLevelParentDropdown();
+}
+
+function editLibraryLevelEntry(entryId) {
+  if (!activePreviewLibraryItem) return;
+
+  const entry = (activePreviewLibraryItem.tocEntries || [])
+    .find(candidate => candidate.id === entryId);
+  if (!entry) return;
+
+  document.getElementById("activeLibraryLevelEntryId").value = entry.id;
+  document.getElementById("libraryLevelPageNumber").value = entry.sourcePage || "";
+  document.getElementById("libraryLevelTitle").value = entry.title || "";
+  document.getElementById("libraryLevelValue").value = String(normalizeLibraryTOCLevel(entry.tocLevel));
+  const action = document.getElementById("libraryLevelActionButton");
+  if (action) action.textContent = "Save Level";
+  updateLibraryLevelParentDropdown(entry.parentId || "");
+}
+
+async function removeLibraryLevelEntry(entryId) {
+  if (!activePreviewLibraryItem) return;
+
+  const previousEntries = activePreviewLibraryItem.tocEntries || [];
+  const nextEntries = previousEntries
+    .filter(entry => entry.id !== entryId)
+    .map(entry => {
+      if (entry.parentId === entryId) {
+        return { ...entry, parentId: "" };
+      }
+      return entry;
+    });
+
+  const nextItem = {
+    ...activePreviewLibraryItem,
+    tocEntries: nextEntries
+  };
+
+  cleanInvalidLibraryLevelParents(nextItem);
+
+  if (getLibraryHideParentValidationMessage(nextItem)) {
+    await showLibraryMessage(
+      "Level 0 Required",
+      "Turn off Hide PDF name in TOC before removing the last Level 0 entry."
+    );
+    return;
+  }
+
+  activePreviewLibraryItem.tocEntries = nextItem.tocEntries;
+  await persistActiveLibraryLevelEntries();
+  clearLibraryLevelForm();
+  renderLibraryLevelEntryList();
+  updateLibraryLevelParentDropdown();
 }
 
 function setLibraryPreviewPageSelection(pageNumbers) {

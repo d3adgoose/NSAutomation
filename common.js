@@ -245,3 +245,95 @@ function downloadFile(data, fileName, type) {
     URL.revokeObjectURL(url);
   }, 1000);
 }
+
+const BUILDER_HANDOFF_DB_NAME = "ns-builder-handoff";
+const BUILDER_HANDOFF_STORE_NAME = "pdfs";
+
+function openBuilderHandoffDB() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("Local browser handoff is not supported in this browser."));
+      return;
+    }
+
+    const request = indexedDB.open(BUILDER_HANDOFF_DB_NAME, 1);
+
+    request.onupgradeneeded = event => {
+      const db = event.target.result;
+
+      if (!db.objectStoreNames.contains(BUILDER_HANDOFF_STORE_NAME)) {
+        const store = db.createObjectStore(BUILDER_HANDOFF_STORE_NAME, {
+          keyPath: "id"
+        });
+        store.createIndex("target", "target", { unique: false });
+        store.createIndex("createdAt", "createdAt", { unique: false });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function runBuilderHandoffTransaction(mode, callback) {
+  const db = await openBuilderHandoffDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(BUILDER_HANDOFF_STORE_NAME, mode);
+    const store = transaction.objectStore(BUILDER_HANDOFF_STORE_NAME);
+    const result = callback(store);
+
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(result);
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+}
+
+async function saveBuilderHandoffItem(target, metadata, blob) {
+  const id = crypto.randomUUID();
+  const record = {
+    ...metadata,
+    id,
+    target,
+    blob,
+    createdAt: Date.now()
+  };
+
+  await runBuilderHandoffTransaction("readwrite", store => store.put(record));
+  return id;
+}
+
+async function getBuilderHandoffItems(target) {
+  const db = await openBuilderHandoffDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(BUILDER_HANDOFF_STORE_NAME, "readonly");
+    const store = transaction.objectStore(BUILDER_HANDOFF_STORE_NAME);
+    const request = store.index("target").getAll(target);
+
+    request.onsuccess = () => {
+      db.close();
+      resolve(
+        (request.result || [])
+          .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+      );
+    };
+    request.onerror = () => {
+      db.close();
+      reject(request.error);
+    };
+  });
+}
+
+async function removeBuilderHandoffItems(ids = []) {
+  if (!ids.length) return;
+
+  await runBuilderHandoffTransaction("readwrite", store => {
+    ids.forEach(id => store.delete(id));
+  });
+}

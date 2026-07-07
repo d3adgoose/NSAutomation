@@ -127,6 +127,22 @@
           <option value="Appendix">Appendix</option>
           <option value="Other">Other</option>
         </select>
+
+        <select id="libPacketSection" aria-label="Default builder section">
+          <option value="Revision Remarks">Revision Remarks</option>
+          <option value="Warranty">Warranty</option>
+          <option value="Safety Procedures">Safety Procedures</option>
+          <option value="Sequence of Operations">Sequence of Operations</option>
+          <option value="Maintenance">Maintenance</option>
+          <option value="Testing Checklist and Testing Procedures">Testing Checklist and Testing Procedures</option>
+          <option value="Parts List">Parts List</option>
+          <option value="Datasheets" selected>Datasheets</option>
+          <option value="Control Panel Components">Control Panel Components</option>
+          <option value="Electrical Schematics">Electrical Schematics</option>
+          <option value="Shop Drawings">Shop Drawings</option>
+          <option value="Appendix">Appendix</option>
+        </select>
+
       </div>
 
       <textarea
@@ -153,6 +169,8 @@
           <input id="mergedLibraryFileName" placeholder="Merged PDF name" />
           <div class="library-merge-buttons">
             <button onclick="openLibraryMergeOrderModal()">Merge</button>
+            <button onclick="addSelectedLibraryPDFsToBuilder('submittal')">Add to Submittal</button>
+            <button onclick="addSelectedLibraryPDFsToBuilder('om')">Add to O&amp;M</button>
             <button class="delete-btn" onclick="removeSelectedLibraryEntries()">Remove</button>
           </div>
         </div>
@@ -161,13 +179,17 @@
       <div class="library-filters">
         <input
           id="librarySearch"
-          placeholder="Search library (file, title, type, notes)"
+          placeholder="Search library (file, title, type, section, notes)"
         />
 
         <select id="libraryTypeFilter">
           <option value="">All Document Types</option>
         </select>
       </div>
+
+      <p id="databaseStatus" class="warranty-status" aria-live="polite"></p>
+
+      <p id="libraryCount" class="builder-history-status" aria-live="polite"></p>
 
       <div class="library-table-wrap">
         <table>
@@ -178,8 +200,9 @@
               <th>File Name</th>
               <th>File Location</th>
               <th>Document Type</th>
+              <th>Builder Section</th>
               <th>Notes</th>
-              <th>PDF Attachment</th>
+              <th>PDF Actions</th>
             </tr>
           </thead>
 
@@ -193,8 +216,8 @@
     <div class="modal-content page-manager-modal-content library-page-manager-modal">
       <div class="page-manager-header">
         <div>
-          <h2 id="libraryPreviewTitle">Manage PDF</h2>
-          <p id="libraryPreviewStatus" class="warranty-status">No pages loaded.</p>
+          <h2 id="libraryPreviewTitle">Format Levels</h2>
+          <p id="libraryPreviewStatus" class="warranty-status"></p>
         </div>
 
         <div class="page-manager-actions">
@@ -207,7 +230,65 @@
         </div>
       </div>
 
-      <div id="libraryPreviewPageList" class="page-manager-grid library-page-manager-grid"></div>
+      <div class="subsection-layout database-format-levels-layout">
+        <div>
+          <div id="libraryPreviewPageList" class="page-manager-grid library-page-manager-grid"></div>
+        </div>
+
+        <div class="subsection-form-panel">
+          <input type="hidden" id="activeLibraryLevelEntryId" />
+
+          <div class="toc-format-options">
+            <label class="checkbox-row">
+              <input
+                type="checkbox"
+                id="libraryHideParentTOC"
+                onchange="updateLibraryHideParentTOCFromCheckbox()"
+              />
+              <span class="checkbox-text">
+                <strong>Hide PDF name in TOC</strong>
+                <small>
+                  Use this when the saved levels already include a Level 0 heading for this PDF.
+                </small>
+              </span>
+            </label>
+          </div>
+
+          <label>Selected Page</label>
+          <input
+            id="libraryLevelPageNumber"
+            type="number"
+            min="1"
+            placeholder="Click a page preview"
+          />
+
+          <label>TOC Name</label>
+          <input
+            id="libraryLevelTitle"
+            placeholder="Example: 5HP TEFC Motor"
+          />
+
+          <label>Level</label>
+          <select id="libraryLevelValue" onchange="updateLibraryLevelParentDropdown()">
+            <option value="0">Level 0 - Main item</option>
+            <option value="1">Level 1 - Under Level 0</option>
+            <option value="2">Level 2 - Under Level 1</option>
+          </select>
+
+          <label>Parent</label>
+          <select id="libraryLevelParent">
+            <option value="">N/A</option>
+          </select>
+
+          <div class="button-row">
+            <button id="libraryLevelActionButton" onclick="saveLibraryLevelEntry()">Add Level</button>
+            <button class="secondary" onclick="clearLibraryLevelForm()">Clear</button>
+          </div>
+
+          <h3>Current Levels</h3>
+          <div id="libraryLevelEntryList" class="toc-tree-list"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -227,6 +308,14 @@
         <button onclick="confirmLibraryMergeOrder()">Merge PDFs</button>
         <button class="secondary" onclick="closeLibraryMergeOrderModal()">Cancel</button>
       </div>
+    </div>
+  </div>
+
+  <div id="appPromptModal" class="modal hidden">
+    <div class="modal-content app-prompt-modal-content">
+      <h2 id="appPromptTitle">Action Needed</h2>
+      <p id="appPromptMessage" class="app-prompt-message"></p>
+      <div class="button-row app-prompt-actions" id="appPromptActions"></div>
     </div>
   </div>
 

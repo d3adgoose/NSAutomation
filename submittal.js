@@ -257,6 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const dropZone = document.getElementById("dropZone");
   renderPacketHistory();
   setupBuilderHistoryControls();
+  importPendingDatabasePDFsForBuilder();
 
   if (!dropZone) return;
 
@@ -307,6 +308,7 @@ async function handleDroppedFiles(fileList) {
       displayTitle: cleanName,
       documentType: guessDocumentType(file.name),
       packetSection: guessPacketSection(file.name),
+      tocLevel: 0,
       include: true,
       notes: "",
       datasheetOrder: null,
@@ -372,6 +374,144 @@ function guessDocumentType(fileName) {
 
 function guessPacketSection(fileName) {
   return guessPacketSectionFromName(fileName);
+}
+
+function normalizePacketTOCLevel(value) {
+  const level = Number(value);
+  return [0, 1, 2].includes(level) ? level : 0;
+}
+
+function getPDFParentTOCLevel(item) {
+  return normalizePacketTOCLevel(item?.tocLevel);
+}
+
+function normalizeBuilderTOCEntry(entry = {}) {
+  const tocLevel = normalizePacketTOCLevel(entry.tocLevel);
+
+  return {
+    ...entry,
+    id: entry.id || crypto.randomUUID(),
+    title: String(entry.title || "").trim(),
+    sourcePage: Number(entry.sourcePage || 1),
+    entryType: tocLevel === 0 ? "section" : "subsection",
+    tocLevel,
+    parentId: tocLevel === 0 ? "" : entry.parentId || "",
+    detectedTOCEntry: !!entry.detectedTOCEntry
+  };
+}
+
+function normalizeImportedBuilderTOCEntries(item) {
+  if (!item || !Array.isArray(item.tocEntries)) return;
+
+  item.tocEntries = item.tocEntries.map(normalizeBuilderTOCEntry);
+
+  item.tocEntries.forEach(entry => {
+    const level = normalizePacketTOCLevel(entry.tocLevel);
+
+    if (
+      level > 0 &&
+      !entry.parentId &&
+      level - 1 === getPDFParentTOCLevel(item) &&
+      !item.hideParentTOC
+    ) {
+      entry.parentId = PDF_PARENT_TOC_ID;
+    }
+  });
+
+  cleanInvalidTOCParents(item);
+  item.tocEntries.sort(compareTOCEntries);
+}
+
+async function importPendingDatabasePDFsForBuilder() {
+  if (typeof getBuilderHandoffItems !== "function") return;
+
+  const target = getPacketHistoryType();
+  let handoffItems = [];
+
+  try {
+    handoffItems = await getBuilderHandoffItems(target);
+  } catch (error) {
+    console.warn("Could not read database builder handoff:", error);
+    return;
+  }
+
+  if (!handoffItems.length) return;
+
+  const importedIds = [];
+  let addedCount = 0;
+  let skippedCount = 0;
+
+  handoffItems.forEach(entry => {
+    importedIds.push(entry.id);
+
+    if (!entry.blob) {
+      skippedCount += 1;
+      return;
+    }
+
+    const fileName = entry.fileName || "database-file.pdf";
+    const cleanName = fileName.replace(/\.pdf$/i, "");
+    const duplicateItem = pdfLibrary.find(item =>
+      normalizeDuplicateName(item.displayTitle || item.fileName) ===
+      normalizeDuplicateName(entry.displayTitle || cleanName)
+    );
+
+    if (duplicateItem) {
+      skippedCount += 1;
+      return;
+    }
+
+    const file = new File([entry.blob], fileName, {
+      type: "application/pdf",
+      lastModified: entry.createdAt || Date.now()
+    });
+
+    const importedItem = {
+      id: crypto.randomUUID(),
+      file,
+      fileName,
+      uploadDate: new Date(entry.createdAt || Date.now()).toLocaleDateString(),
+      displayTitle: entry.displayTitle || cleanName,
+      documentType: entry.documentType || guessDocumentType(fileName),
+      packetSection: entry.packetSection || guessPacketSection(fileName),
+      tocLevel: normalizePacketTOCLevel(entry.tocLevel),
+      include: true,
+      notes: entry.notes || "",
+      datasheetOrder: null,
+      tocEntries: Array.isArray(entry.tocEntries)
+        ? entry.tocEntries.map(tocEntry => ({ ...tocEntry }))
+        : [],
+      tocEntriesReviewed: Array.isArray(entry.tocEntries) && entry.tocEntries.length > 0,
+      hideParentTOC: !!entry.hideParentTOC,
+      sourceLibraryId: entry.sourceLibraryId || ""
+    };
+
+    normalizeImportedBuilderTOCEntries(importedItem);
+    pdfLibrary.push(importedItem);
+    addedCount += 1;
+  });
+
+  if (typeof removeBuilderHandoffItems === "function") {
+    try {
+      await removeBuilderHandoffItems(importedIds);
+    } catch (error) {
+      console.warn("Could not clear database builder handoff:", error);
+    }
+  }
+
+  if (addedCount > 0) {
+    warrantyPromptHandled = false;
+    sortLibraryBySection();
+    renderUploadedPdfList();
+  }
+
+  const statusParts = [];
+  if (addedCount > 0) statusParts.push(`${addedCount} database PDF(s) added`);
+  if (skippedCount > 0) statusParts.push(`${skippedCount} database PDF(s) skipped`);
+
+  if (statusParts.length > 0) {
+    updateUploadedPdfCount(`${statusParts.join(". ")}. ${pdfLibrary.length} total.`);
+  }
 }
 
 function sortLibraryBySection() {
@@ -564,6 +704,19 @@ function updateUploadedPDFSection(id, newSection) {
   renderUploadedPdfList();
 }
 
+function updateUploadedPDFTOCLevel(id, newLevel) {
+  const item = pdfLibrary.find(x => x.id === id);
+  if (!item) return;
+
+  const cleanLevel = normalizePacketTOCLevel(newLevel);
+  if (getPDFParentTOCLevel(item) === cleanLevel) return;
+
+  recordBuilderUndoState();
+  item.tocLevel = cleanLevel;
+  cleanInvalidTOCParents(item);
+  renderUploadedPdfList();
+}
+
 function renderUploadedPdfList() {
   const container = document.getElementById("uploadedPdfList");
   if (!container) return;
@@ -585,11 +738,10 @@ function renderUploadedPdfList() {
         </option>
       `)
       .join("");
-
     const subsectionButton = canFormatTOC
       ? `
         <button onclick="openSubsectionModal('${item.id}')">
-          Format TOC
+          Format Levels
         </button>
       `
       : "";
@@ -655,7 +807,7 @@ function updateUploadedPdfCount(message = "") {
   const total = pdfLibrary.length;
 
   if (total === 0) {
-    countEl.textContent = "0 PDFs uploaded.";
+    countEl.textContent = "";
     return;
   }
 
@@ -663,41 +815,31 @@ function updateUploadedPdfCount(message = "") {
   const tocCounts = pdfLibrary.reduce(
     (counts, item) => {
       const itemCounts = getTOCEntryCounts(item.tocEntries || []);
-      counts.sections += itemCounts.sections;
-      counts.subsections += itemCounts.subsections;
+      counts.total += itemCounts.total;
       return counts;
     },
-    { sections: 0, subsections: 0 }
+    { total: 0 }
   );
 
   countEl.textContent =
-    `${total} PDF(s) uploaded | ${included} included | ${tocCounts.sections} section(s) | ${tocCounts.subsections} subsection(s)`;
+    `${total} PDF(s) uploaded | ${included} included | ${tocCounts.total} level(s)`;
 }
 
 function getTOCEntryCounts(entries = []) {
   return entries.reduce(
     (counts, entry) => {
-      if (entry.entryType === "section") {
-        counts.sections += 1;
-      } else {
-        counts.subsections += 1;
-      }
+      const level = normalizePacketTOCLevel(entry.tocLevel);
+      counts.total += 1;
+      counts.levels[level] += 1;
       return counts;
     },
-    { sections: 0, subsections: 0 }
+    { total: 0, levels: [0, 0, 0] }
   );
 }
 
 function formatTOCEntryCount(entries = []) {
   const counts = getTOCEntryCounts(entries);
-  const parts = [];
-
-  if (counts.sections > 0) {
-    parts.push(`${counts.sections} section(s)`);
-  }
-
-  parts.push(`${counts.subsections} subsection(s)`);
-  return parts.join(", ");
+  return `${counts.total} level(s)`;
 }
 
 function getActivePageManagerItem() {
@@ -1221,7 +1363,7 @@ function updatePacketBuildStatus(message = "") {
   const status = document.getElementById("packetBuildStatus");
   if (!status) return;
 
-  status.textContent = message || "Ready to build.";
+  status.textContent = message || "";
 }
 
 function getBuildErrorMessage(buildLabel, error, context = "") {
@@ -1397,7 +1539,7 @@ function updateBuilderHistoryControls() {
   if (status) {
     status.textContent = builderUndoStack.length || builderRedoStack.length
       ? `${builderUndoStack.length} undo / ${builderRedoStack.length} redo`
-      : "No changes to undo yet.";
+      : "";
   }
 }
 
@@ -1863,7 +2005,12 @@ function getFilteredTOCItemsForSection(items) {
 
 function normalizeDetectedTOCEntry(item, detectedEntry) {
   const tocLevel = Number(detectedEntry.tocLevel || 0);
-  const parentId = tocLevel > 0 && !item.hideParentTOC ? PDF_PARENT_TOC_ID : "";
+  const parentId =
+    tocLevel > 0 &&
+    tocLevel - 1 === getPDFParentTOCLevel(item) &&
+    !item.hideParentTOC
+      ? PDF_PARENT_TOC_ID
+      : "";
 
   return {
     id: crypto.randomUUID(),
@@ -2286,7 +2433,7 @@ async function buildPacket() {
         section: item.packetSection,
         startPage,
         targetPageIndex: finalPdf.getPageCount(),
-        tocLevel: 0,
+        tocLevel: getPDFParentTOCLevel(item),
         isParentTOC: true
       });
     }
@@ -3295,7 +3442,7 @@ async function openSubsectionModal(id) {
   if (!modal || !title || !activeId || !previewList) return;
 
   title.textContent =
-    `TOC Entries: ${item.displayTitle}`;
+    `Format Levels: ${item.displayTitle}`;
   activeId.value = item.id;
   selectedManagedPages = new Set();
 
@@ -3316,6 +3463,7 @@ async function openSubsectionModal(id) {
       recordBuilderUndoState();
       item.hideParentTOC = hideParent.checked;
       cleanInvalidTOCParents(item);
+      updatePDFParentTOCLevelControls();
       renderCurrentSubsectionList();
       updateTOCParentDropdown();
     };
@@ -3342,6 +3490,7 @@ async function openSubsectionModal(id) {
   }
 
   renderCurrentSubsectionList();
+  updatePDFParentTOCLevelControls();
   updateTOCParentDropdown();
 
   modal.classList.remove("hidden");
@@ -3520,8 +3669,8 @@ async function warnIncompleteTemplateTOCEntries(item) {
 
   focusFirstIncompleteTemplateTOCEntry(item);
   await showMessageModal(
-    "Template Pages Required",
-    `${missing.length} template TOC row(s) still need a PDF page. Add pages to the rows marked Template page required, or remove those rows before closing Format TOC.`
+      "Template Pages Required",
+      `${missing.length} template TOC row(s) still need a PDF page. Add pages to the rows marked Template page required, or remove those rows before closing Format Levels.`
   );
   return true;
 }
@@ -3662,7 +3811,7 @@ async function applyTOCTemplate(templateId) {
       const parent = lastParentByLevel.get(level - 1);
       entry.parentId = parent?.id || "";
 
-      if (!entry.parentId && level === 1 && !item.hideParentTOC) {
+      if (!entry.parentId && level - 1 === getPDFParentTOCLevel(item) && !item.hideParentTOC) {
         entry.parentId = PDF_PARENT_TOC_ID;
       }
     }
@@ -3692,6 +3841,41 @@ function updateTOCLevelFromSelect() {
   updateTOCParentDropdown();
 }
 
+function getDefaultTOCParentId(parentOptions = [], currentParentId = "") {
+  if (currentParentId && parentOptions.some(entry => entry.id === currentParentId)) {
+    return currentParentId;
+  }
+
+  return parentOptions.length ? parentOptions[parentOptions.length - 1].id : "";
+}
+
+function updatePDFParentTOCLevelControls() {
+  const item = getActiveSubsectionItem();
+  const levelSelect = document.getElementById("pdfParentTOCLevel");
+
+  if (!item || !levelSelect) return;
+
+  levelSelect.value = String(getPDFParentTOCLevel(item));
+  levelSelect.disabled = !!item.hideParentTOC;
+}
+
+function updatePDFParentTOCLevelFromSelect() {
+  const item = getActiveSubsectionItem();
+  const levelSelect = document.getElementById("pdfParentTOCLevel");
+
+  if (!item || !levelSelect) return;
+
+  const cleanLevel = normalizePacketTOCLevel(levelSelect.value);
+  if (getPDFParentTOCLevel(item) === cleanLevel) return;
+
+  recordBuilderUndoState();
+  item.tocLevel = cleanLevel;
+  cleanInvalidTOCParents(item);
+  renderCurrentSubsectionList();
+  updateTOCParentDropdown();
+  updateUploadedPdfCount();
+}
+
 function updateTOCParentDropdown(selectedParentId = "") {
   const item = getActiveSubsectionItem();
   const levelSelect = document.getElementById("tocEntryLevel");
@@ -3713,7 +3897,7 @@ function updateTOCParentDropdown(selectedParentId = "") {
   const parentLevel = level - 1;
   const parentOptions = [];
 
-  if (parentLevel === 0 && !item.hideParentTOC) {
+  if (parentLevel === getPDFParentTOCLevel(item) && !item.hideParentTOC) {
     parentOptions.push({
       id: PDF_PARENT_TOC_ID,
       title: item.displayTitle || item.fileName || "PDF Name"
@@ -3735,9 +3919,11 @@ function updateTOCParentDropdown(selectedParentId = "") {
     return;
   }
 
+  const defaultParentId = getDefaultTOCParentId(parentOptions, currentParentId);
+
   parentSelect.innerHTML = parentOptions
     .map(entry => `
-      <option value="${entry.id}" ${entry.id === currentParentId ? "selected" : ""}>
+      <option value="${entry.id}" ${entry.id === defaultParentId ? "selected" : ""}>
         ${entry.id === PDF_PARENT_TOC_ID ? `PDF Name: ${entry.title}` : entry.title}
       </option>
     `)
@@ -3961,7 +4147,7 @@ function cleanInvalidTOCParents(item) {
     }
 
     const usesVisiblePdfParent =
-      level === 1 &&
+      level - 1 === getPDFParentTOCLevel(item) &&
       entry.parentId === PDF_PARENT_TOC_ID &&
       !item.hideParentTOC;
 
@@ -4531,7 +4717,7 @@ async function drawTOCOnExistingPage(
           y -= 28;
         }
 
-        const level = Number(item.tocLevel || 0);
+        const level = normalizePacketTOCLevel(item.tocLevel);
       const levelSettings = {
         0: { bullet: "•", bulletX: leftMargin + 18, titleX: leftMargin + 32 },
         1: { bullet: "-", bulletX: leftMargin + 48, titleX: leftMargin + 62 },
