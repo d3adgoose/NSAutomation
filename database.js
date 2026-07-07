@@ -5,7 +5,7 @@ let currentUser = null;
 let useRemoteDatabase = false;
 const libraryPDFBlobCache = new Map();
 
-function openDatabaseMessageModal(title = "Action Needed", message = "") {
+function openDatabaseMessageModal(title = "Action Needed", message = "", options = {}) {
   return new Promise(resolve => {
     const modal = document.getElementById("appPromptModal");
     const titleEl = document.getElementById("appPromptTitle");
@@ -13,7 +13,7 @@ function openDatabaseMessageModal(title = "Action Needed", message = "") {
     const actionsEl = document.getElementById("appPromptActions");
 
     if (!modal || !titleEl || !messageEl || !actionsEl) {
-      alert(message || title);
+      console.warn(message || title);
       resolve();
       return;
     }
@@ -22,18 +22,53 @@ function openDatabaseMessageModal(title = "Action Needed", message = "") {
     messageEl.textContent = message;
     actionsEl.innerHTML = "";
 
-    const okButton = document.createElement("button");
-    okButton.type = "button";
-    okButton.textContent = "OK";
-    okButton.addEventListener("click", () => {
+    let inputEl = null;
+    let inputGroup = document.getElementById("databasePromptInputGroup");
+    if (inputGroup) inputGroup.remove();
+
+    if (options.input) {
+      inputGroup = document.createElement("label");
+      inputGroup.id = "databasePromptInputGroup";
+      inputGroup.className = "app-prompt-input-group";
+
+      const label = document.createElement("span");
+      label.textContent = options.input.label || "Value";
+
+      inputEl = document.createElement("input");
+      inputEl.type = options.input.type || "text";
+      inputEl.value = options.input.value || "";
+      inputEl.placeholder = options.input.placeholder || "";
+
+      inputGroup.appendChild(label);
+      inputGroup.appendChild(inputEl);
+      messageEl.insertAdjacentElement("afterend", inputGroup);
+    }
+
+    const close = result => {
       modal.classList.add("hidden");
       actionsEl.innerHTML = "";
-      resolve();
-    });
+      inputGroup?.remove();
+      resolve(result);
+    };
+
+    const okButton = document.createElement("button");
+    okButton.type = "button";
+    okButton.textContent = options.confirmLabel || "OK";
+    okButton.addEventListener("click", () => close(inputEl ? inputEl.value : true));
+
+    if (options.cancelLabel) {
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.className = "secondary";
+      cancelButton.textContent = options.cancelLabel;
+      cancelButton.addEventListener("click", () => close(null));
+      actionsEl.appendChild(cancelButton);
+    }
 
     actionsEl.appendChild(okButton);
     modal.classList.remove("hidden");
-    okButton.focus();
+    (inputEl || okButton).focus();
+    if (inputEl) inputEl.select();
   });
 }
 
@@ -135,7 +170,7 @@ async function logoutUser() {
 
 async function sendLoginLink() {
   if (typeof supabaseClient === "undefined" || !supabaseClient) {
-    alert("Remote login is only available on the Database page.");
+    await showLibraryMessage("Login Unavailable", "Remote login is only available on the Database page.");
     return;
   }
 
@@ -143,7 +178,7 @@ async function sendLoginLink() {
   const password = document.getElementById("loginPassword").value.trim();
 
   if (!email || !password) {
-    alert("Enter your email and password.");
+    await showLibraryMessage("Login Needed", "Enter your email and password.");
     return;
   }
 
@@ -154,7 +189,7 @@ async function sendLoginLink() {
 
   if (error) {
     console.error("LOGIN ERROR:", error);
-    alert(error.message || "Could not log in.");
+    await showLibraryMessage("Could Not Log In", error.message || "Could not log in.");
     return;
   }
 
@@ -166,6 +201,7 @@ async function sendLoginLink() {
 const DOCUMENTS_TABLE = "documents";
 const DOCUMENTS_BUCKET = "document-library";
 const DATABASE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
+const DATABASE_DIRECT_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 const DATABASE_PDF_PARENT_TOC_ID = "__pdf_parent__";
 const DATABASE_CATEGORIES = ["Generic", "Car Wash", "Transit Wash"];
 
@@ -288,7 +324,7 @@ async function loadLibraryDB() {
 
   if (error) {
     console.error("Error loading library:", error);
-    alert("Could not load library from Supabase.");
+    await showLibraryMessage("Could Not Load Library", "Could not load the shared database library from Supabase.");
     libraryDB = [];
     renderLibraryDB();
     updateDatabaseStatus("Could not load shared database. Check the console for details.");
@@ -310,6 +346,12 @@ function saveLibraryDB() {
 
 function updateDatabaseStatus(message = "") {
   const status = document.getElementById("databaseStatus");
+  if (!status) return;
+  status.textContent = message || "";
+}
+
+function updateDatabaseUploadStatus(message = "") {
+  const status = document.getElementById("databaseUploadStatus");
   if (!status) return;
   status.textContent = message || "";
 }
@@ -739,8 +781,8 @@ async function getStorageFolderUsageBytes(path) {
 
 function setPendingLibraryPdf(file) {
   if (!file || file.type !== "application/pdf") {
-    alert("Please select a PDF file.");
-    updateDatabaseStatus("Only PDF files can be added to the database.");
+    showLibraryMessage("PDF Required", "Please select a PDF file.");
+    updateDatabaseUploadStatus("Only PDF files can be added to the database.");
     return;
   }
 
@@ -751,7 +793,13 @@ function setPendingLibraryPdf(file) {
     selected.textContent = `Selected PDF: ${file.name}`;
   }
 
-  updateDatabaseStatus(`Selected PDF: ${file.name}`);
+  if (file.size > DATABASE_DIRECT_UPLOAD_LIMIT_BYTES) {
+    updateDatabaseUploadStatus(
+      `Selected PDF: ${file.name}. This file is ${formatStorageBytes(file.size)}, so the database record can be saved, but the PDF cannot be uploaded until the file is under ${formatStorageBytes(DATABASE_DIRECT_UPLOAD_LIMIT_BYTES)}.`
+    );
+  } else {
+    updateDatabaseUploadStatus(`Selected PDF: ${file.name}`);
+  }
 
   const fileNameInput = document.getElementById("libFileName");
   const titleInput = document.getElementById("libDisplayTitle");
@@ -786,7 +834,7 @@ function clearLibraryUpload() {
     selected.textContent = "No PDF selected yet.";
   }
 
-  updateDatabaseStatus();
+  updateDatabaseUploadStatus();
 }
 
 function setupLibraryDropZone() {
@@ -847,7 +895,7 @@ async function addLibraryEntry(entry, options = {}) {
 
   if (existing && existing.length > 0) {
     if (!options.silent) {
-      alert(`Duplicate entry for "${entry.fileName || entry.displayTitle}" already exists.`);
+      await showLibraryMessage("Duplicate Entry", `Duplicate entry for "${entry.fileName || entry.displayTitle}" already exists.`);
     }
     return;
   }
@@ -858,11 +906,7 @@ async function addLibraryEntry(entry, options = {}) {
 
   if (error) {
     console.error("FULL ERROR", JSON.stringify(error, null, 2));
-
-    alert(
-      JSON.stringify(error, null, 2)
-    );
-
+    await showLibraryMessage("Could Not Add Entry", error.message || "Could not add the database entry.");
     return;
   }
 
@@ -873,7 +917,7 @@ async function addLibraryEntry(entry, options = {}) {
 async function removeLibraryDBEntry(id) {
   const item = libraryDB.find(x => x.id === id);
 
-  if (!confirm("Remove this library entry?")) return;
+  if (!(await confirmLibraryAction("Remove Entry", "Remove this library entry?", "Remove"))) return;
 
   if (item && item.storagePath) {
     await supabaseClient.storage
@@ -888,7 +932,7 @@ async function removeLibraryDBEntry(id) {
 
   if (error) {
     console.error("Error removing entry:", error);
-    alert("Could not remove entry.");
+    await showLibraryMessage("Could Not Remove Entry", "Could not remove this database entry.");
     return;
   }
 
@@ -897,7 +941,7 @@ async function removeLibraryDBEntry(id) {
 
 async function removeSelectedLibraryEntries() {
   if (!useRemoteDatabase || typeof supabaseClient === "undefined" || !supabaseClient) {
-    alert("Log in before removing shared database documents.");
+    await showLibraryMessage("Login Needed", "Log in before removing shared database documents.");
     updateDatabaseStatus("Log in before removing shared database documents.");
     return;
   }
@@ -905,7 +949,7 @@ async function removeSelectedLibraryEntries() {
   const selectedIds = Array.from(selectedLibraryPDFIds);
 
   if (selectedIds.length === 0) {
-    alert("Select one or more documents to remove.");
+    await showLibraryMessage("Select Documents", "Select one or more documents to remove.");
     updateDatabaseStatus("Select one or more documents to remove.");
     return;
   }
@@ -926,7 +970,7 @@ async function removeSelectedLibraryEntries() {
     `Remove ${selectedItems.length} selected document(s) from the library?` +
     (attachedCount > 0 ? ` This will also remove ${attachedCount} attached PDF(s).` : "");
 
-  if (!confirm(confirmMessage)) return;
+  if (!(await confirmLibraryAction("Remove Documents", confirmMessage, "Remove"))) return;
 
   updateDatabaseStatus(`Removing ${selectedItems.length} selected document(s)...`);
 
@@ -951,7 +995,7 @@ async function removeSelectedLibraryEntries() {
 
   if (error) {
     console.error("Error removing selected entries:", error);
-    alert("Could not remove the selected documents.");
+    await showLibraryMessage("Could Not Remove Documents", "Could not remove the selected documents.");
     updateDatabaseStatus(`Could not remove selected documents: ${error.message || "database error"}`);
     return;
   }
@@ -978,7 +1022,7 @@ async function updateLibraryDBItem(id, field, value) {
 
   if (error) {
     console.error("Error updating entry:", error);
-    alert("Could not update entry.");
+    await showLibraryMessage("Could Not Update Entry", "Could not update this database entry.");
     return;
   }
 
@@ -991,13 +1035,25 @@ async function renameLibraryFile(id) {
 
   const currentName = item.attachmentFileName || item.fileName || "";
 
-  const newName = prompt("Enter the new PDF file name:", currentName);
+  const newName = await openDatabaseMessageModal(
+    "Rename PDF",
+    "Enter the new PDF file name.",
+    {
+      input: {
+        label: "PDF file name",
+        value: currentName,
+        placeholder: "Example: Brush Machine.pdf"
+      },
+      confirmLabel: "Rename",
+      cancelLabel: "Cancel"
+    }
+  );
   if (newName === null) return;
 
   let cleanName = newName.trim();
 
   if (!cleanName) {
-    alert("File name cannot be blank.");
+    await showLibraryMessage("File Name Required", "File name cannot be blank.");
     return;
   }
 
@@ -1018,7 +1074,7 @@ async function renameLibraryFile(id) {
 
   if (error) {
     console.error("Error renaming file:", error);
-    alert("Could not rename file.");
+    await showLibraryMessage("Could Not Rename File", "Could not rename this file.");
     return;
   }
 
@@ -1031,10 +1087,19 @@ async function attachPDFToLibraryItem(id, file) {
   const item = libraryDB.find(x => x.id === id);
   if (!item) return;
 
+  if (file.size > DATABASE_DIRECT_UPLOAD_LIMIT_BYTES) {
+    const message =
+      `${file.name} is ${formatStorageBytes(file.size)}, which is over the current ${formatStorageBytes(DATABASE_DIRECT_UPLOAD_LIMIT_BYTES)} direct upload limit. ` +
+      "Increase the Supabase Storage file size limit for the document-library bucket, or compress/split the PDF before uploading.";
+    await showLibraryMessage("PDF Too Large", message);
+    updateDatabaseUploadStatus(message);
+    return false;
+  }
+
   const safeFileName = file.name.replace(/[^\w.\- ]+/g, "_");
   const storagePath = `${id}/${Date.now()}-${safeFileName}`;
 
-  updateDatabaseStatus(`Uploading PDF: ${file.name}...`);
+  updateDatabaseUploadStatus(`Uploading PDF: ${file.name}...`);
 
   const { error: uploadError } = await supabaseClient.storage
     .from(DOCUMENTS_BUCKET)
@@ -1045,9 +1110,12 @@ async function attachPDFToLibraryItem(id, file) {
 
   if (uploadError) {
     console.error("PDF upload failed:", uploadError);
-    alert("Could not upload PDF.");
-    updateDatabaseStatus(`Could not upload PDF: ${uploadError.message || "storage error"}`);
-    return;
+    const uploadMessage = /maximum allowed size|exceeded/i.test(uploadError.message || "")
+      ? `${file.name} could not upload because it is larger than the storage limit currently allowed by Supabase. The file is ${formatStorageBytes(file.size)}.`
+      : `Could not upload PDF: ${uploadError.message || "storage error"}`;
+    await showLibraryMessage("Upload Failed", uploadMessage);
+    updateDatabaseUploadStatus(uploadMessage);
+    return false;
   }
 
   item.storagePath = storagePath;
@@ -1065,20 +1133,21 @@ async function attachPDFToLibraryItem(id, file) {
 
   if (updateError) {
     console.error("Error saving PDF path:", updateError);
-    alert("PDF uploaded, but the database did not update.");
-    updateDatabaseStatus(`PDF uploaded, but database update failed: ${updateError.message || "database error"}`);
-    return;
+    await showLibraryMessage("Database Update Failed", "PDF uploaded, but the database did not update.");
+    updateDatabaseUploadStatus(`PDF uploaded, but database update failed: ${updateError.message || "database error"}`);
+    return false;
   }
 
   libraryPDFBlobCache.delete(id);
   await loadLibraryDB();
-  updateDatabaseStatus(`Uploaded PDF: ${file.name}`);
+  updateDatabaseUploadStatus(`Uploaded PDF: ${file.name}`);
+  return true;
 }
 
 async function downloadLibraryPDF(id) {
   const item = libraryDB.find(x => x.id === id);
   if (!item || !item.storagePath) {
-    alert("PDF attachment not found.");
+    await showLibraryMessage("PDF Not Attached", "PDF attachment not found.");
     updateDatabaseStatus("PDF attachment not found.");
     return;
   }
@@ -1091,7 +1160,7 @@ async function downloadLibraryPDF(id) {
 
   if (error || !data || !data.signedUrl) {
     console.error("Could not create download link:", error);
-    alert("Could not download PDF.");
+    await showLibraryMessage("Could Not Download PDF", "Could not download this PDF.");
     updateDatabaseStatus(`Could not download PDF: ${error?.message || "storage error"}`);
     return;
   }
@@ -1109,7 +1178,7 @@ async function removeAttachmentFromLibraryItem(id) {
   const item = libraryDB.find(x => x.id === id);
   if (!item) return;
 
-  if (!confirm("Remove the attached PDF?")) return;
+  if (!(await confirmLibraryAction("Remove Attached PDF", "Remove the attached PDF?", "Remove"))) return;
 
   if (item.storagePath) {
     const { error: storageError } = await supabaseClient.storage
@@ -1130,7 +1199,7 @@ async function removeAttachmentFromLibraryItem(id) {
 
   if (updateError) {
     console.error("Error clearing PDF path:", updateError);
-    alert("PDF removed, but database did not update.");
+    await showLibraryMessage("Database Update Failed", "PDF removed, but the database did not update.");
     return;
   }
 
@@ -1227,7 +1296,8 @@ async function addLibraryEntryFromForm() {
   const notes = document.getElementById("libNotes").value.trim();
 
   if (!displayTitle && !fileName && !pendingLibraryPdf) {
-    return alert("Provide a file name, file location, or PDF.");
+    await showLibraryMessage("Entry Info Needed", "Provide a file name, file location, or PDF.");
+    return;
   }
 
   const finalFileName =
@@ -1248,7 +1318,7 @@ async function addLibraryEntryFromForm() {
     storagePath: ""
   };
 
-  updateDatabaseStatus("Adding document to library...");
+  updateDatabaseUploadStatus("Adding document to library...");
 
   const { data, error } = await supabaseClient
     .from(DOCUMENTS_TABLE)
@@ -1258,15 +1328,17 @@ async function addLibraryEntryFromForm() {
 
   if (error) {
     console.error("Error adding entry:", error);
-    alert("Could not add entry.");
-    updateDatabaseStatus(`Could not add document: ${error.message || "database error"}`);
+    await showLibraryMessage("Could Not Add Entry", "Could not add this database entry.");
+    updateDatabaseUploadStatus(`Could not add document: ${error.message || "database error"}`);
     return;
   }
 
+  const hadPendingLibraryPdf = !!pendingLibraryPdf;
+  let attachmentUploaded = false;
   if (pendingLibraryPdf) {
     libraryDB.push(fromSupabaseDocument(data));
 
-    await attachPDFToLibraryItem(data.id, pendingLibraryPdf);
+    attachmentUploaded = await attachPDFToLibraryItem(data.id, pendingLibraryPdf);
   }
 
   document.getElementById("libFileName").value = "";
@@ -1277,7 +1349,12 @@ async function addLibraryEntryFromForm() {
 
   clearLibraryUpload();
   await loadLibraryDB();
-  updateDatabaseStatus(`Added document: ${finalFileName || displayTitle || "Untitled"}`);
+  const addedName = finalFileName || displayTitle || "Untitled";
+  updateDatabaseUploadStatus(
+    hadPendingLibraryPdf && !attachmentUploaded
+      ? `Added document record: ${addedName}. The PDF was not attached.`
+      : `Added document: ${addedName}`
+  );
 }
 
 function toggleLibraryPDFSelection(id, checked) {
@@ -1343,9 +1420,9 @@ function openBuilderTarget(target) {
     : "submittal.html?from=database";
 }
 
-function validateLibraryBuilderHandoff() {
+async function validateLibraryBuilderHandoff() {
   if (typeof saveBuilderHandoffItem !== "function") {
-    alert("Builder handoff is not available in this browser.");
+    await showLibraryMessage("Builder Unavailable", "Builder handoff is not available in this browser.");
     updateDatabaseStatus("Builder handoff is not available in this browser.");
     return false;
   }
@@ -1368,12 +1445,12 @@ async function addLibraryPDFToBuilder(id, target) {
   const targetLabel = target === "om" ? "O&M" : "Submittal";
 
   if (!item || !item.storagePath) {
-    alert("Attach a PDF before adding it to a builder.");
+    await showLibraryMessage("PDF Not Attached", "Attach a PDF before adding this document to a builder.");
     updateDatabaseStatus("Attach a PDF before adding it to a builder.");
     return;
   }
 
-  if (!validateLibraryBuilderHandoff()) return;
+  if (!(await validateLibraryBuilderHandoff())) return;
   if (!(await validateLibraryItemsForBuilder([item]))) return;
 
   try {
@@ -1382,7 +1459,7 @@ async function addLibraryPDFToBuilder(id, target) {
     openBuilderTarget(target);
   } catch (error) {
     console.error("Could not add database PDF to builder:", error);
-    alert(`Could not add this PDF to the ${targetLabel} builder.`);
+    await showLibraryMessage("Could Not Add PDF", `Could not add this PDF to the ${targetLabel} builder.`);
     updateDatabaseStatus(`Could not add PDF to ${targetLabel}: ${error.message || "Please try again."}`);
   }
 }
@@ -1394,12 +1471,12 @@ async function addSelectedLibraryPDFsToBuilder(target) {
     .filter(item => item && item.storagePath);
 
   if (selectedItems.length === 0) {
-    alert("Select at least one PDF with an attachment.");
+    await showLibraryMessage("Select Attached PDFs", "Select at least one PDF with an attachment.");
     updateDatabaseStatus("Select at least one PDF with an attachment.");
     return;
   }
 
-  if (!validateLibraryBuilderHandoff()) return;
+  if (!(await validateLibraryBuilderHandoff())) return;
   if (!(await validateLibraryItemsForBuilder(selectedItems))) return;
 
   try {
@@ -1414,7 +1491,7 @@ async function addSelectedLibraryPDFsToBuilder(target) {
     openBuilderTarget(target);
   } catch (error) {
     console.error(`Could not add selected database PDFs to ${targetLabel}:`, error);
-    alert(`Could not add the selected PDFs to the ${targetLabel} builder.`);
+    await showLibraryMessage("Could Not Add PDFs", `Could not add the selected PDFs to the ${targetLabel} builder.`);
     updateDatabaseStatus(`Could not add selected PDFs to ${targetLabel}: ${error.message || "Please try again."}`);
   }
 }
@@ -1423,12 +1500,28 @@ let activePreviewLibraryItem = null;
 let selectedLibraryPreviewPages = new Set();
 let activeLibraryPreviewPageCount = 0;
 
+function resetLibraryPreviewModalForItem(item) {
+  const title = document.getElementById("libraryPreviewTitle");
+  const list = document.getElementById("libraryPreviewPageList");
+  const status = document.getElementById("libraryPreviewStatus");
+  const entryList = document.getElementById("libraryLevelEntryList");
+  const hideParentTOC = document.getElementById("libraryHideParentTOC");
+
+  if (title) title.textContent = item?.fileName || item?.displayTitle || "Format Levels";
+  if (list) list.innerHTML = `<p class="toc-tree-empty">Loading preview...</p>`;
+  if (status) status.textContent = "Loading pages...";
+  if (entryList) entryList.innerHTML = `<p class="toc-tree-empty">Loading levels...</p>`;
+  if (hideParentTOC) hideParentTOC.checked = !!item?.hideParentTOC;
+
+  clearLibraryLevelForm();
+}
+
 async function previewLibraryPDF(id) {
   try {
     const item = libraryDB.find(x => x.id === id);
 
     if (!item || !item.storagePath) {
-      alert("No PDF attached to preview.");
+      await showLibraryMessage("PDF Not Attached", "No PDF is attached to preview.");
       return;
     }
 
@@ -1436,15 +1529,10 @@ async function previewLibraryPDF(id) {
     selectedLibraryPreviewPages = new Set();
     activeLibraryPreviewPageCount = 0;
 
-    document.getElementById("libraryPreviewTitle").textContent =
-      item.fileName || "PDF Preview";
-
     const modal = document.getElementById("libraryPreviewModal");
     const list = document.getElementById("libraryPreviewPageList");
-    const status = document.getElementById("libraryPreviewStatus");
 
-    list.innerHTML = "Loading preview...";
-    if (status) status.textContent = "Loading pages...";
+    resetLibraryPreviewModalForItem(item);
     modal.classList.remove("hidden");
 
     const blob = await getLibraryPDFBlob(item);
@@ -1512,13 +1600,12 @@ async function previewLibraryPDF(id) {
     }
 
     updateLibraryPreviewStatus();
-    clearLibraryLevelForm();
     updateLibraryHideParentTOCControl();
     renderLibraryLevelEntryList();
     updateLibraryLevelParentDropdown();
   } catch (error) {
     console.error("Preview failed:", error);
-    alert("Could not preview PDF.");
+    await showLibraryMessage("Could Not Preview PDF", "Could not preview this PDF.");
   }
 }
 
@@ -1709,6 +1796,13 @@ async function showLibraryMessage(title, message) {
   await openDatabaseMessageModal(title, message);
 }
 
+async function confirmLibraryAction(title, message, confirmLabel = "OK") {
+  return (await openDatabaseMessageModal(title, message, {
+    confirmLabel,
+    cancelLabel: "Cancel"
+  })) === true;
+}
+
 function renderLibraryLevelEntryList() {
   const list = document.getElementById("libraryLevelEntryList");
   if (!list || !activePreviewLibraryItem) return;
@@ -1760,7 +1854,7 @@ async function persistActiveLibraryLevelEntries() {
 
   if (error) {
     console.error("Could not save library levels:", error);
-    alert("Could not save formatted levels.");
+    await showLibraryMessage("Could Not Save Levels", "Could not save formatted levels.");
     return;
   }
 
@@ -1929,7 +2023,7 @@ function closeLibraryMergeOrderModal() {
 
 async function downloadPreviewedLibraryPDF() {
   if (!activePreviewLibraryItem) {
-    alert("No PDF selected.");
+    await showLibraryMessage("No PDF Selected", "No PDF selected.");
     return;
   }
 
@@ -1938,14 +2032,14 @@ async function downloadPreviewedLibraryPDF() {
 
 async function extractSelectedLibraryPreviewPages() {
   if (!activePreviewLibraryItem) {
-    alert("No PDF selected.");
+    await showLibraryMessage("No PDF Selected", "No PDF selected.");
     return;
   }
 
   const selectedPages = Array.from(selectedLibraryPreviewPages).sort((a, b) => a - b);
 
   if (selectedPages.length === 0) {
-    alert("Select at least one page to extract.");
+    await showLibraryMessage("Select Pages", "Select at least one page to extract.");
     return;
   }
 
@@ -1969,20 +2063,20 @@ async function extractSelectedLibraryPreviewPages() {
     downloadFile(outputBytes, `${baseName}-selected-pages.pdf`, "application/pdf");
   } catch (error) {
     console.error("Could not extract selected library pages:", error);
-    alert("The selected pages could not be extracted.");
+    await showLibraryMessage("Could Not Extract Pages", "The selected pages could not be extracted.");
   }
 }
 
 async function deleteSelectedLibraryPreviewPages() {
   if (!activePreviewLibraryItem) {
-    alert("No PDF selected.");
+    await showLibraryMessage("No PDF Selected", "No PDF selected.");
     return;
   }
 
   const selectedPages = Array.from(selectedLibraryPreviewPages).sort((a, b) => a - b);
 
   if (selectedPages.length === 0) {
-    alert("Select at least one page to delete.");
+    await showLibraryMessage("Select Pages", "Select at least one page to delete.");
     return;
   }
 
@@ -1993,11 +2087,15 @@ async function deleteSelectedLibraryPreviewPages() {
     const totalPages = sourcePdf.getPageCount();
 
     if (selectedPages.length >= totalPages) {
-      alert("A PDF must keep at least one page.");
+      await showLibraryMessage("Cannot Delete All Pages", "A PDF must keep at least one page.");
       return;
     }
 
-    if (!confirm(`Delete ${selectedPages.length} selected page(s) from this library PDF?`)) {
+    if (!(await confirmLibraryAction(
+      "Delete Pages",
+      `Delete ${selectedPages.length} selected page(s) from this library PDF?`,
+      "Delete"
+    ))) {
       return;
     }
 
@@ -2021,7 +2119,7 @@ async function deleteSelectedLibraryPreviewPages() {
     await previewLibraryPDF(activePreviewLibraryItem.id);
   } catch (error) {
     console.error("Could not delete selected library pages:", error);
-    alert("The selected pages could not be deleted.");
+    await showLibraryMessage("Could Not Delete Pages", "The selected pages could not be deleted.");
   }
 }
 
@@ -2083,7 +2181,7 @@ async function mergeSelectedLibraryPDFs() {
     .filter(item => item && item.storagePath);
 
   if (selectedItems.length === 0) {
-    alert("Select at least one PDF with an attachment.");
+    await showLibraryMessage("Select Attached PDFs", "Select at least one PDF with an attachment.");
     updateDatabaseStatus("Select at least one attached PDF before merging.");
     return;
   }
@@ -2091,7 +2189,19 @@ async function mergeSelectedLibraryPDFs() {
   let fileName = document.getElementById("mergedLibraryFileName").value.trim();
 
   if (!fileName) {
-    fileName = prompt("Enter a name for the merged PDF:", "Merged Library PDFs.pdf");
+    fileName = await openDatabaseMessageModal(
+      "Merge PDFs",
+      "Enter a name for the merged PDF.",
+      {
+        input: {
+          label: "Merged PDF name",
+          value: "Merged Library PDFs.pdf",
+          placeholder: "Merged Library PDFs.pdf"
+        },
+        confirmLabel: "Merge",
+        cancelLabel: "Cancel"
+      }
+    );
   }
 
   if (!fileName) return;
@@ -2132,7 +2242,7 @@ async function mergeSelectedLibraryPDFs() {
     updateDatabaseStatus(`Merged ${selectedItems.length} PDF(s) into ${fileName}.`);
   } catch (error) {
     console.error("Could not merge selected PDFs:", error);
-    alert("Could not merge the selected PDFs.");
+    await showLibraryMessage("Could Not Merge PDFs", "Could not merge the selected PDFs.");
     updateDatabaseStatus(`Could not merge PDFs: ${error.message || "Please try again."}`);
   }
 }
@@ -2168,7 +2278,7 @@ function openLibraryMergeOrderModal() {
     .filter(item => item && item.storagePath);
 
   if (selectedItems.length === 0) {
-    alert("Select at least one PDF with an attachment.");
+    showLibraryMessage("Select Attached PDFs", "Select at least one PDF with an attachment.");
     return;
   }
 
@@ -2230,7 +2340,7 @@ async function confirmLibraryMergeOrder() {
     .filter(item => item && item.storagePath);
 
   if (orderedItems.length === 0) {
-    alert("No PDFs selected.");
+    await showLibraryMessage("No PDFs Selected", "No PDFs selected.");
     return;
   }
 

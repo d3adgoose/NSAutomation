@@ -63,7 +63,19 @@ async function downloadSavedPDF(id, customFileName = "") {
   const record = await getPDFFromIndexedDB(id);
 
   if (!record || !record.file) {
-    alert("PDF attachment not found.");
+    if (typeof openAppModal === "function") {
+      await openAppModal({
+        title: "PDF Not Attached",
+        message: "PDF attachment not found.",
+        actions: [{ label: "OK", value: true }]
+      });
+    } else if (typeof openDatabaseMessageModal === "function") {
+      await openDatabaseMessageModal("PDF Not Attached", "PDF attachment not found.");
+    } else if (typeof showConverterMessage === "function") {
+      showConverterMessage("PDF Not Attached", "PDF attachment not found.");
+    } else {
+      console.warn("PDF attachment not found.");
+    }
     return;
   }
 

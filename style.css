@@ -2563,8 +2563,11 @@ details summary:hover {
 }
 
 .app-prompt-message {
+  margin: 10px 0 18px;
   white-space: pre-line;
-  color: #222222;
+  color: #3d4b5b;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .app-prompt-input-group {

@@ -29,6 +29,39 @@ let converterMasterPartPageMatchCount = 0;
 
 const { PDFDocument, StandardFonts, degrees, rgb } = PDFLib;
 
+function showConverterMessage(title = "Action Needed", message = "") {
+  let modal = document.getElementById("converterMessageModal");
+
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "converterMessageModal";
+    modal.className = "modal hidden";
+    modal.innerHTML = `
+      <div class="modal-content app-prompt-modal-content">
+        <h2 id="converterMessageTitle">Action Needed</h2>
+        <p id="converterMessageText" class="app-prompt-message"></p>
+        <div class="button-row app-prompt-actions">
+          <button id="converterMessageOk" type="button">OK</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+
+  const titleEl = document.getElementById("converterMessageTitle");
+  const messageEl = document.getElementById("converterMessageText");
+  const okButton = document.getElementById("converterMessageOk");
+
+  if (titleEl) titleEl.textContent = title;
+  if (messageEl) messageEl.textContent = message;
+  if (okButton) {
+    okButton.onclick = () => modal.classList.add("hidden");
+  }
+
+  modal.classList.remove("hidden");
+  okButton?.focus();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const pdfInput = document.getElementById("converterPdfUpload");
   const excelInput = document.getElementById("converterExcelUpload");
@@ -88,7 +121,7 @@ function setConverterPdfFile(file) {
   const name = file.name.toLowerCase();
 
   if (!(file.type === "application/pdf" || name.endsWith(".pdf"))) {
-    alert("Please drop or choose a PDF file in the PDF box.");
+    showConverterMessage("PDF Required", "Please drop or choose a PDF file in the PDF box.");
     return;
   }
 
@@ -142,7 +175,7 @@ function setConverterExcelFiles(files) {
   });
 
   if (!incomingFiles.length) {
-    alert("Please drop or choose one or more Excel or CSV files in the Excel box.");
+    showConverterMessage("Excel or CSV Required", "Please drop or choose one or more Excel or CSV files in the Excel box.");
     return;
   }
 
@@ -236,7 +269,7 @@ async function readExcelConverterMap() {
   }
 
   if (!converterExcelFiles.length) {
-    alert("Upload an Excel file first.");
+    showConverterMessage("Excel Required", "Upload an Excel file first.");
     return [];
   }
 
@@ -1089,12 +1122,12 @@ async function previewPartNumberChangesScan() {
   const scanPdfVersion = converterPdfVersion;
 
   if (!scanPdfFile) {
-    alert("Upload a PDF first.");
+    showConverterMessage("PDF Required", "Upload a PDF first.");
     return;
   }
 
   if (!converterExcelFiles.length && !converterExcelFile) {
-    alert("Upload an Excel file first.");
+    showConverterMessage("Excel Required", "Upload an Excel file first.");
     return;
   }
 
@@ -1666,12 +1699,12 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
   }
 
   if (!converterPdfFile) {
-    alert("Upload a PDF first.");
+    showConverterMessage("PDF Required", "Upload a PDF first.");
     return null;
   }
 
   if (!converterExcelFiles.length && !converterExcelFile) {
-    alert("Upload an Excel file first.");
+    showConverterMessage("Excel Required", "Upload an Excel file first.");
     return null;
   }
 
@@ -2613,12 +2646,12 @@ function openConverterPdfPreview(pageNumber = null, oldPart = "") {
 
 async function openConverterPdfPreviewImpl() {
   if (!converterPdfFile) {
-    alert("Upload a PDF first.");
+    showConverterMessage("PDF Required", "Upload a PDF first.");
     return;
   }
 
   if (!converterExcelFiles.length && !converterExcelFile) {
-    alert("Upload an Excel file first.");
+    showConverterMessage("Excel Required", "Upload an Excel file first.");
     return;
   }
 
