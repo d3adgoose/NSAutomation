@@ -24,20 +24,33 @@
   <header>
     <h1>Database</h1>
     <p>Log in to access the shared company PDF library, or save files locally.</p>
-    <div class="header-actions">
-      <button
-        id="loginButton"
-        class="login-btn"
-        onclick="openLoginModal()">
-        Login
-      </button>
+    <div class="header-actions database-header-actions">
+      <div id="databaseStorageUsage" class="storage-usage-card hidden">
+        <div class="storage-usage-label">
+          <strong>Storage Usage</strong>
+          <span></span>
+        </div>
+        <div class="storage-usage-bar" aria-hidden="true">
+          <span></span>
+        </div>
+        <p></p>
+      </div>
 
-      <button
-        id="logoutButton"
-        class="secondary hidden"
-        onclick="logoutUser()">
-        Logout
-      </button>
+      <div class="database-account-actions">
+        <button
+          id="loginButton"
+          class="login-btn"
+          onclick="openLoginModal()">
+          Login
+        </button>
+
+        <button
+          id="logoutButton"
+          class="secondary hidden"
+          onclick="logoutUser()">
+          Logout
+        </button>
+      </div>
     </div>
   </header>
 
@@ -61,16 +74,22 @@
       </div>
     </div>
   </div>
-        <div id="databaseStorageUsage" class="storage-usage-card">
-        <div class="storage-usage-label">
-          <strong>Storage Usage</strong>
-          <span>Log in to view shared storage.</span>
+    <section class="card">
+      <details>
+        <summary><strong>How to Use Database</strong></summary>
+
+        <div class="instructions-box">
+          <ol>
+            <li><strong>Add a PDF:</strong> choose or drag in a reusable PDF, then confirm the File Name and File Location.</li>
+            <li><strong>Set metadata:</strong> pick the Document Type, TOC Section, and Category before adding it to the library.</li>
+            <li><strong>Find files:</strong> open the Generic, Car Wash, or Transit Wash tables to browse saved PDFs by category.</li>
+            <li><strong>Format levels:</strong> use Format Levels to set TOC rows, parent rows, and whether the PDF name appears in the TOC.</li>
+            <li><strong>Use selected PDFs:</strong> select one or more PDFs to merge, remove, or send directly to Submittal or O&M.</li>
+          </ol>
         </div>
-        <div class="storage-usage-bar" aria-hidden="true">
-          <span></span>
-        </div>
-        <p>PDF attachments: 0</p>
-      </div>
+      </details>
+    </section>
+
     <section class="card database-upload-card">
       <h2>Database</h2>
       <p class="card-intro">
@@ -102,47 +121,68 @@
         No PDF selected yet.
       </div>
 
-      <div class="grid">
-        <input id="libFileName" placeholder="File Name" />
-        <input id="libDisplayTitle" placeholder="File Location" />
+      <div class="database-entry-grid">
+        <label>
+          <span>File Name</span>
+          <input id="libFileName" placeholder="File Name" />
+        </label>
 
-        <select id="libDocumentType">
-          <option value="Datasheet">Datasheet</option>
-          <option value="Revision Remarks">Revision Remarks</option>
-          <option value="Cover Page">Cover Page</option>
-          <option value="Table of Contents">Table of Contents</option>
-          <option value="Warranty">Warranty</option>
-          <option value="Safety Procedures">Safety Procedures</option>
-          <option value="Maintenance">Maintenance</option>
-          <option value="Sequence of Operations">Sequence of Operations</option>
-          <option value="Parts List">Parts List</option>
-          <option value="Control Panel Components">Control Panel Components</option>
-          <option value="Electrical Schematics">Electrical Schematics</option>
-          <option value="Shop Drawing">Shop Drawing</option>
-          <option value="Drawing">Drawing</option>
-          <option value="Manual">Manual</option>
-          <option value="Certification">Certification</option>
-          <option value="Spec Sheet">Spec Sheet</option>
-          <option value="Test Report">Test Report</option>
-          <option value="Appendix">Appendix</option>
-          <option value="Other">Other</option>
-        </select>
+        <label>
+          <span>File Location</span>
+          <input id="libDisplayTitle" placeholder="File Location" />
+        </label>
 
-        <select id="libPacketSection" aria-label="Default builder section">
-          <option value="Revision Remarks">Revision Remarks</option>
-          <option value="Warranty">Warranty</option>
-          <option value="Safety Procedures">Safety Procedures</option>
-          <option value="Sequence of Operations">Sequence of Operations</option>
-          <option value="Maintenance">Maintenance</option>
-          <option value="Testing Checklist and Testing Procedures">Testing Checklist and Testing Procedures</option>
-          <option value="Parts List">Parts List</option>
-          <option value="Datasheets" selected>Datasheets</option>
-          <option value="Control Panel Components">Control Panel Components</option>
-          <option value="Electrical Schematics">Electrical Schematics</option>
-          <option value="Shop Drawings">Shop Drawings</option>
-          <option value="Appendix">Appendix</option>
-        </select>
+        <label>
+          <span>Document Type</span>
+          <select id="libDocumentType">
+            <option value="Datasheet">Datasheet</option>
+            <option value="Revision Remarks">Revision Remarks</option>
+            <option value="Cover Page">Cover Page</option>
+            <option value="Table of Contents">Table of Contents</option>
+            <option value="Warranty">Warranty</option>
+            <option value="Safety Procedures">Safety Procedures</option>
+            <option value="Maintenance">Maintenance</option>
+            <option value="Sequence of Operations">Sequence of Operations</option>
+            <option value="Parts List">Parts List</option>
+            <option value="Control Panel Components">Control Panel Components</option>
+            <option value="Electrical Schematics">Electrical Schematics</option>
+            <option value="Shop Drawing">Shop Drawing</option>
+            <option value="Drawing">Drawing</option>
+            <option value="Manual">Manual</option>
+            <option value="Certification">Certification</option>
+            <option value="Spec Sheet">Spec Sheet</option>
+            <option value="Test Report">Test Report</option>
+            <option value="Appendix">Appendix</option>
+            <option value="Other">Other</option>
+          </select>
+        </label>
 
+        <label>
+          <span>TOC Section</span>
+          <select id="libPacketSection" aria-label="Default TOC section">
+            <option value="Revision Remarks">Revision Remarks</option>
+            <option value="Warranty">Warranty</option>
+            <option value="Safety Procedures">Safety Procedures</option>
+            <option value="Sequence of Operations">Sequence of Operations</option>
+            <option value="Maintenance">Maintenance</option>
+            <option value="Testing Checklist and Testing Procedures">Testing Checklist and Testing Procedures</option>
+            <option value="Parts List">Parts List</option>
+            <option value="Datasheets" selected>Datasheets</option>
+            <option value="Control Panel Components">Control Panel Components</option>
+            <option value="Electrical Schematics">Electrical Schematics</option>
+            <option value="Shop Drawings">Shop Drawings</option>
+            <option value="Appendix">Appendix</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Category</span>
+          <select id="libCategory" aria-label="Database category">
+            <option value="Generic" selected>Generic</option>
+            <option value="Car Wash">Car Wash</option>
+            <option value="Transit Wash">Transit Wash</option>
+          </select>
+        </label>
       </div>
 
       <textarea
@@ -191,24 +231,7 @@
 
       <p id="libraryCount" class="builder-history-status" aria-live="polite"></p>
 
-      <div class="library-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Select</th>
-              <th>Date</th>
-              <th>File Name</th>
-              <th>File Location</th>
-              <th>Document Type</th>
-              <th>Builder Section</th>
-              <th>Notes</th>
-              <th>PDF Actions</th>
-            </tr>
-          </thead>
-
-          <tbody id="libraryDBBody"></tbody>
-        </table>
-      </div>
+      <div id="libraryCategoryTables" class="library-category-tables"></div>
     </section>
   </main>
 

@@ -68,10 +68,15 @@ async function checkDatabaseLogin() {
 
   const loginBtn = document.getElementById("loginButton");
   const logoutBtn = document.getElementById("logoutButton");
+  const usageCard = document.getElementById("databaseStorageUsage");
 
   if (useRemoteDatabase) {
+    if (usageCard) usageCard.classList.remove("hidden");
+
     if (loginBtn) {
       loginBtn.textContent = currentUser.email;
+      loginBtn.classList.add("account-email-pill");
+      loginBtn.onclick = null;
     }
 
     if (logoutBtn) {
@@ -80,7 +85,11 @@ async function checkDatabaseLogin() {
   } else {
     if (loginBtn) {
       loginBtn.textContent = "Login";
+      loginBtn.classList.remove("account-email-pill");
+      loginBtn.onclick = openLoginModal;
     }
+
+    if (usageCard) usageCard.classList.add("hidden");
 
     if (logoutBtn) {
       logoutBtn.classList.add("hidden");
@@ -102,13 +111,20 @@ async function logoutUser() {
 
   const loginBtn = document.getElementById("loginButton");
   const logoutBtn = document.getElementById("logoutButton");
+  const usageCard = document.getElementById("databaseStorageUsage");
 
   if (loginBtn) {
     loginBtn.textContent = "Login";
+    loginBtn.classList.remove("account-email-pill");
+    loginBtn.onclick = openLoginModal;
   }
 
   if (logoutBtn) {
     logoutBtn.classList.add("hidden");
+  }
+
+  if (usageCard) {
+    usageCard.classList.add("hidden");
   }
 
   document.getElementById("loginStatus").textContent =
@@ -151,6 +167,7 @@ const DOCUMENTS_TABLE = "documents";
 const DOCUMENTS_BUCKET = "document-library";
 const DATABASE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 const DATABASE_PDF_PARENT_TOC_ID = "__pdf_parent__";
+const DATABASE_CATEGORIES = ["Generic", "Car Wash", "Transit Wash"];
 
 function guessPacketSectionForLibrary(fileName = "") {
   return guessPacketSectionFromName(fileName);
@@ -159,6 +176,10 @@ function guessPacketSectionForLibrary(fileName = "") {
 function normalizeLibraryTOCLevel(value) {
   const level = Number(value);
   return [0, 1, 2].includes(level) ? level : 0;
+}
+
+function normalizeLibraryCategory(value = "") {
+  return DATABASE_CATEGORIES.includes(value) ? value : "Generic";
 }
 
 function getLibraryMetaFromTags(tags = "") {
@@ -183,6 +204,7 @@ function getLibraryTagsWithMeta(tags = "", meta = {}) {
   const cleanMeta = {
     tocLevel: normalizeLibraryTOCLevel(meta.tocLevel),
     hideParentTOC: !!meta.hideParentTOC,
+    category: normalizeLibraryCategory(meta.category),
     tocEntries: Array.isArray(meta.tocEntries)
       ? meta.tocEntries.map(entry => ({
           id: entry.id || crypto.randomUUID(),
@@ -318,6 +340,7 @@ function fromSupabaseDocument(row) {
     packetSection: row.packet_section || guessPacketSectionForLibrary(detectionName),
     tocLevel: normalizeLibraryTOCLevel(meta.tocLevel),
     hideParentTOC: !!meta.hideParentTOC,
+    category: normalizeLibraryCategory(meta.category),
     tocEntries: Array.isArray(meta.tocEntries) ? meta.tocEntries : [],
     manufacturer: row.manufacturer || "",
     modelNumber: row.model_number || "",
@@ -339,6 +362,7 @@ function toSupabaseDocument(item) {
     tags: getLibraryTagsWithMeta(item.tags || "", {
       tocLevel: item.tocLevel,
       hideParentTOC: item.hideParentTOC,
+      category: normalizeLibraryCategory(item.category),
       tocEntries: item.tocEntries || []
     }),
     notes: item.notes || "",
@@ -349,6 +373,10 @@ function toSupabaseDocument(item) {
 
 function sortLibraryDB() {
   libraryDB.sort((a, b) => {
+    const categoryCompare = DATABASE_CATEGORIES.indexOf(normalizeLibraryCategory(a.category)) -
+      DATABASE_CATEGORIES.indexOf(normalizeLibraryCategory(b.category));
+    if (categoryCompare !== 0) return categoryCompare;
+
     if ((a.documentType || "") === (b.documentType || "")) {
       return (a.displayTitle || "").localeCompare(b.displayTitle || "");
     }
@@ -358,16 +386,56 @@ function sortLibraryDB() {
 }
 
 function renderLibraryDB() {
-  const tbody = document.getElementById("libraryDBBody");
-  if (!tbody) return;
+  const container = document.getElementById("libraryCategoryTables");
+  if (!container) return;
 
-  tbody.innerHTML = "";
+  container.innerHTML = "";
 
   const list = getFilteredLibraryItems();
   updateLibraryCount(list.length);
 
-  list.forEach(item => {
-    const row = document.createElement("tr");
+  DATABASE_CATEGORIES.forEach(category => {
+    const categoryItems = list.filter(item => normalizeLibraryCategory(item.category) === category);
+
+    const details = document.createElement("details");
+    details.className = "library-category-section";
+    details.open = true;
+
+    details.innerHTML = `
+      <summary>
+        <span>${category}</span>
+        <strong>${categoryItems.length} document${categoryItems.length === 1 ? "" : "s"}</strong>
+      </summary>
+      <div class="library-table-wrap">
+        ${categoryItems.length === 0
+          ? `<p class="library-empty-category">0 documents</p>`
+          : `<table>
+          <thead>
+            <tr>
+              <th>Select</th>
+              <th>Date</th>
+              <th>File Name</th>
+              <th>File Location</th>
+              <th>Document Type</th>
+              <th>TOC Section</th>
+              <th>Category</th>
+              <th>Notes</th>
+              <th>PDF Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>`}
+      </div>
+    `;
+
+    const tbody = details.querySelector("tbody");
+    if (!tbody) {
+      container.appendChild(details);
+      return;
+    }
+
+    categoryItems.forEach(item => {
+      const row = document.createElement("tr");
 
     const docOptions = documentTypes.map(opt => `
       <option value="${opt}" ${opt === item.documentType ? "selected" : ""}>
@@ -379,6 +447,13 @@ function renderLibraryDB() {
       .map(section => `
         <option value="${section}" ${section === getLibraryPacketSection(item) ? "selected" : ""}>
           ${section}
+        </option>
+      `)
+      .join("");
+    const categoryOptions = DATABASE_CATEGORIES
+      .map(category => `
+        <option value="${category}" ${category === normalizeLibraryCategory(item.category) ? "selected" : ""}>
+          ${category}
         </option>
       `)
       .join("");
@@ -418,7 +493,7 @@ function renderLibraryDB() {
       <td>
         <div class="library-build-level-cell">
           <select
-            aria-label="Builder section"
+            aria-label="TOC section"
             onchange="updateLibraryDBItem('${item.id}', 'packetSection', this.value)">
             ${sectionOptions}
           </select>
@@ -427,6 +502,12 @@ function renderLibraryDB() {
             ${item.hideParentTOC ? " | PDF name hidden" : ""}
           </span>
         </div>
+      </td>
+
+      <td>
+        <select onchange="updateLibraryDBItem('${item.id}', 'category', this.value)">
+          ${categoryOptions}
+        </select>
       </td>
 
       <td>
@@ -499,7 +580,10 @@ function renderLibraryDB() {
       </td>
     `;
 
-    tbody.appendChild(row);
+      tbody.appendChild(row);
+    });
+
+    container.appendChild(details);
   });
 }
 
@@ -521,6 +605,7 @@ function getFilteredLibraryItems() {
           item.displayTitle,
           item.documentType,
           item.packetSection,
+          normalizeLibraryCategory(item.category),
           item.manufacturer,
           item.modelNumber,
           item.tags,
@@ -553,6 +638,13 @@ function formatStorageBytes(bytes) {
 async function updateDatabaseStorageUsage() {
   const usageCard = document.getElementById("databaseStorageUsage");
   if (!usageCard) return;
+
+  if (!useRemoteDatabase) {
+    usageCard.classList.add("hidden");
+    return;
+  }
+
+  usageCard.classList.remove("hidden");
 
   const label = usageCard.querySelector(".storage-usage-label span");
   const bar = usageCard.querySelector(".storage-usage-bar span");
@@ -1055,6 +1147,7 @@ function exportLibraryCSV() {
     "File Location",
     "Document Type",
     "Packet Section",
+    "Category",
     "Notes",
     "Storage Path"
   ];
@@ -1065,6 +1158,7 @@ function exportLibraryCSV() {
     i.displayTitle,
     i.documentType,
     getLibraryPacketSection(i),
+    normalizeLibraryCategory(i.category),
     i.notes,
     i.storagePath
   ]);
@@ -1083,6 +1177,7 @@ async function mergeSubmittalIntoLibrary(items) {
       displayTitle: i.displayTitle || "",
       documentType: i.documentType || "Other",
       packetSection: i.packetSection || guessPacketSectionForLibrary(i.fileName || i.displayTitle || ""),
+      category: normalizeLibraryCategory(i.category),
       tocLevel: 0,
       hideParentTOC: !!i.hideParentTOC,
       tocEntries: Array.isArray(i.tocEntries)
@@ -1126,6 +1221,9 @@ async function addLibraryEntryFromForm() {
   const packetSection =
     document.getElementById("libPacketSection")?.value ||
     guessPacketSectionForLibrary(fileName || displayTitle || "");
+  const category = normalizeLibraryCategory(
+    document.getElementById("libCategory")?.value || "Generic"
+  );
   const notes = document.getElementById("libNotes").value.trim();
 
   if (!displayTitle && !fileName && !pendingLibraryPdf) {
@@ -1142,6 +1240,7 @@ async function addLibraryEntryFromForm() {
     displayTitle,
     documentType,
     packetSection,
+    category,
     tocLevel: 0,
     hideParentTOC: false,
     tocEntries: [],
@@ -1173,6 +1272,7 @@ async function addLibraryEntryFromForm() {
   document.getElementById("libFileName").value = "";
   document.getElementById("libDisplayTitle").value = "";
   document.getElementById("libPacketSection").value = "Datasheets";
+  document.getElementById("libCategory").value = "Generic";
   document.getElementById("libNotes").value = "";
 
   clearLibraryUpload();
@@ -1811,14 +1911,14 @@ function clearLibraryPreviewPageSelection() {
 
 function populateLibraryTypeFilter() {
   const typeFilter = document.getElementById("libraryTypeFilter");
-  if (!typeFilter) return;
-
-  const currentValue = typeFilter.value;
-  typeFilter.replaceChildren(
-    new Option("All Document Types", ""),
-    ...documentTypes.map(type => new Option(type, type))
-  );
-  typeFilter.value = currentValue;
+  if (typeFilter) {
+    const currentValue = typeFilter.value;
+    typeFilter.replaceChildren(
+      new Option("All Document Types", ""),
+      ...documentTypes.map(type => new Option(type, type))
+    );
+    typeFilter.value = currentValue;
+  }
 }
 
 function closeLibraryMergeOrderModal() {
@@ -2189,4 +2289,5 @@ window.addEventListener("load", async () => {
 
   const typeFilter = document.getElementById("libraryTypeFilter");
   if (typeFilter) typeFilter.addEventListener("change", renderLibraryDB);
+
 });

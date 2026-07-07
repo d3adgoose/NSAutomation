@@ -4,9 +4,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!btn || !menu) return;
 
+  const currentPage = window.location.pathname.split("/").pop() || "index.html";
+  menu.querySelectorAll("a").forEach(link => {
+    const linkPage = link.getAttribute("href");
+    if (linkPage === currentPage) {
+      link.classList.add("active");
+      link.setAttribute("aria-current", "page");
+    }
+  });
+
   btn.addEventListener("click", () => {
     const isOpen = menu.classList.toggle("open");
+    btn.classList.toggle("open", isOpen);
     btn.setAttribute("aria-expanded", String(isOpen));
+  });
+
+  menu.querySelectorAll("a").forEach(link => {
+    link.addEventListener("click", () => {
+      menu.classList.remove("open");
+      btn.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    });
   });
 
   document.addEventListener("click", e => {
@@ -15,6 +33,8 @@ document.addEventListener("DOMContentLoaded", () => {
       !btn.contains(e.target)
     ) {
       menu.classList.remove("open");
+      btn.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
     }
   });
 });
