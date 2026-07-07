@@ -571,32 +571,38 @@ function renderLibraryDB() {
                   </span>
                 </div>
 
-                <div class="table-action-buttons attachment-actions">
-                  <button onclick="previewLibraryPDF('${item.id}')">
-                    Format Levels
-                  </button>
+                <div class="attachment-action-groups">
+                  <div class="attachment-action-group attachment-action-primary">
+                    <button onclick="previewLibraryPDF('${item.id}')">
+                      Format Levels
+                    </button>
+                  </div>
 
-                  <button onclick="addLibraryPDFToBuilder('${item.id}', 'submittal')">
-                    Add to Submittal
-                  </button>
+                  <div class="attachment-action-group attachment-action-builders">
+                    <button onclick="addLibraryPDFToBuilder('${item.id}', 'submittal')">
+                      Submittal
+                    </button>
 
-                  <button onclick="addLibraryPDFToBuilder('${item.id}', 'om')">
-                    Add to O&amp;M
-                  </button>
+                    <button onclick="addLibraryPDFToBuilder('${item.id}', 'om')">
+                      O&amp;M
+                    </button>
+                  </div>
 
-                  <button onclick="downloadLibraryPDF('${item.id}')">
-                    Download
-                  </button>
+                  <div class="attachment-action-group attachment-action-files">
+                    <button class="secondary" onclick="downloadLibraryPDF('${item.id}')">
+                      Download
+                    </button>
 
-                  <button onclick="renameLibraryFile('${item.id}')">
-                    Rename File
-                  </button>
+                    <button class="secondary" onclick="renameLibraryFile('${item.id}')">
+                      Rename
+                    </button>
 
-                  <button
-                    class="delete-btn"
-                    onclick="removeAttachmentFromLibraryItem('${item.id}')">
-                    Remove PDF
-                  </button>
+                    <button
+                      class="delete-btn"
+                      onclick="removeAttachmentFromLibraryItem('${item.id}')">
+                      Remove
+                    </button>
+                  </div>
                 </div>
               </div>
             `

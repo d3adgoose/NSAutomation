@@ -1182,7 +1182,7 @@ button:disabled {
 
 .pdf-attachment-card {
   display: grid;
-  gap: 10px;
+  gap: 9px;
   min-width: 260px;
   padding: 10px;
   border: 1px solid #d8e0e8;
@@ -1197,7 +1197,7 @@ button:disabled {
 
 .pdf-attachment-summary {
   display: grid;
-  gap: 4px;
+  gap: 3px;
 }
 
 .pdf-attachment-status {
@@ -1216,8 +1216,31 @@ button:disabled {
   gap: 6px;
 }
 
+.attachment-action-groups {
+  display: grid;
+  gap: 7px;
+}
+
+.attachment-action-group {
+  display: grid;
+  gap: 6px;
+}
+
+.attachment-action-builders {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.attachment-action-files {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.attachment-action-files .delete-btn {
+  grid-column: 1 / -1;
+}
+
 .attachment-actions button,
-.attachment-upload-btn {
+.attachment-upload-btn,
+.attachment-action-group button {
   min-height: 34px;
   padding: 8px 10px;
   font-size: 13px;
@@ -1226,7 +1249,7 @@ button:disabled {
 .library-build-level-cell {
   display: grid;
   gap: 6px;
-  min-width: 190px;
+  min-width: 0;
 }
 
 .library-build-level-cell select {
@@ -1244,15 +1267,12 @@ button:disabled {
 }
 
 .library-table-wrap .pdf-attachment-card {
-  min-width: 320px;
+  min-width: 0;
 }
 
-.library-table-wrap .attachment-actions {
-  align-items: stretch;
-}
-
-.library-table-wrap .attachment-actions button {
-  flex: 1 1 130px;
+.library-table-wrap .attachment-action-group button {
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .selected-library-pdf {
@@ -2352,7 +2372,53 @@ header .storage-usage-bar span {
 
 .library-table-wrap table {
   margin: 0;
-  min-width: 1280px;
+  min-width: 1180px;
+  table-layout: fixed;
+}
+
+.library-table-wrap th:nth-child(1),
+.library-table-wrap td:nth-child(1) {
+  width: 60px;
+}
+
+.library-table-wrap th:nth-child(2),
+.library-table-wrap td:nth-child(2) {
+  width: 84px;
+}
+
+.library-table-wrap th:nth-child(3),
+.library-table-wrap td:nth-child(3) {
+  width: 250px;
+}
+
+.library-table-wrap th:nth-child(4),
+.library-table-wrap td:nth-child(4) {
+  width: 165px;
+}
+
+.library-table-wrap th:nth-child(5),
+.library-table-wrap td:nth-child(5) {
+  width: 150px;
+}
+
+.library-table-wrap th:nth-child(6),
+.library-table-wrap td:nth-child(6) {
+  width: 165px;
+}
+
+.library-table-wrap th:nth-child(7),
+.library-table-wrap td:nth-child(7) {
+  width: 120px;
+}
+
+.library-table-wrap th:nth-child(8),
+.library-table-wrap td:nth-child(8) {
+  width: 150px;
+}
+
+.library-table-wrap th:nth-child(9),
+.library-table-wrap td:nth-child(9) {
+  width: 236px;
 }
 
 .library-table-wrap th {
@@ -2361,6 +2427,12 @@ header .storage-usage-bar span {
 
 .library-table-wrap td {
   vertical-align: top;
+}
+
+.library-table-wrap input,
+.library-table-wrap select {
+  width: 100%;
+  min-width: 0;
 }
 
 .library-category-tables {
