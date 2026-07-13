@@ -27,6 +27,7 @@ let partsState = {
   previewType: "",
   previewFileName: "",
   cancelImport: false,
+  isProcessing: false,
   editTarget: null,
   selected: {}
 };
@@ -67,10 +68,7 @@ function bindPartsDatabaseEvents() {
   bindPartsDropZone("partsDrawingDropZone", handlePartsDrawingFile, file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
   bindPartsDropZone("partsExcelDropZone", handlePartsExcelFile, file => /\.(xlsx|xls|csv)$/i.test(file.name));
   document.getElementById("partsClosePreviewButton")?.addEventListener("click", closePartsPreview);
-  document.getElementById("partsCancelImportButton")?.addEventListener("click", () => {
-    partsState.cancelImport = true;
-    updatePartsProgress("Canceling after current page...", null);
-  });
+  document.getElementById("partsCancelImportButton")?.addEventListener("click", cancelPartsPreviewProcessing);
   document.getElementById("partsSaveImportButton")?.addEventListener("click", savePartsImportPreview);
   document.getElementById("partsSelectAllButton")?.addEventListener("click", togglePreviewSelection);
   document.getElementById("partsEditCloseButton")?.addEventListener("click", closePartsEditModal);
@@ -788,6 +786,7 @@ async function startDrawingPDFImport(file) {
   partsState.previewFileName = file.name;
   partsState.previewRows = [];
   partsState.cancelImport = false;
+  partsState.isProcessing = true;
   openPartsPreview("Review Drawing Import");
   updatePartsProgress("Reading drawing PDF...", 2);
   addPartsImportLog(`Started reading ${file.name}.`);
@@ -822,10 +821,14 @@ async function startDrawingPDFImport(file) {
     }
 
     partsState.previewRows = rows.map(row => buildPreviewRow(row, file.name));
+    partsState.isProcessing = false;
+    updatePartsCancelButton();
     updatePartsProgress(partsState.cancelImport ? "Import canceled. Review rows scanned so far." : "PDF scan complete.", 100);
     addPartsImportLog(`Ready to review ${partsState.previewRows.length} extracted row(s).`);
     renderImportPreview();
   } catch (error) {
+    partsState.isProcessing = false;
+    updatePartsCancelButton();
     console.error("Drawing PDF import failed:", error);
     updatePartsProgress("Could not read this PDF.", 100);
     setPartsStatus(error.message || "Could not import drawing PDF.");
@@ -964,6 +967,9 @@ async function startExcelImport(file) {
 
   partsState.previewType = "excel";
   partsState.previewFileName = file.name;
+  partsState.previewRows = [];
+  partsState.cancelImport = false;
+  partsState.isProcessing = true;
   openPartsPreview("Review Excel Import");
   updatePartsProgress("Reading workbook...", 15);
   addPartsImportLog(`Started reading ${file.name}.`);
@@ -989,10 +995,14 @@ async function startExcelImport(file) {
       .filter(Boolean);
 
     renderColumnMapping(headers, mapping, rows, file.name, sheetName);
+    partsState.isProcessing = false;
+    updatePartsCancelButton();
     updatePartsProgress("Workbook preview ready.", 100);
     addPartsImportLog(`Ready to review ${partsState.previewRows.length} importable row(s).`);
     renderImportPreview();
   } catch (error) {
+    partsState.isProcessing = false;
+    updatePartsCancelButton();
     console.error("Excel import failed:", error);
     updatePartsProgress("Could not read this workbook.", 100);
     setPartsStatus(error.message || "Could not import Excel file.");
@@ -1206,6 +1216,7 @@ function openPartsPreview(title) {
   setText("partsPreviewTitle", title);
   const fileInput = document.getElementById("partsPreviewFileName");
   if (fileInput) fileInput.value = partsState.previewFileName || "";
+  updatePartsCancelButton();
   const log = document.getElementById("partsImportLog");
   if (log) log.innerHTML = "";
   document.getElementById("partsPreviewModal")?.classList.remove("hidden");
@@ -1215,6 +1226,23 @@ function openPartsPreview(title) {
 
 function closePartsPreview() {
   document.getElementById("partsPreviewModal")?.classList.add("hidden");
+  partsState.isProcessing = false;
+  updatePartsCancelButton();
+}
+
+function cancelPartsPreviewProcessing() {
+  if (partsState.isProcessing) {
+    partsState.cancelImport = true;
+    updatePartsProgress("Canceling after current page...", null);
+    return;
+  }
+
+  closePartsPreview();
+}
+
+function updatePartsCancelButton() {
+  const button = document.getElementById("partsCancelImportButton");
+  if (button) button.textContent = partsState.isProcessing ? "Cancel Processing" : "Close";
 }
 
 function updatePartsProgress(label, percent) {
@@ -1695,6 +1723,8 @@ async function previewDatabaseWorkbook(workbook, fileName) {
     current_part_number: findHeaderKey(row, ["current part number", "current_part_number"]),
     description: findHeaderKey(row, ["description"])
   }, fileName, "Master Parts", index + 2)).filter(Boolean);
+  partsState.isProcessing = false;
+  updatePartsCancelButton();
   updatePartsProgress("Library workbook preview ready.", 100);
   renderImportPreview();
 }
