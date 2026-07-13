@@ -321,12 +321,16 @@ async function loadPartsDatabase() {
       fetchSupabaseRows(PARTS_TABLES.reviews),
       fetchSupabaseRows(PARTS_TABLES.history)
     ]);
+    const remote = { master, aliases, usage, reviews, history };
+    if (shouldKeepCachedPartsData(cached, remote)) {
+      applyPartsData(cached);
+      normalizePartsFileNameLabels();
+      setPartsStatus("Showing your latest imported Parts Library from this browser because shared storage is older or not fully synced.");
+      updatePartsLocalButton();
+      return;
+    }
 
-    partsState.master = master;
-    partsState.aliases = aliases;
-    partsState.usage = usage;
-    partsState.reviews = reviews;
-    partsState.history = history;
+    applyPartsData(remote);
     normalizePartsFileNameLabels();
     saveLocalPartsDatabase("shared");
     setPartsStatus("Loaded shared Parts Library.");
@@ -397,6 +401,22 @@ function loadLocalPartsDatabase() {
 
 function isSharedPartsCache(data) {
   return data?.meta?.storageMode === "shared" || (Array.isArray(data?.aliases) && data.aliases.length > 0);
+}
+
+function shouldKeepCachedPartsData(cached, remote) {
+  if (!isSharedPartsCache(cached)) return false;
+  if (cached?.meta?.pendingSync) return true;
+  const cachedScore = getPartsDataCompletenessScore(cached);
+  const remoteScore = getPartsDataCompletenessScore(remote);
+  return cachedScore > remoteScore;
+}
+
+function getPartsDataCompletenessScore(data) {
+  return getArrayLength(data?.master) + getArrayLength(data?.aliases) + getArrayLength(data?.usage) + getArrayLength(data?.history);
+}
+
+function getArrayLength(value) {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 async function clearLocalPartsCopy() {
@@ -476,10 +496,12 @@ function cleanUsageDrawingLabel(value) {
   return text;
 }
 
-function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "local") {
+function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "local", options = {}) {
   localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({
     meta: {
       storageMode,
+      pendingSync: Boolean(options.pendingSync),
+      recordCount: getPartsDataCompletenessScore(partsState),
       saved_at: nowISO()
     },
     master: partsState.master,
@@ -506,31 +528,45 @@ async function fetchSupabaseRows(table) {
 }
 
 async function upsertSupabaseRows(table, rows) {
-  if (!hasSupabaseParts() || !rows.length) return;
+  if (!hasSupabaseParts() || !rows.length) return true;
   const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: "id" });
   if (error) {
-    handlePartsRemoteError(error);
-    return;
+    handlePartsRemoteError(error, table);
+    return false;
   }
+  return true;
 }
 
 async function deleteSupabaseRow(table, id) {
-  if (!hasSupabaseParts()) return;
+  if (!hasSupabaseParts()) return true;
   const { error } = await supabaseClient.from(table).delete().eq("id", id);
-  if (error) handlePartsRemoteError(error);
+  if (error) {
+    handlePartsRemoteError(error, table);
+    return false;
+  }
+  return true;
 }
 
-function handlePartsRemoteError(error) {
+function handlePartsRemoteError(error, table = "") {
+  const message = formatPartsRemoteError(error, table);
   if (isMissingPartsRemoteTableError(error)) {
     partsRemoteStorageAvailable = false;
-    setPartsStatus("Saved locally. Shared Parts Library tables are not in Supabase yet.");
-    addPartsImportLog("Saved locally because the shared Supabase tables have not been created yet.");
+    setPartsStatus(message);
+    addPartsImportLog(message);
     return;
   }
 
   console.warn("Parts Library shared storage skipped:", error);
-  setPartsStatus("Saved locally. Shared storage could not be reached.");
-  addPartsImportLog("Saved locally because shared storage could not be reached.");
+  setPartsStatus(message);
+  addPartsImportLog(message);
+}
+
+function formatPartsRemoteError(error, table = "") {
+  const tableText = table ? `${table}: ` : "";
+  const message = error?.message || "Shared storage could not be reached.";
+  const details = error?.details ? ` Details: ${error.details}` : "";
+  const hint = error?.hint ? ` Hint: ${error.hint}` : "";
+  return `Shared save failed. ${tableText}${message}${details}${hint}`;
 }
 
 function isMissingPartsRemoteTableError(error) {
@@ -1588,12 +1624,21 @@ async function savePartsImportPreview() {
 
   rows.forEach(row => applyPreviewRow(row, importRecord.id, changed));
   partsState.history.unshift(importRecord);
-  saveLocalPartsDatabase();
+  saveLocalPartsDatabase("shared", { pendingSync: true });
   addPartsImportLog(`Saved ${rows.length} row(s) to this browser.`);
-  await persistPartsChanges(changed);
+  const synced = await persistPartsChanges(changed);
+  saveLocalPartsDatabase("shared", { pendingSync: !synced });
+  if (!synced) {
+    renderPartsDatabase();
+    await showPartsError(
+      "The import was saved in this browser, but it did not save to Supabase. Other users will not see it yet. Check the import log above for the Supabase table error.",
+      "Shared Save Failed"
+    );
+    return;
+  }
   closePartsPreview();
   renderPartsDatabase();
-  setPartsStatus(`Imported ${rows.length} row(s) from ${partsState.previewFileName}. Items that need attention were kept separate.`);
+  setPartsStatus(`Imported ${rows.length} row(s) from ${partsState.previewFileName} and saved to Supabase.`);
 }
 
 function buildImportHistoryRecord(rows) {
@@ -1845,19 +1890,24 @@ function getUsageLocationKey(row) {
 }
 
 async function persistPartsChanges(changed) {
-  if (!hasSupabaseParts()) return;
+  if (!hasSupabaseParts()) {
+    addPartsImportLog("Shared save skipped because the Parts Library is not connected to a logged-in Supabase session.");
+    return false;
+  }
 
-  await Promise.all([
+  const results = await Promise.all([
     upsertSupabaseRows(PARTS_TABLES.master, changed.master),
     upsertSupabaseRows(PARTS_TABLES.aliases, changed.aliases),
     upsertSupabaseRows(PARTS_TABLES.usage, changed.usage),
     upsertSupabaseRows(PARTS_TABLES.reviews, changed.reviews),
     upsertSupabaseRows(PARTS_TABLES.history, changed.history)
   ]);
+  const synced = results.every(result => result !== false);
 
-  if (hasSupabaseParts()) {
+  if (synced && hasSupabaseParts()) {
     addPartsImportLog("Saved to shared Parts Library.");
   }
+  return synced;
 }
 
 function handlePartsAction(action, id) {
@@ -2105,7 +2155,15 @@ async function applyPartsDeletePlan(plan) {
     return keptRows.length ? [upsertSupabaseRows(PARTS_TABLES[tab], keptRows)] : [];
   });
 
-  await Promise.all([...deletes, ...updates]);
+  const results = await Promise.all([...deletes, ...updates]);
+  const synced = results.every(result => result !== false);
+  saveLocalPartsDatabase("shared", { pendingSync: !synced });
+  if (!synced) {
+    await showPartsError(
+      "The delete was saved in this browser, but it did not save to Supabase. Other users may still see the old records until shared saving is fixed.",
+      "Shared Delete Failed"
+    );
+  }
 }
 
 function getDeletePlanMessage(plan, fallback) {
@@ -2257,7 +2315,15 @@ async function savePartsEditModal() {
   }
 
   saveLocalPartsDatabase();
-  await upsertSupabaseRows(PARTS_TABLES[tab], [row]);
+  const synced = await upsertSupabaseRows(PARTS_TABLES[tab], [row]);
+  saveLocalPartsDatabase("shared", { pendingSync: !synced });
+  if (!synced) {
+    await showPartsError(
+      "The edit was saved in this browser, but it did not save to Supabase. Other users will not see it yet.",
+      "Shared Save Failed"
+    );
+    return;
+  }
   closePartsEditModal();
   renderPartsDatabase();
 }
