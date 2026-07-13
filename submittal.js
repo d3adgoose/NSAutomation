@@ -4418,7 +4418,7 @@ function addInternalPageLink(pdfDoc, sourcePage, x, y, width, height, targetPage
 }
 
 function truncateTextToWidth(text, font, size, maxWidth) {
-  const value = String(text || "");
+  const value = sanitizePDFTextForFont(text, font);
 
   if (font.widthOfTextAtSize(value, size) <= maxWidth) {
     return value;
@@ -4434,6 +4434,45 @@ function truncateTextToWidth(text, font, size, maxWidth) {
   }
 
   return `${shortened.trim()}...`;
+}
+
+function normalizePDFText(text) {
+  return String(text ?? "")
+    .replace(/[\t\r\n\f\v]+/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/\u00A0/g, " ")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, "\"")
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u2022/g, "-")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function sanitizePDFTextForFont(text, font) {
+  const value = normalizePDFText(text);
+
+  if (!font || typeof font.encodeText !== "function") {
+    return value;
+  }
+
+  try {
+    font.encodeText(value);
+    return value;
+  } catch (error) {
+    return Array.from(value)
+      .map(char => {
+        try {
+          font.encodeText(char);
+          return char;
+        } catch (charError) {
+          return " ";
+        }
+      })
+      .join("")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
 }
 
 async function drawTOCOnExistingPage(
@@ -4463,6 +4502,10 @@ async function drawTOCOnExistingPage(
   const firstInsertedTOCPageIndex = tocInsertIndex;
   let insertedTOCPageCount = 0;
   const pendingTOCLinks = [];
+
+  function cleanText(text, font = times) {
+    return sanitizePDFTextForFont(text, font);
+  }
 
   function markTOCPage(tocPage) {
     tocPage.node.set(
@@ -4498,9 +4541,10 @@ async function drawTOCOnExistingPage(
   }
 
   function centerText(text, y, size, font) {
-    const textWidth = font.widthOfTextAtSize(text, size);
+    const safeText = cleanText(text, font);
+    const textWidth = font.widthOfTextAtSize(safeText, size);
 
-    page.drawText(text, {
+    page.drawText(safeText, {
       x: (width - textWidth) / 2,
       y,
       size,
@@ -4510,7 +4554,9 @@ async function drawTOCOnExistingPage(
   }
 
   function drawUnderlinedText(text, x, y, size, font) {
-    page.drawText(text, {
+    const safeText = cleanText(text, font);
+
+    page.drawText(safeText, {
       x,
       y,
       size,
@@ -4518,7 +4564,7 @@ async function drawTOCOnExistingPage(
       color: rgb(0, 0, 0)
     });
 
-    const textWidth = font.widthOfTextAtSize(text, size);
+    const textWidth = font.widthOfTextAtSize(safeText, size);
 
     page.drawLine({
       start: { x, y: y - 2 },
@@ -4545,21 +4591,21 @@ async function drawTOCOnExistingPage(
     }
   }
 
-  page.drawText(`NS Corp. Project No.: ${projectNumber}`, {
+  page.drawText(cleanText(`NS Corp. Project No.: ${projectNumber}`), {
     x: leftMargin,
     y: startY,
     size: 12,
     font: times
   });
 
-  page.drawText(`Project Name: ${projectName}`, {
+  page.drawText(cleanText(`Project Name: ${projectName}`), {
     x: leftMargin,
     y: startY - 15,
     size: 12,
     font: times
   });
 
-  page.drawText(`Project Address: ${projectAddress}`, {
+  page.drawText(cleanText(`Project Address: ${projectAddress}`), {
     x: leftMargin,
     y: startY - 30,
     size: 12,
@@ -4626,7 +4672,7 @@ async function drawTOCOnExistingPage(
     sectionNumber++;
 
     const sectionLabel = getSectionLabel(section);
-    const sectionText = `${roman}. ${sectionLabel}`;
+    const sectionText = cleanText(`${roman}. ${sectionLabel}`, timesBold);
     if (y < footerMargin + 25) {
       page = pdfDoc.insertPage(tocInsertIndex, [612, 792]);
       tocInsertIndex++;
@@ -4636,7 +4682,7 @@ async function drawTOCOnExistingPage(
 
       y = height - topMargin - 30;
 
-      page.drawText("Table of Contents (Continued)", {
+      page.drawText(cleanText("Table of Contents (Continued)", timesBold), {
         x: leftMargin,
         y,
         size: 16,
@@ -4707,7 +4753,7 @@ async function drawTOCOnExistingPage(
 
           y = height - topMargin - 30;
 
-          page.drawText("Table of Contents (Continued)", {
+          page.drawText(cleanText("Table of Contents (Continued)", timesBold), {
             x: leftMargin,
             y,
             size: 16,
