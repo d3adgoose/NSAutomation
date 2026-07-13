@@ -391,10 +391,10 @@ function setPartsActiveTab(tab) {
 
 function renderPartsFilters() {
   syncSelectOptions("partsSourceFilter", uniqueValues([
-    ...partsState.master.map(row => row.source),
-    ...partsState.aliases.map(row => row.source),
-    ...partsState.usage.map(row => row.pdf_file_name),
-    ...partsState.reviews.map(row => row.source_file)
+    ...partsState.master.flatMap(row => getFileNameLabels(row.source)),
+    ...partsState.aliases.flatMap(row => getFileNameLabels(row.source)),
+    ...partsState.usage.flatMap(row => getFileNameLabels(row.pdf_file_name)),
+    ...partsState.reviews.flatMap(row => getFileNameLabels(row.source_file))
   ]), "All file names");
 }
 
@@ -747,7 +747,7 @@ function getFilteredRows(tab) {
   return (partsState[tab] || []).filter(row => {
     const haystack = normalizeSearch(Object.values(row).join(" "));
     if (query && !haystack.includes(query)) return false;
-    if (source && !Object.values(row).some(value => String(value || "") === source)) return false;
+    if (source && !rowMatchesFileName(row, source)) return false;
     return true;
   });
 }
@@ -959,12 +959,14 @@ function parseBOMRow(line, context) {
   const itemNumber = match[1];
   const body = match[2].trim();
   const quantity = match[3];
-  const partMatch = body.match(/^(REFER TO\s+[A-Z0-9_.-]+|[A-Z0-9][A-Z0-9_.\-\/]+)(?:\s+(.+))?$/i);
+  const partMatch = body.match(/^([A-Z0-9][A-Z0-9_.\-\/]+)(?:\s+(.+))?$/i);
   if (!partMatch) return null;
 
   const extractedPartNumber = partMatch[1].trim();
+  if (!isImportableNumericPartNumber(extractedPartNumber)) return null;
+
   const description = (partMatch[2] || "").trim();
-  if (!description && !/^REFER TO/i.test(extractedPartNumber)) return null;
+  if (!description) return null;
 
   return {
     item_number: itemNumber,
@@ -975,8 +977,8 @@ function parseBOMRow(line, context) {
     drawing_name: context.drawingName,
     pdf_file_name: context.fileName,
     pdf_page_number: context.pageNumber,
-    referenced_drawing_number: extractReferencedDrawing(extractedPartNumber),
-    record_type: /^REFER TO/i.test(extractedPartNumber) ? "Drawing Reference" : "Part",
+    referenced_drawing_number: "",
+    record_type: "Part",
     source: context.fileName
   };
 }
@@ -1137,25 +1139,30 @@ function findPartMatch(partNumber, description) {
     const incomingDescription = normalizedDescription;
     const existingDescription = normalizeDescription(exactPart.description);
     if (incomingDescription && existingDescription && incomingDescription !== existingDescription) {
-      return buildMatch("conflict", exactPart, 0.95, "Part number description conflict");
+      return buildMatch(
+        "same_number_different_description",
+        exactPart,
+        0.95,
+        "Same part number found with another description. This will update the existing part, add this file name, and keep both descriptions searchable."
+      );
     }
-    return buildMatch("exact", exactPart, 1, "Exact current part-number match");
+    return buildMatch("exact", exactPart, 1, `Same current part number already exists: ${exactPart.current_part_number}.`);
   }
 
   const oldMatch = partsState.aliases.find(alias => normalizePartNumber(alias.old_part_number) === normalizedPart && normalizedPart);
   if (oldMatch) {
     const part = findMasterPartByNumber(oldMatch.current_part_number);
-    return buildMatch("old_number", part || oldMatch, 1, "Exact old part-number match");
+    return buildMatch("old_number", part || oldMatch, 1, `Old number matches current part ${oldMatch.current_part_number}.`);
   }
 
   const normalizedMatch = partsState.master.find(part => compactPartNumber(part.current_part_number) === compactPart && compactPart);
-  if (normalizedMatch) return buildMatch("normalized_number", normalizedMatch, 0.98, "Normalized part-number match");
+  if (normalizedMatch) return buildMatch("normalized_number", normalizedMatch, 0.98, `Same part number after removing spaces/dashes: ${normalizedMatch.current_part_number}.`);
 
   const descriptionMatch = partsState.master.find(part => normalizeDescription(part.description) === normalizedDescription && normalizedDescription);
-  if (descriptionMatch) return buildMatch("description_match", descriptionMatch, 1, "Exact normalized-description match");
+  if (descriptionMatch) return buildMatch("description_match", descriptionMatch, 1, `Description already exists under current part ${descriptionMatch.current_part_number}.`);
 
   const fuzzy = findFuzzyDescriptionMatch(normalizedDescription);
-  if (fuzzy) return buildMatch("suggested", fuzzy.part, fuzzy.score, "Fuzzy description suggestion");
+  if (fuzzy) return buildMatch("suggested", fuzzy.part, fuzzy.score, `Description looks similar to current part ${fuzzy.part.current_part_number}: "${fuzzy.part.description || "blank"}".`);
 
   return { type: "new_part", confidence: 0, reason: "No existing match found", currentPartNumber: "", description: "" };
 }
@@ -1184,6 +1191,7 @@ function findFuzzyDescriptionMatch(normalizedDescription) {
 
 function getPreviewStatus(match, source) {
   if (match.type === "conflict") return "conflict";
+  if (match.type === "same_number_different_description") return "active";
   if (match.type === "suggested") return "needs_review";
   if (match.type === "new_part" && source.old_part_number && !source.current_part_number) return "needs_review";
   return match.type === "new_part" ? "new" : "active";
@@ -1192,13 +1200,14 @@ function getPreviewStatus(match, source) {
 function renderImportPreview() {
   const rows = partsState.previewRows;
   const uniqueParts = new Set(rows.map(row => normalizePartNumber(row.current_part_number || row.extracted_part_number)).filter(Boolean));
-  const exactCount = rows.filter(row => row.match_type === "exact").length;
+  const exactCount = rows.filter(row => ["exact", "same_number_different_description"].includes(row.match_type)).length;
   const oldCount = rows.filter(row => row.match_type === "old_number").length;
+  const mergeCount = rows.filter(row => row.match_type === "same_number_different_description").length;
   const reviewCount = rows.filter(row => row.status === "needs_review" || row.status === "conflict").length;
 
   setText(
     "partsPreviewSummary",
-    `${partsState.previewFileName}: ${rows.length} rows found, ${uniqueParts.size} unique parts. ${exactCount} exact match(es), ${oldCount} old-number match(es), ${reviewCount} row(s) need review.`
+    `${partsState.previewFileName}: ${rows.length} rows found, ${uniqueParts.size} unique parts. ${exactCount} existing match(es), ${oldCount} old-number match(es), ${mergeCount} description update(s), ${reviewCount} row(s) need review.`
   );
 
   const table = document.getElementById("partsPreviewTable");
@@ -1243,6 +1252,7 @@ function renderPreviewRowCard(row) {
   const suggestion = row.suggested_current_part_number
     ? `<span>Suggested: <strong>${escapeHTML(row.suggested_current_part_number)}</strong></span>`
     : "";
+  const existingDetail = getPreviewExistingDetail(row);
 
   return `
     <article class="parts-preview-row ${row.include ? "" : "excluded"}">
@@ -1277,11 +1287,21 @@ function renderPreviewRowCard(row) {
         <div class="parts-preview-note">
           ${suggestion}
           <span>${escapeHTML(row.reason || "Ready to import")}</span>
+          ${existingDetail}
           <span>${confidence}% confidence</span>
         </div>
       </div>
     </article>
   `;
+}
+
+function getPreviewExistingDetail(row) {
+  if (!row.suggested_current_part_number && !row.suggested_description) return "";
+  const details = [
+    row.suggested_current_part_number ? `Part ${row.suggested_current_part_number}` : "",
+    row.suggested_description ? row.suggested_description : ""
+  ].filter(Boolean).join(" - ");
+  return details ? `<span>Existing: <strong>${escapeHTML(details)}</strong></span>` : "";
 }
 
 function openPartsPreview(title) {
@@ -1387,7 +1407,7 @@ function buildImportHistoryRecord(rows) {
     import_type: partsState.previewType,
     row_count: rows.length,
     unique_parts_count: new Set(rows.map(row => normalizePartNumber(row.current_part_number || row.extracted_part_number)).filter(Boolean)).size,
-    exact_match_count: rows.filter(row => row.match_type === "exact").length,
+    exact_match_count: rows.filter(row => ["exact", "same_number_different_description"].includes(row.match_type)).length,
     old_number_match_count: rows.filter(row => row.match_type === "old_number").length,
     suggested_match_count: rows.filter(row => ["suggested", "description_match"].includes(row.match_type)).length,
     review_count: rows.filter(row => row.status === "needs_review" || row.status === "conflict").length,
@@ -1424,6 +1444,10 @@ function applyPreviewRow(row, importId, changed) {
   }
 
   let part = existing;
+  if (part && row.status !== "conflict" && row.status !== "needs_review" && row.match_type !== "suggested") {
+    mergeExistingPartFromImport(part, row, source, now, changed);
+  }
+
   if (!part && currentPartNumber && row.status !== "conflict" && row.status !== "needs_review" && row.match_type !== "suggested") {
     part = {
       id: makeId("part"),
@@ -1504,6 +1528,68 @@ function applyPreviewRow(row, importId, changed) {
     partsState.usage.unshift(usage);
     changed.usage.push(usage);
   }
+}
+
+function mergeExistingPartFromImport(part, row, source, now, changed) {
+  let didChange = false;
+  const nextSource = mergeFileNameLabels(part.source, row.file_name || source.source || partsState.previewFileName || partsState.previewType);
+  if (nextSource !== (part.source || "")) {
+    part.source = nextSource;
+    didChange = true;
+  }
+
+  const nextDescription = mergePartDescriptions(part.description, row.description);
+  if (nextDescription !== (part.description || "")) {
+    part.description = nextDescription;
+    part.normalized_description = normalizeDescription(nextDescription);
+    didChange = true;
+  }
+
+  if (!didChange) return;
+  part.updated_at = now;
+  if (!changed.master.some(row => row.id === part.id)) {
+    changed.master.push(part);
+  }
+}
+
+function mergePartDescriptions(existingDescription, incomingDescription) {
+  const descriptions = uniqueByNormalizedText([
+    existingDescription,
+    incomingDescription
+  ], normalizeDescription);
+  return descriptions.join(" | ");
+}
+
+function mergeFileNameLabels(existingValue, incomingValue) {
+  const labels = uniqueByNormalizedText([
+    ...getFileNameLabels(existingValue),
+    ...getFileNameLabels(incomingValue)
+  ], value => normalizeSearch(value));
+  return labels.join(" | ");
+}
+
+function getFileNameLabels(value) {
+  return String(value || "")
+    .split(/\s+\|\s+/)
+    .map(label => label.trim())
+    .filter(Boolean);
+}
+
+function uniqueByNormalizedText(values, normalize) {
+  const seen = new Set();
+  return values
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .filter(value => {
+      const key = normalize(value);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function rowMatchesFileName(row, fileName) {
+  return Object.values(row).some(value => getFileNameLabels(value).includes(fileName));
 }
 
 function getUsageLocationKey(row) {
@@ -1928,6 +2014,11 @@ function getNumericPartDigits(value) {
   return /^[\d\s_.-]+$/.test(text) ? digits : "";
 }
 
+function isImportableNumericPartNumber(value) {
+  const digits = getNumericPartDigits(value);
+  return digits.length === 7 || digits.length === 8;
+}
+
 function isCurrentPartNumberCandidate(value) {
   return getNumericPartDigits(value).length === 8;
 }
@@ -2050,7 +2141,7 @@ function getBadgeClass(value) {
   const normalized = normalizeSearch(value).replace(/\s+/g, "-");
   if (normalized.includes("conflict")) return "conflict";
   if (normalized.includes("review") || normalized.includes("suggested")) return "needs-review";
-  if (normalized.includes("exact") || normalized.includes("active") || normalized.includes("old")) return "exact";
+  if (normalized.includes("exact") || normalized.includes("active") || normalized.includes("old") || normalized.includes("same-number")) return "exact";
   if (normalized.includes("new")) return "new-part";
   return "";
 }
