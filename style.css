@@ -2655,6 +2655,18 @@ details summary:hover {
 .app-prompt-actions {
   justify-content: flex-end;
 }
+
+.parts-message-modal-content {
+  max-width: min(92vw, 520px);
+}
+
+.parts-message-modal-content .button-row {
+  justify-content: flex-end;
+}
+
+.parts-message-modal-content .hidden {
+  display: none;
+}
 .converter-part-edit-input {
   width: 150px;
   max-width: 100%;
@@ -3574,6 +3586,7 @@ summary {
 .parts-db-toolbar input,
 .parts-db-toolbar select,
 .parts-edit-fields input,
+.parts-edit-fields textarea,
 .parts-column-mapping select,
 .parts-data-table input {
   min-width: 0;
@@ -3639,6 +3652,11 @@ summary {
 .parts-table-wrap {
   width: 100%;
   overflow-x: auto;
+}
+
+.parts-cell-lines {
+  display: block;
+  white-space: pre-line;
 }
 
 .parts-table-heading {

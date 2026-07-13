@@ -14,6 +14,7 @@ let partsCurrentUser = null;
 let partsLoginRequired = true;
 let partsStorageUsageCheckedAt = 0;
 let partsStorageUsageChecking = false;
+let partsMessageResolver = null;
 
 let partsState = {
   master: [],
@@ -75,6 +76,8 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsEditSaveButton")?.addEventListener("click", savePartsEditModal);
   document.getElementById("partsSelectVisibleButton")?.addEventListener("click", toggleVisiblePartsSelection);
   document.getElementById("partsDeleteSelectedButton")?.addEventListener("click", deleteSelectedPartsRecords);
+  document.getElementById("partsMessageCancelButton")?.addEventListener("click", () => closePartsMessage(false));
+  document.getElementById("partsMessageConfirmButton")?.addEventListener("click", () => closePartsMessage(true));
 }
 
 function openPartsLoginModal() {
@@ -83,6 +86,48 @@ function openPartsLoginModal() {
 
 function closePartsLoginModal() {
   document.getElementById("partsLoginModal")?.classList.add("hidden");
+}
+
+function showPartsMessage(title, message, options = {}) {
+  const modal = document.getElementById("partsMessageModal");
+  const confirmButton = document.getElementById("partsMessageConfirmButton");
+  const cancelButton = document.getElementById("partsMessageCancelButton");
+  if (!modal || !confirmButton || !cancelButton) {
+    return Promise.resolve(true);
+  }
+
+  if (partsMessageResolver) closePartsMessage(false);
+
+  setText("partsMessageTitle", title || "Parts Library");
+  setText("partsMessageText", message || "");
+  confirmButton.textContent = options.confirmText || "OK";
+  confirmButton.classList.toggle("danger", options.variant === "danger");
+  cancelButton.textContent = options.cancelText || "Cancel";
+  cancelButton.classList.toggle("hidden", options.cancelText === null);
+  modal.classList.remove("hidden");
+  confirmButton.focus();
+
+  return new Promise(resolve => {
+    partsMessageResolver = resolve;
+  });
+}
+
+function closePartsMessage(result) {
+  document.getElementById("partsMessageModal")?.classList.add("hidden");
+  const confirmButton = document.getElementById("partsMessageConfirmButton");
+  if (confirmButton) confirmButton.classList.remove("danger");
+  const resolver = partsMessageResolver;
+  partsMessageResolver = null;
+  if (resolver) resolver(Boolean(result));
+}
+
+function showPartsError(message, title = "Parts Library Error") {
+  setPartsStatus(message);
+  return showPartsMessage(title, message, {
+    confirmText: "OK",
+    cancelText: null,
+    variant: "error"
+  });
 }
 
 async function checkPartsLogin() {
@@ -236,7 +281,10 @@ async function loadPartsDatabase() {
   Object.assign(partsState, local);
   normalizePartsFileNameLabels();
 
-  if (!hasSupabaseParts()) return;
+  if (!hasSupabaseParts()) {
+    saveLocalPartsDatabase();
+    return;
+  }
 
   try {
     const master = await fetchSupabaseRows(PARTS_TABLES.master);
@@ -296,16 +344,21 @@ function normalizePartsFileNameLabels() {
   };
 
   partsState.master.forEach(row => {
-    row.source = cleanFileName(row.source);
+    row.source = mergeFileNameLabels(cleanFileName(row.source), "");
+    row.description = mergePartDescriptions(row.description, "");
   });
   partsState.aliases.forEach(row => {
-    row.source = cleanFileName(row.source);
+    row.source = mergeFileNameLabels(cleanFileName(row.source), "");
+    row.description = mergePartDescriptions(row.description, "");
   });
   partsState.usage.forEach(row => {
-    row.pdf_file_name = cleanFileName(row.pdf_file_name);
+    row.pdf_file_name = mergeFileNameLabels(cleanFileName(row.pdf_file_name), "");
+    row.description = mergePartDescriptions(row.description, "");
   });
   partsState.reviews.forEach(row => {
-    row.source_file = cleanFileName(row.source_file);
+    row.source_file = mergeFileNameLabels(cleanFileName(row.source_file), "");
+    row.extracted_description = mergePartDescriptions(row.extracted_description, "");
+    row.suggested_description = mergePartDescriptions(row.suggested_description, "");
   });
 }
 
@@ -428,8 +481,8 @@ function renderPartsSortOptions() {
 }
 
 function renderPartsSummary() {
-  setText("partsTotalCount", partsState.master.length);
-  setText("partsAliasCount", partsState.aliases.length);
+  setText("partsTotalCount", getUniqueCurrentPartsCount());
+  setText("partsAliasCount", getUniqueOldPartNumbersCount());
   setText("partsUsageCount", partsState.usage.length);
   setText("partsHistoryCount", partsState.history.length);
   renderPartsHeaderSummary();
@@ -439,8 +492,16 @@ function renderPartsHeaderSummary() {
   const totalRecords = partsState.master.length + partsState.aliases.length + partsState.usage.length + partsState.reviews.length + partsState.history.length;
 
   setText("partsHeaderRecordCount", `${totalRecords} part record${totalRecords === 1 ? "" : "s"} saved`);
-  setText("partsHeaderUsageText", `Current parts: ${partsState.master.length} - Drawing usage: ${partsState.usage.length}`);
+  setText("partsHeaderUsageText", `Current parts: ${getUniqueCurrentPartsCount()} - Old part numbers: ${getUniqueOldPartNumbersCount()} - Drawing usage: ${partsState.usage.length}`);
   updatePartsSharedStorageUsage();
+}
+
+function getUniqueCurrentPartsCount() {
+  return new Set(partsState.master.map(row => getPartNumberKey(row.current_part_number)).filter(Boolean)).size;
+}
+
+function getUniqueOldPartNumbersCount() {
+  return new Set(partsState.aliases.map(row => getPartNumberKey(row.old_part_number)).filter(Boolean)).size;
 }
 
 async function updatePartsSharedStorageUsage() {
@@ -542,8 +603,19 @@ function formatPartsStorageBytes(bytes) {
 function renderActivePartsListHeading() {
   const config = getPartsTableConfig(partsState.activeTab);
   const rows = getFilteredRows(partsState.activeTab);
+  const count = getVisiblePartsCount(partsState.activeTab, rows);
   setText("partsActiveListTitle", config.title);
-  setText("partsActiveListSummary", `${rows.length} ${config.emptyLabel} shown. Use the filters above to narrow this list.`);
+  setText("partsActiveListSummary", `${count} ${config.emptyLabel} shown. Use the filters above to narrow this list.`);
+}
+
+function getVisiblePartsCount(tab, rows) {
+  if (tab === "master") {
+    return new Set(rows.map(row => getPartNumberKey(row.current_part_number)).filter(Boolean)).size;
+  }
+  if (tab === "aliases") {
+    return new Set(rows.map(row => getPartNumberKey(row.old_part_number)).filter(Boolean)).size;
+  }
+  return rows.length;
 }
 
 function renderActivePartsTable() {
@@ -604,7 +676,7 @@ function formatPartsCell(row, col) {
   const value = row[col.key];
   if (col.badge) return `<span class="parts-badge ${getBadgeClass(value)}">${escapeHTML(formatValue(value))}</span>`;
   if (col.check) return value ? `<span class="parts-badge needs-review">Needs Review</span>` : "";
-  return escapeHTML(formatValue(value));
+  return `<span class="parts-cell-lines">${escapeHTML(formatValue(value))}</span>`;
 }
 
 function getSelectedPartsSet(tab = partsState.activeTab) {
@@ -798,7 +870,7 @@ function getSortMarker(key) {
 
 async function startDrawingPDFImport(files) {
   if (typeof pdfjsLib === "undefined") {
-    setPartsStatus("PDF import library is not loaded.");
+    showPartsError("PDF import library is not loaded.");
     return;
   }
 
@@ -862,7 +934,7 @@ async function startDrawingPDFImport(files) {
     updatePartsCancelButton();
     console.error("Drawing PDF import failed:", error);
     updatePartsProgress("Could not read this PDF.", 100);
-    setPartsStatus(error.message || "Could not import drawing PDF.");
+    showPartsError(error.message || "Could not import drawing PDF.");
   }
 }
 
@@ -994,7 +1066,7 @@ function extractReferencedDrawing(value) {
 
 async function startExcelImport(files) {
   if (typeof XLSX === "undefined") {
-    setPartsStatus("Excel import library is not loaded.");
+    showPartsError("Excel import library is not loaded.");
     return;
   }
 
@@ -1025,7 +1097,7 @@ async function startExcelImport(files) {
       if (isExportedPartsWorkbook(workbook)) {
         const rows = getExportedPartsWorkbookPreviewRows(workbook, file.name);
         partsState.previewRows.push(...rows);
-        addPartsImportLog(`Detected exported library workbook ${file.name} with ${rows.length} current part row(s).`);
+        addPartsImportLog(`Detected exported library workbook ${file.name} with ${rows.length} part and old-number row(s).`);
         continue;
       }
 
@@ -1062,7 +1134,7 @@ async function startExcelImport(files) {
     updatePartsCancelButton();
     console.error("Excel import failed:", error);
     updatePartsProgress("Could not read this workbook.", 100);
-    setPartsStatus(error.message || "Could not import Excel file.");
+    showPartsError(error.message || "Could not import Excel file.");
   }
 }
 
@@ -1130,15 +1202,14 @@ function buildPreviewRow(source, fileName) {
 }
 
 function findPartMatch(partNumber, description) {
-  const normalizedPart = normalizePartNumber(partNumber);
-  const compactPart = compactPartNumber(partNumber);
+  const compactPart = getPartNumberKey(partNumber);
   const normalizedDescription = normalizeDescription(description);
 
-  const exactPart = partsState.master.find(part => normalizePartNumber(part.current_part_number) === normalizedPart && normalizedPart);
+  const exactPart = partsState.master.find(part => getPartNumberKey(part.current_part_number) === compactPart && compactPart);
   if (exactPart) {
     const incomingDescription = normalizedDescription;
-    const existingDescription = normalizeDescription(exactPart.description);
-    if (incomingDescription && existingDescription && incomingDescription !== existingDescription) {
+    const existingDescriptions = getDescriptionKeys(exactPart.description);
+    if (incomingDescription && existingDescriptions.length && !existingDescriptions.includes(incomingDescription)) {
       return buildMatch(
         "same_number_different_description",
         exactPart,
@@ -1149,16 +1220,16 @@ function findPartMatch(partNumber, description) {
     return buildMatch("exact", exactPart, 1, `Same current part number already exists: ${exactPart.current_part_number}.`);
   }
 
-  const oldMatch = partsState.aliases.find(alias => normalizePartNumber(alias.old_part_number) === normalizedPart && normalizedPart);
+  const oldMatch = partsState.aliases.find(alias => getPartNumberKey(alias.old_part_number) === compactPart && compactPart);
   if (oldMatch) {
     const part = findMasterPartByNumber(oldMatch.current_part_number);
     return buildMatch("old_number", part || oldMatch, 1, `Old number matches current part ${oldMatch.current_part_number}.`);
   }
 
-  const normalizedMatch = partsState.master.find(part => compactPartNumber(part.current_part_number) === compactPart && compactPart);
+  const normalizedMatch = partsState.master.find(part => getPartNumberKey(part.current_part_number) === compactPart && compactPart);
   if (normalizedMatch) return buildMatch("normalized_number", normalizedMatch, 0.98, `Same part number after removing spaces/dashes: ${normalizedMatch.current_part_number}.`);
 
-  const descriptionMatch = partsState.master.find(part => normalizeDescription(part.description) === normalizedDescription && normalizedDescription);
+  const descriptionMatch = partsState.master.find(part => getDescriptionKeys(part.description).includes(normalizedDescription) && normalizedDescription);
   if (descriptionMatch) return buildMatch("description_match", descriptionMatch, 1, `Description already exists under current part ${descriptionMatch.current_part_number}.`);
 
   const fuzzy = findFuzzyDescriptionMatch(normalizedDescription);
@@ -1181,10 +1252,10 @@ function findFuzzyDescriptionMatch(normalizedDescription) {
   if (!normalizedDescription) return null;
   let best = null;
   partsState.master.forEach(part => {
-    const candidate = normalizeDescription(part.description);
-    if (!candidate) return;
-    const score = diceCoefficient(normalizedDescription, candidate);
-    if (score >= DESCRIPTION_MATCH_THRESHOLD && (!best || score > best.score)) best = { part, score };
+    getDescriptionKeys(part.description).forEach(candidate => {
+      const score = diceCoefficient(normalizedDescription, candidate);
+      if (score >= DESCRIPTION_MATCH_THRESHOLD && (!best || score > best.score)) best = { part, score };
+    });
   });
   return best;
 }
@@ -1199,7 +1270,7 @@ function getPreviewStatus(match, source) {
 
 function renderImportPreview() {
   const rows = partsState.previewRows;
-  const uniqueParts = new Set(rows.map(row => normalizePartNumber(row.current_part_number || row.extracted_part_number)).filter(Boolean));
+  const uniqueParts = new Set(rows.map(getPreviewCurrentPartKey).filter(Boolean));
   const exactCount = rows.filter(row => ["exact", "same_number_different_description"].includes(row.match_type)).length;
   const oldCount = rows.filter(row => row.match_type === "old_number").length;
   const mergeCount = rows.filter(row => row.match_type === "same_number_different_description").length;
@@ -1376,7 +1447,7 @@ async function savePartsImportPreview() {
   if (!ensurePartsUnlocked()) return;
   const rows = partsState.previewRows.filter(row => row.include);
   if (!rows.length) {
-    setPartsStatus("Select at least one row to import.");
+    showPartsError("Select at least one row to import.", "Nothing Selected");
     return;
   }
 
@@ -1403,10 +1474,10 @@ function buildImportHistoryRecord(rows) {
   const now = nowISO();
   return {
     id: makeId("import"),
-    file_name: partsState.previewFileName,
+    file_name: getImportHistoryFileNames(rows),
     import_type: partsState.previewType,
     row_count: rows.length,
-    unique_parts_count: new Set(rows.map(row => normalizePartNumber(row.current_part_number || row.extracted_part_number)).filter(Boolean)).size,
+    unique_parts_count: new Set(rows.map(getPreviewCurrentPartKey).filter(Boolean)).size,
     exact_match_count: rows.filter(row => ["exact", "same_number_different_description"].includes(row.match_type)).length,
     old_number_match_count: rows.filter(row => row.match_type === "old_number").length,
     suggested_match_count: rows.filter(row => ["suggested", "description_match"].includes(row.match_type)).length,
@@ -1415,6 +1486,22 @@ function buildImportHistoryRecord(rows) {
     created_at: now,
     updated_at: now
   };
+}
+
+function getImportHistoryFileNames(rows) {
+  const fileNames = uniqueByNormalizedText(
+    rows.map(row => row.file_name || partsState.previewFileName),
+    value => normalizeSearch(value)
+  );
+  return fileNames.join("\n") || partsState.previewFileName;
+}
+
+function getPreviewCurrentPartKey(row) {
+  if (row.current_part_number) return getPartNumberKey(row.current_part_number);
+  if (!row.source?.old_part_number && isCurrentPartNumberCandidate(row.extracted_part_number)) {
+    return getPartNumberKey(row.extracted_part_number);
+  }
+  return "";
 }
 
 function applyPreviewRow(row, importId, changed) {
@@ -1473,11 +1560,29 @@ function applyPreviewRow(row, importId, changed) {
   }
 
   if (source.old_part_number && part) {
-    const aliasExists = partsState.aliases.some(alias =>
-      normalizePartNumber(alias.old_part_number) === normalizePartNumber(source.old_part_number) &&
-      normalizePartNumber(alias.current_part_number) === normalizePartNumber(part.current_part_number)
+    const existingAlias = partsState.aliases.find(alias =>
+      getPartNumberKey(alias.old_part_number) === getPartNumberKey(source.old_part_number) &&
+      getPartNumberKey(alias.current_part_number) === getPartNumberKey(part.current_part_number)
     );
-    if (!aliasExists) {
+    if (existingAlias) {
+      let aliasChanged = false;
+      const nextAliasSource = mergeFileNameLabels(existingAlias.source, row.file_name || source.source || partsState.previewFileName || partsState.previewType);
+      if (nextAliasSource !== (existingAlias.source || "")) {
+        existingAlias.source = nextAliasSource;
+        aliasChanged = true;
+      }
+      const nextAliasDescription = mergePartDescriptions(existingAlias.description, row.description);
+      if (nextAliasDescription !== (existingAlias.description || "")) {
+        existingAlias.description = nextAliasDescription;
+        aliasChanged = true;
+      }
+      if (aliasChanged) {
+        existingAlias.updated_at = now;
+        if (!changed.aliases.some(row => row.id === existingAlias.id)) {
+          changed.aliases.push(existingAlias);
+        }
+      }
+    } else {
       const alias = {
         id: makeId("alias"),
         part_id: part.id,
@@ -1554,23 +1659,33 @@ function mergeExistingPartFromImport(part, row, source, now, changed) {
 
 function mergePartDescriptions(existingDescription, incomingDescription) {
   const descriptions = uniqueByNormalizedText([
-    existingDescription,
-    incomingDescription
+    ...getMultilineValues(existingDescription),
+    ...getMultilineValues(incomingDescription)
   ], normalizeDescription);
-  return descriptions.join(" | ");
+  return descriptions.join("\n");
 }
 
 function mergeFileNameLabels(existingValue, incomingValue) {
   const labels = uniqueByNormalizedText([
-    ...getFileNameLabels(existingValue),
-    ...getFileNameLabels(incomingValue)
+    ...getMultilineValues(existingValue),
+    ...getMultilineValues(incomingValue)
   ], value => normalizeSearch(value));
-  return labels.join(" | ");
+  return labels.join("\n");
 }
 
 function getFileNameLabels(value) {
+  return getMultilineValues(value);
+}
+
+function getDescriptionKeys(value) {
+  return getMultilineValues(value)
+    .map(normalizeDescription)
+    .filter(Boolean);
+}
+
+function getMultilineValues(value) {
   return String(value || "")
-    .split(/\s+\|\s+/)
+    .split(/\s*(?:\r?\n|\|)\s*/)
     .map(label => label.trim())
     .filter(Boolean);
 }
@@ -1641,11 +1756,19 @@ function handlePartsAction(action, id) {
 }
 
 async function deletePartsRecord(tab, id) {
-  if (!confirm("Delete this record?")) return;
-  partsState[tab] = (partsState[tab] || []).filter(row => row.id !== id);
-  getSelectedPartsSet(tab).delete(id);
-  saveLocalPartsDatabase();
-  await deleteSupabaseRow(PARTS_TABLES[tab], id);
+  const deletePlan = buildPartsDeletePlan(tab, [id]);
+  const confirmed = await showPartsMessage(
+    "Delete Record",
+    getDeletePlanMessage(deletePlan, "Delete this record from the Parts Library?"),
+    {
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      variant: "danger"
+    }
+  );
+  if (!confirmed) return;
+  await applyPartsDeletePlan(deletePlan);
+  setPartsStatus(getDeletePlanStatus(deletePlan));
   renderPartsDatabase();
 }
 
@@ -1655,20 +1778,237 @@ async function deleteSelectedPartsRecords() {
   const selected = getSelectedPartsSet(tab);
   const ids = [...selected];
   if (!ids.length) return;
+  const deletePlan = buildPartsDeletePlan(tab, ids);
 
-  if (!confirm(`Delete ${ids.length} selected record${ids.length === 1 ? "" : "s"}?`)) return;
+  const confirmed = await showPartsMessage(
+    "Delete Selected Records",
+    getDeletePlanMessage(deletePlan, `Delete ${ids.length} selected record${ids.length === 1 ? "" : "s"} from the Parts Library?`),
+    {
+      confirmText: "Delete Selected",
+      cancelText: "Cancel",
+      variant: "danger"
+    }
+  );
+  if (!confirmed) return;
 
-  const idSet = new Set(ids);
-  partsState[tab] = (partsState[tab] || []).filter(row => !idSet.has(row.id));
-  partsState.selected[tab] = new Set();
-  saveLocalPartsDatabase();
+  await applyPartsDeletePlan(deletePlan);
+  setPartsStatus(getDeletePlanStatus(deletePlan));
+  renderPartsDatabase();
+}
 
-  if (hasSupabaseParts()) {
-    await Promise.all(ids.map(id => deleteSupabaseRow(PARTS_TABLES[tab], id)));
+function buildPartsDeletePlan(tab, ids) {
+  const plan = {
+    deleteIds: {
+      master: new Set(),
+      aliases: new Set(),
+      usage: new Set(),
+      reviews: new Set(),
+      history: new Set()
+    },
+    updateRows: {
+      master: new Map(),
+      aliases: new Map()
+    },
+    removedFileNames: new Set()
+  };
+
+  ids.forEach(id => addRecordToDeletePlan(plan, tab, id));
+  return plan;
+}
+
+function addRecordToDeletePlan(plan, tab, id) {
+  const row = partsState[tab]?.find(item => item.id === id);
+  if (!row || plan.deleteIds[tab]?.has(id)) return;
+
+  plan.deleteIds[tab].add(id);
+
+  if (tab === "master") {
+    addCurrentPartRelatedDeletes(plan, row);
+    return;
   }
 
-  setPartsStatus(`Deleted ${ids.length} selected record${ids.length === 1 ? "" : "s"}.`);
-  renderPartsDatabase();
+  if (tab === "aliases") {
+    addOldPartRelatedDeletes(plan, row);
+    return;
+  }
+
+  if (tab === "usage") {
+    return;
+  }
+
+  if (tab === "reviews") {
+    return;
+  }
+
+  if (tab === "history") {
+    addImportHistoryRelatedDeletes(plan, row);
+  }
+}
+
+function addOldPartRelatedDeletes(plan, alias) {
+  const oldKey = getPartNumberKey(alias.old_part_number);
+  const currentKey = getPartNumberKey(alias.current_part_number);
+  partsState.reviews.forEach(review => {
+    const reviewKeys = [
+      review.extracted_part_number,
+      review.suggested_current_part_number
+    ].map(getPartNumberKey);
+    if (reviewKeys.includes(oldKey) || reviewKeys.includes(currentKey)) {
+      plan.deleteIds.reviews.add(review.id);
+    }
+  });
+}
+
+function addCurrentPartRelatedDeletes(plan, part) {
+  const partKey = getPartNumberKey(part.current_part_number);
+  partsState.aliases.forEach(alias => {
+    if (alias.part_id === part.id || getPartNumberKey(alias.current_part_number) === partKey) {
+      plan.deleteIds.aliases.add(alias.id);
+    }
+  });
+  partsState.usage.forEach(usage => {
+    if (usage.part_id === part.id || getPartNumberKey(usage.current_part_number) === partKey) {
+      plan.deleteIds.usage.add(usage.id);
+    }
+  });
+  partsState.reviews.forEach(review => {
+    const reviewKeys = [
+      review.extracted_part_number,
+      review.suggested_current_part_number
+    ].map(getPartNumberKey);
+    if (reviewKeys.includes(partKey)) {
+      plan.deleteIds.reviews.add(review.id);
+    }
+  });
+}
+
+function addImportHistoryRelatedDeletes(plan, historyRow) {
+  const fileNames = getHistoryFileNames(historyRow.file_name);
+  fileNames.forEach(fileName => plan.removedFileNames.add(fileName));
+
+  partsState.usage.forEach(usage => {
+    if (usage.source_import_id === historyRow.id || fileNames.some(fileName => getFileNameLabels(usage.pdf_file_name).includes(fileName))) {
+      plan.deleteIds.usage.add(usage.id);
+    }
+  });
+
+  partsState.reviews.forEach(review => {
+    if (fileNames.some(fileName => getFileNameLabels(review.source_file).includes(fileName))) {
+      plan.deleteIds.reviews.add(review.id);
+    }
+  });
+
+  cleanupFileReferencesForHistoryDelete(plan, fileNames);
+}
+
+function getHistoryFileNames(value) {
+  const text = String(value || "").trim();
+  const summaryMatch = text.match(/^\d+\s+files:\s*(.+)$/i);
+  if (summaryMatch) {
+    return summaryMatch[1]
+      .split(/\s*,\s*/)
+      .map(fileName => fileName.trim())
+      .filter(Boolean);
+  }
+  return getFileNameLabels(text);
+}
+
+function cleanupFileReferencesForHistoryDelete(plan, fileNames) {
+  if (!fileNames.length) return;
+
+  partsState.master.forEach(part => {
+    const remainingSources = getFileNameLabels(part.source).filter(fileName => !fileNames.includes(fileName));
+    if (!remainingSources.length && fileNames.some(fileName => getFileNameLabels(part.source).includes(fileName))) {
+      addRecordToDeletePlan(plan, "master", part.id);
+      return;
+    }
+    if (remainingSources.length !== getFileNameLabels(part.source).length) {
+      plan.updateRows.master.set(part.id, {
+        ...part,
+        source: remainingSources.join("\n"),
+        updated_at: nowISO()
+      });
+    }
+  });
+
+  partsState.aliases.forEach(alias => {
+    const remainingSources = getFileNameLabels(alias.source).filter(fileName => !fileNames.includes(fileName));
+    if (!remainingSources.length && fileNames.some(fileName => getFileNameLabels(alias.source).includes(fileName))) {
+      plan.deleteIds.aliases.add(alias.id);
+      return;
+    }
+    if (remainingSources.length !== getFileNameLabels(alias.source).length) {
+      plan.updateRows.aliases.set(alias.id, {
+        ...alias,
+        source: remainingSources.join("\n"),
+        updated_at: nowISO()
+      });
+    }
+  });
+}
+
+async function applyPartsDeletePlan(plan) {
+  Object.entries(plan.updateRows).forEach(([tab, rows]) => {
+    rows.forEach(row => {
+      if (plan.deleteIds[tab]?.has(row.id)) return;
+      const index = partsState[tab].findIndex(item => item.id === row.id);
+      if (index >= 0) partsState[tab][index] = row;
+    });
+  });
+
+  Object.entries(plan.deleteIds).forEach(([tab, ids]) => {
+    if (!ids.size) return;
+    const idSet = new Set(ids);
+    partsState[tab] = (partsState[tab] || []).filter(row => !idSet.has(row.id));
+  });
+
+  Object.keys(partsState.selected).forEach(tab => {
+    const selected = getSelectedPartsSet(tab);
+    plan.deleteIds[tab]?.forEach(id => selected.delete(id));
+  });
+
+  saveLocalPartsDatabase();
+
+  if (!hasSupabaseParts()) return;
+
+  const deletes = Object.entries(plan.deleteIds).flatMap(([tab, ids]) =>
+    [...ids].map(id => deleteSupabaseRow(PARTS_TABLES[tab], id))
+  );
+  const updates = Object.entries(plan.updateRows).flatMap(([tab, rows]) => {
+    const keptRows = [...rows.values()].filter(row => !plan.deleteIds[tab]?.has(row.id));
+    return keptRows.length ? [upsertSupabaseRows(PARTS_TABLES[tab], keptRows)] : [];
+  });
+
+  await Promise.all([...deletes, ...updates]);
+}
+
+function getDeletePlanMessage(plan, fallback) {
+  const parts = getDeletePlanParts(plan);
+  if (!parts.length) return fallback;
+  return `${fallback}\n\nThis will also remove/update related records:\n${parts.map(part => `- ${part}`).join("\n")}`;
+}
+
+function getDeletePlanStatus(plan) {
+  const totalDeleted = Object.values(plan.deleteIds).reduce((sum, ids) => sum + ids.size, 0);
+  const totalUpdated = Object.values(plan.updateRows).reduce((sum, rows) => sum + rows.size, 0);
+  const updateText = totalUpdated ? ` and updated ${totalUpdated} related record${totalUpdated === 1 ? "" : "s"}` : "";
+  return `Deleted ${totalDeleted} record${totalDeleted === 1 ? "" : "s"}${updateText}.`;
+}
+
+function getDeletePlanParts(plan) {
+  const labels = {
+    master: "current part",
+    aliases: "old part number",
+    usage: "drawing usage",
+    reviews: "item to check",
+    history: "import history"
+  };
+  const parts = Object.entries(plan.deleteIds)
+    .filter(([, ids]) => ids.size)
+    .map(([tab, ids]) => `${ids.size} ${labels[tab]} record${ids.size === 1 ? "" : "s"}`);
+  const updated = Object.values(plan.updateRows).reduce((sum, rows) => sum + rows.size, 0);
+  if (updated) parts.push(`${updated} file-name reference${updated === 1 ? "" : "s"} updated`);
+  return parts;
 }
 
 async function handleReviewAction(action, id) {
@@ -1747,10 +2087,16 @@ function openPartsEditModal(tab, id = "") {
   container.innerHTML = fields.map(field => `
     <label>
       <span>${escapeHTML(field.label)}</span>
-      <input data-edit-field="${field.key}" value="${escapeAttr(row?.[field.key] ?? field.defaultValue ?? "")}" />
+      ${isMultilineEditField(field.key)
+        ? `<textarea data-edit-field="${field.key}" rows="3">${escapeHTML(row?.[field.key] ?? field.defaultValue ?? "")}</textarea>`
+        : `<input data-edit-field="${field.key}" value="${escapeAttr(row?.[field.key] ?? field.defaultValue ?? "")}" />`}
     </label>
   `).join("");
   document.getElementById("partsEditModal")?.classList.remove("hidden");
+}
+
+function isMultilineEditField(key) {
+  return ["description", "source", "pdf_file_name", "source_file", "notes", "extracted_description", "suggested_description"].includes(key);
 }
 
 function closePartsEditModal() {
@@ -1762,7 +2108,10 @@ async function savePartsEditModal() {
   const target = partsState.editTarget;
   if (!target) return;
   const fields = Array.from(document.querySelectorAll("[data-edit-field]"));
-  const values = Object.fromEntries(fields.map(input => [input.dataset.editField, input.value.trim()]));
+  const values = Object.fromEntries(fields.map(input => [
+    input.dataset.editField,
+    normalizeEditedPartsValue(input.dataset.editField, input.value)
+  ]));
   const now = nowISO();
   const tab = target.tab;
   let row = target.id ? partsState[tab].find(item => item.id === target.id) : null;
@@ -1785,6 +2134,16 @@ async function savePartsEditModal() {
   await upsertSupabaseRows(PARTS_TABLES[tab], [row]);
   closePartsEditModal();
   renderPartsDatabase();
+}
+
+function normalizeEditedPartsValue(key, value) {
+  if (["source", "pdf_file_name", "source_file"].includes(key)) {
+    return mergeFileNameLabels(value, "");
+  }
+  if (["description", "extracted_description", "suggested_description", "notes"].includes(key)) {
+    return mergePartDescriptions(value, "");
+  }
+  return String(value || "").trim();
 }
 
 function getEditableFields(tab) {
@@ -1827,7 +2186,7 @@ function getEditableFields(tab) {
 
 async function exportPartsDatabase() {
   if (typeof XLSX === "undefined") {
-    setPartsStatus("Excel export library is not loaded.");
+    showPartsError("Excel export library is not loaded.");
     return;
   }
   const workbook = XLSX.utils.book_new();
@@ -1885,10 +2244,17 @@ async function previewDatabaseWorkbook(workbook, fileName) {
 
 function getExportedPartsWorkbookPreviewRows(workbook, fileName) {
   const masterRows = sheetRows(workbook, "Master Parts");
-  return masterRows.map((row, index) => buildExcelPreviewRow(row, {
+  const masterPreviewRows = masterRows.map((row, index) => buildExcelPreviewRow(row, {
     current_part_number: findHeaderKey(row, ["current part number", "current_part_number"]),
     description: findHeaderKey(row, ["description"])
   }, fileName, "Master Parts", index + 2)).filter(Boolean);
+  const aliasRows = sheetRows(workbook, "Old Part Number Map");
+  const aliasPreviewRows = aliasRows.map((row, index) => buildExcelPreviewRow(row, {
+    old_part_number: findHeaderKey(row, ["old part number", "old_part_number"]),
+    current_part_number: findHeaderKey(row, ["current part number", "current_part_number"]),
+    description: findHeaderKey(row, ["description"])
+  }, fileName, "Old Part Number Map", index + 2)).filter(Boolean);
+  return [...masterPreviewRows, ...aliasPreviewRows];
 }
 
 function sheetRows(workbook, sheetName) {
@@ -1995,8 +2361,8 @@ function clearPartsFilters() {
 }
 
 function findMasterPartByNumber(partNumber) {
-  const normalized = normalizePartNumber(partNumber);
-  return partsState.master.find(part => normalizePartNumber(part.current_part_number) === normalized && normalized);
+  const key = getPartNumberKey(partNumber);
+  return partsState.master.find(part => getPartNumberKey(part.current_part_number) === key && key);
 }
 
 function normalizePartNumber(value) {
@@ -2005,6 +2371,10 @@ function normalizePartNumber(value) {
     .toUpperCase()
     .replace(/[\u2010-\u2015]/g, "-")
     .replace(/\s+/g, " ");
+}
+
+function getPartNumberKey(value) {
+  return compactPartNumber(value);
 }
 
 function getNumericPartDigits(value) {

@@ -569,7 +569,7 @@ function getConverterDescriptionVariants(description) {
   const variants = [
     String(description || "").trim(),
     ...String(description || "")
-      .split(/\s+\|\s+/)
+      .split(/\s*(?:\r?\n|\|)\s*/)
       .map(value => value.trim())
   ].filter(Boolean);
   const seen = new Set();

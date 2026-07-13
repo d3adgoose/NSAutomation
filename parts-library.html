@@ -95,7 +95,7 @@
             <li><strong>Select rows:</strong> use the checkboxes beside each row, or use Select All above the table when you want the full visible list.</li>
             <li><strong>Find records:</strong> search by part number, description, drawing, or file name, then sort the visible list with the Sort dropdown.</li>
             <li><strong>Track usage:</strong> Current Parts stores the part list, Old Part Numbers stores prior numbers, and Drawing Usage shows where parts were found.</li>
-            <li><strong>Same number, different wording:</strong> the library keeps one part row, adds the new file name, and saves both descriptions so either wording can be searched.</li>
+            <li><strong>Same number, different wording:</strong> the library keeps one part row, adds each new file name on its own line, and saves each description on its own line so either wording can be searched.</li>
             <li><strong>Export:</strong> download the library to Excel when you need a backup or want to review the list outside the website.</li>
           </ol>
         </div>
@@ -249,6 +249,17 @@
       <div class="button-row">
         <button id="partsEditSaveButton">Save</button>
         <button class="secondary" id="partsEditCloseButton">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="partsMessageModal" class="modal hidden">
+    <div class="modal-content app-prompt-modal-content parts-message-modal-content">
+      <h2 id="partsMessageTitle">Parts Library</h2>
+      <p id="partsMessageText" class="app-prompt-message"></p>
+      <div class="button-row app-prompt-actions">
+        <button class="secondary" id="partsMessageCancelButton">Cancel</button>
+        <button id="partsMessageConfirmButton">OK</button>
       </div>
     </div>
   </div>
