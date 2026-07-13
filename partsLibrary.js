@@ -187,7 +187,7 @@ function updatePartsLocalButton() {
   if (syncButton) {
     syncButton.classList.toggle("hidden", !hasCache);
     syncButton.disabled = false;
-    syncButton.textContent = "Save Browser Copy";
+    syncButton.textContent = "Save Library";
   }
 }
 
@@ -199,7 +199,7 @@ async function syncLocalPartsCopyToShared() {
   const cached = loadLocalPartsDatabase();
   if (!hasSupabaseParts()) {
     openPartsLoginModal();
-    setPartsStatus("Log in first, then click Save Browser Copy again.");
+    setPartsStatus("Log in first, then click Save Library again.");
     return;
   }
 
