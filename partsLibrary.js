@@ -1065,9 +1065,22 @@ async function startExcelImport(files) {
 }
 
 function buildExcelPreviewRow(row, mapping, fileName, sheetName, rowNumber) {
-  const oldPart = valueFromMappedColumn(row, mapping, "old_part_number");
-  const currentPart = valueFromMappedColumn(row, mapping, "current_part_number");
+  let oldPart = valueFromMappedColumn(row, mapping, "old_part_number");
+  let currentPart = valueFromMappedColumn(row, mapping, "current_part_number");
   const description = valueFromMappedColumn(row, mapping, "description");
+
+  if (!oldPart && isOldPartNumberCandidate(currentPart)) {
+    oldPart = currentPart;
+    currentPart = "";
+  }
+
+  if (!currentPart && isCurrentPartNumberCandidate(oldPart)) {
+    currentPart = oldPart;
+    oldPart = "";
+  }
+
+  currentPart = formatCurrentPartNumber(currentPart);
+
   if (!oldPart && !currentPart && !description) return null;
 
   return buildPreviewRow({
@@ -1085,9 +1098,13 @@ function buildExcelPreviewRow(row, mapping, fileName, sheetName, rowNumber) {
 }
 
 function buildPreviewRow(source, fileName) {
+  source = applyPartNumberRoleRules(source);
   const partNumber = source.current_part_number || source.extracted_part_number || "";
   const match = findPartMatch(partNumber, source.description);
   const status = getPreviewStatus(match, source);
+  const currentPartNumber = match.currentPartNumber ||
+    source.current_part_number ||
+    (source.old_part_number && isOldPartNumberCandidate(partNumber) ? "" : formatCurrentPartNumber(partNumber));
 
   return {
     id: makeId("preview"),
@@ -1097,7 +1114,7 @@ function buildPreviewRow(source, fileName) {
     drawing_number: source.drawing_number || "",
     item_number: source.item_number || "",
     extracted_part_number: source.extracted_part_number || partNumber,
-    current_part_number: match.currentPartNumber || source.current_part_number || partNumber,
+    current_part_number: currentPartNumber,
     description: source.description || "",
     quantity: source.quantity || "",
     suggested_current_part_number: match.currentPartNumber || "",
@@ -1383,7 +1400,7 @@ function buildImportHistoryRecord(rows) {
 function applyPreviewRow(row, importId, changed) {
   const source = row.source;
   const now = nowISO();
-  const currentPartNumber = row.current_part_number || row.extracted_part_number;
+  const currentPartNumber = row.current_part_number || (source.old_part_number ? "" : row.extracted_part_number);
   const existing = findMasterPartByNumber(currentPartNumber);
 
   if (row.status === "conflict" || row.status === "needs_review" || row.match_type === "suggested") {
@@ -1407,7 +1424,7 @@ function applyPreviewRow(row, importId, changed) {
   }
 
   let part = existing;
-  if (!part && row.status !== "conflict" && row.match_type !== "suggested") {
+  if (!part && currentPartNumber && row.status !== "conflict" && row.status !== "needs_review" && row.match_type !== "suggested") {
     part = {
       id: makeId("part"),
       current_part_number: currentPartNumber,
@@ -1902,6 +1919,52 @@ function normalizePartNumber(value) {
     .toUpperCase()
     .replace(/[\u2010-\u2015]/g, "-")
     .replace(/\s+/g, " ");
+}
+
+function getNumericPartDigits(value) {
+  const text = String(value || "").trim();
+  if (!text || /[A-Z]/i.test(text)) return "";
+  const digits = text.replace(/\D/g, "");
+  return /^[\d\s_.-]+$/.test(text) ? digits : "";
+}
+
+function isCurrentPartNumberCandidate(value) {
+  return getNumericPartDigits(value).length === 8;
+}
+
+function isOldPartNumberCandidate(value) {
+  return getNumericPartDigits(value).length === 7;
+}
+
+function formatCurrentPartNumber(value) {
+  const digits = getNumericPartDigits(value);
+  if (digits.length === 8) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  return String(value || "").trim();
+}
+
+function applyPartNumberRoleRules(source) {
+  const next = { ...source };
+  const extracted = next.extracted_part_number || "";
+
+  if (!next.old_part_number && isOldPartNumberCandidate(next.current_part_number)) {
+    next.old_part_number = next.current_part_number;
+    next.current_part_number = "";
+  }
+
+  if (!next.current_part_number && isCurrentPartNumberCandidate(next.old_part_number)) {
+    next.current_part_number = next.old_part_number;
+    next.old_part_number = "";
+  }
+
+  if (!next.current_part_number && isCurrentPartNumberCandidate(extracted)) {
+    next.current_part_number = formatCurrentPartNumber(extracted);
+    next.extracted_part_number = next.current_part_number;
+  } else if (!next.old_part_number && isOldPartNumberCandidate(extracted)) {
+    next.old_part_number = extracted;
+  }
+
+  next.current_part_number = formatCurrentPartNumber(next.current_part_number);
+  return next;
 }
 
 function compactPartNumber(value) {
