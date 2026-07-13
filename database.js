@@ -846,11 +846,11 @@ function setPendingLibraryPdf(file) {
   const docTypeSelect = document.getElementById("libDocumentType");
   const sectionSelect = document.getElementById("libPacketSection");
 
-  const cleanName = file.name.replace(/\.pdf$/i, "");
+  const cleanName = getLibraryPdfDisplayName(file.name);
   const guessedSection = guessPacketSectionForLibrary(file.name);
 
-  if (fileNameInput && !fileNameInput.value.trim()) {
-    fileNameInput.value = file.name;
+  if (fileNameInput) {
+    fileNameInput.value = cleanName;
   }
 
   if (docTypeSelect) {
@@ -861,6 +861,12 @@ function setPendingLibraryPdf(file) {
     sectionSelect.value = guessedSection;
   }
 
+}
+
+function getLibraryPdfDisplayName(fileName = "") {
+  return String(fileName || "")
+    .replace(/\.pdf$/i, "")
+    .trim();
 }
 
 function clearLibraryUpload() {
@@ -1342,7 +1348,7 @@ async function addLibraryEntryFromForm() {
 
   const finalFileName =
     fileName ||
-    pendingLibraryPdf?.name ||
+    getLibraryPdfDisplayName(pendingLibraryPdf?.name) ||
     "";
 
   const entry = {
