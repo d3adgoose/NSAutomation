@@ -817,7 +817,11 @@ function prepareSupabaseRows(table, rows) {
   if (table === PARTS_TABLES.usage) {
     return mergeRowsForSupabaseConflict(
       table,
-      rows.map(row => ({ ...row, part_id: null })),
+      rows.map(row => ({
+        ...row,
+        part_id: null,
+        source_import_id: getValidPartsImportHistoryId(row.source_import_id)
+      })),
       row => [
         normalizePartNumber(row.current_part_number),
         normalizePartNumber(row.extracted_part_number),
@@ -829,6 +833,12 @@ function prepareSupabaseRows(table, rows) {
     );
   }
   return rows.map(row => cleanSupabaseRowForTable(table, row));
+}
+
+function getValidPartsImportHistoryId(importId) {
+  const id = String(importId || "").trim();
+  if (!id) return null;
+  return partsState.history.some(row => row.id === id) ? id : null;
 }
 
 function mergeRowsForSupabaseConflict(table, rows, getKey) {
