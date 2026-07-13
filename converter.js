@@ -356,6 +356,10 @@ async function readExcelConverterMap() {
         if (!oldPart && legacyPart) oldPart = legacyPart;
 
         const itemCode = getExcelRowValue(row, [
+          "current_part_number",
+          "Current Part Number",
+          "Current Part #",
+          "Current PN",
           "New Part Number",
           "New Part #",
           "New Part#",
@@ -485,6 +489,10 @@ function getConverterMasterPartLookup(workbookRecords) {
 
           rows.forEach(row => {
             const partNumber = getExcelRowValue(row, [
+              "current_part_number",
+              "Current Part Number",
+              "Current Part #",
+              "Current PN",
               "Part Number",
               "Part #",
               "Part#",
