@@ -529,12 +529,141 @@ async function fetchSupabaseRows(table) {
 
 async function upsertSupabaseRows(table, rows) {
   if (!hasSupabaseParts() || !rows.length) return true;
-  const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: "id" });
+  const payload = prepareSupabaseRows(table, rows);
+  if (table === PARTS_TABLES.master) {
+    return saveSupabaseMasterRows(payload);
+  }
+  const { error } = await supabaseClient
+    .from(table)
+    .upsert(payload, { onConflict: getSupabaseConflictTarget(table) });
   if (error) {
     handlePartsRemoteError(error, table);
     return false;
   }
   return true;
+}
+
+async function saveSupabaseMasterRows(rows) {
+  for (const row of rows) {
+    const normalizedPartNumber = row.normalized_part_number || normalizePartNumber(row.current_part_number);
+    const existing = await findSupabaseMasterPart(row.current_part_number, normalizedPartNumber);
+    if (existing) {
+      const merged = mergeSupabaseRow(existing, row);
+      const { error } = await supabaseClient
+        .from(PARTS_TABLES.master)
+        .update({ ...merged, id: existing.id })
+        .eq("id", existing.id);
+      if (error) {
+        handlePartsRemoteError(error, PARTS_TABLES.master);
+        return false;
+      }
+      continue;
+    }
+
+    const { error } = await supabaseClient.from(PARTS_TABLES.master).insert(row);
+    if (error) {
+      const savedAfterConflict = await updateSupabaseMasterAfterInsertConflict(row);
+      if (!savedAfterConflict) {
+        handlePartsRemoteError(error, PARTS_TABLES.master);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+async function updateSupabaseMasterAfterInsertConflict(row) {
+  const normalizedPartNumber = row.normalized_part_number || normalizePartNumber(row.current_part_number);
+  const existing = await findSupabaseMasterPart(row.current_part_number, normalizedPartNumber);
+  if (!existing) return false;
+  const merged = mergeSupabaseRow(existing, row);
+  const { error } = await supabaseClient
+    .from(PARTS_TABLES.master)
+    .update({ ...merged, id: existing.id })
+    .eq("id", existing.id);
+  return !error;
+}
+
+async function findSupabaseMasterPart(currentPartNumber, normalizedPartNumber) {
+  const normalized = normalizedPartNumber || normalizePartNumber(currentPartNumber);
+  if (normalized) {
+    const { data, error } = await supabaseClient
+      .from(PARTS_TABLES.master)
+      .select("*")
+      .eq("normalized_part_number", normalized)
+      .maybeSingle();
+    if (!error && data) return data;
+  }
+
+  const current = formatCurrentPartNumber(currentPartNumber);
+  if (!current) return null;
+  const { data, error } = await supabaseClient
+    .from(PARTS_TABLES.master)
+    .select("*")
+    .eq("current_part_number", current)
+    .maybeSingle();
+  return error ? null : data;
+}
+
+function prepareSupabaseRows(table, rows) {
+  if (table === PARTS_TABLES.master) {
+    return mergeRowsForSupabaseConflict(rows, row => row.normalized_part_number || normalizePartNumber(row.current_part_number));
+  }
+  if (table === PARTS_TABLES.aliases) {
+    return mergeRowsForSupabaseConflict(
+      rows.map(row => ({ ...row, part_id: null })),
+      row => `${normalizePartNumber(row.old_part_number)}=>${normalizePartNumber(row.current_part_number)}`
+    );
+  }
+  if (table === PARTS_TABLES.usage) {
+    return mergeRowsForSupabaseConflict(
+      rows.map(row => ({ ...row, part_id: null })),
+      row => [
+        normalizePartNumber(row.current_part_number),
+        normalizePartNumber(row.extracted_part_number),
+        normalizeSearch(row.drawing_number),
+        normalizeSearch(row.item_number),
+        normalizeSearch(row.pdf_file_name),
+        String(row.pdf_page_number || "")
+      ].join("|")
+    );
+  }
+  return rows;
+}
+
+function mergeRowsForSupabaseConflict(rows, getKey) {
+  const merged = new Map();
+  rows.forEach(row => {
+    const key = getKey(row);
+    if (!key) return;
+    const existing = merged.get(key);
+    merged.set(key, existing ? mergeSupabaseRow(existing, row) : { ...row });
+  });
+  return [...merged.values()];
+}
+
+function mergeSupabaseRow(existing, incoming) {
+  const next = { ...existing, ...incoming };
+  if ("description" in existing || "description" in incoming) {
+    next.description = mergePartDescriptions(existing.description, incoming.description);
+    next.normalized_description = normalizeDescription(next.description);
+  }
+  if ("source" in existing || "source" in incoming) {
+    next.source = mergeFileNameLabels(existing.source, incoming.source);
+  }
+  if ("pdf_file_name" in existing || "pdf_file_name" in incoming) {
+    next.pdf_file_name = mergeFileNameLabels(existing.pdf_file_name, incoming.pdf_file_name);
+  }
+  next.created_at = existing.created_at || incoming.created_at;
+  next.updated_at = incoming.updated_at || existing.updated_at;
+  return next;
+}
+
+function getSupabaseConflictTarget(table) {
+  if (table === PARTS_TABLES.master) return "normalized_part_number";
+  if (table === PARTS_TABLES.aliases) return "old_part_number,current_part_number";
+  if (table === PARTS_TABLES.usage) return "current_part_number,extracted_part_number,drawing_number,item_number,pdf_file_name,pdf_page_number";
+  return "id";
 }
 
 async function deleteSupabaseRow(table, id) {
