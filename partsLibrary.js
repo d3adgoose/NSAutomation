@@ -610,7 +610,7 @@ async function saveSupabaseRowsByKey(table, rows, findExistingRow) {
   for (const row of rows) {
     const existing = await findExistingRow(row);
     if (existing) {
-      const merged = mergeSupabaseRow(existing, row);
+      const merged = cleanSupabaseRowForTable(table, mergeSupabaseRow(existing, row, table), existing);
       const { error } = await supabaseClient
         .from(table)
         .update({ ...merged, id: existing.id })
@@ -629,7 +629,7 @@ async function saveSupabaseRowsByKey(table, rows, findExistingRow) {
         handlePartsRemoteError(error, table);
         return false;
       }
-      const merged = mergeSupabaseRow(retryExisting, row);
+      const merged = cleanSupabaseRowForTable(table, mergeSupabaseRow(retryExisting, row, table), retryExisting);
       const { error: updateError } = await supabaseClient
         .from(table)
         .update({ ...merged, id: retryExisting.id })
@@ -648,7 +648,7 @@ async function saveSupabaseMasterRows(rows) {
     const normalizedPartNumber = row.normalized_part_number || normalizePartNumber(row.current_part_number);
     const existing = await findSupabaseMasterPart(row.current_part_number, normalizedPartNumber);
     if (existing) {
-      const merged = mergeSupabaseRow(existing, row);
+      const merged = cleanSupabaseRowForTable(PARTS_TABLES.master, mergeSupabaseRow(existing, row, PARTS_TABLES.master), existing);
       const { error } = await supabaseClient
         .from(PARTS_TABLES.master)
         .update({ ...merged, id: existing.id })
@@ -676,7 +676,7 @@ async function updateSupabaseMasterAfterInsertConflict(row) {
   const normalizedPartNumber = row.normalized_part_number || normalizePartNumber(row.current_part_number);
   const existing = await findSupabaseMasterPart(row.current_part_number, normalizedPartNumber);
   if (!existing) return false;
-  const merged = mergeSupabaseRow(existing, row);
+  const merged = cleanSupabaseRowForTable(PARTS_TABLES.master, mergeSupabaseRow(existing, row, PARTS_TABLES.master), existing);
   const { error } = await supabaseClient
     .from(PARTS_TABLES.master)
     .update({ ...merged, id: existing.id })
@@ -741,16 +741,18 @@ async function findSupabaseUsageRow(row) {
 
 function prepareSupabaseRows(table, rows) {
   if (table === PARTS_TABLES.master) {
-    return mergeRowsForSupabaseConflict(rows, row => row.normalized_part_number || normalizePartNumber(row.current_part_number));
+    return mergeRowsForSupabaseConflict(table, rows, row => row.normalized_part_number || normalizePartNumber(row.current_part_number));
   }
   if (table === PARTS_TABLES.aliases) {
     return mergeRowsForSupabaseConflict(
+      table,
       rows.map(row => ({ ...row, part_id: null })),
       row => `${normalizePartNumber(row.old_part_number)}=>${normalizePartNumber(row.current_part_number)}`
     );
   }
   if (table === PARTS_TABLES.usage) {
     return mergeRowsForSupabaseConflict(
+      table,
       rows.map(row => ({ ...row, part_id: null })),
       row => [
         normalizePartNumber(row.current_part_number),
@@ -762,25 +764,27 @@ function prepareSupabaseRows(table, rows) {
       ].join("|")
     );
   }
-  return rows;
+  return rows.map(row => cleanSupabaseRowForTable(table, row));
 }
 
-function mergeRowsForSupabaseConflict(rows, getKey) {
+function mergeRowsForSupabaseConflict(table, rows, getKey) {
   const merged = new Map();
   rows.forEach(row => {
     const key = getKey(row);
     if (!key) return;
     const existing = merged.get(key);
-    merged.set(key, existing ? mergeSupabaseRow(existing, row) : { ...row });
+    merged.set(key, existing ? cleanSupabaseRowForTable(table, mergeSupabaseRow(existing, row, table), existing) : cleanSupabaseRowForTable(table, { ...row }));
   });
   return [...merged.values()];
 }
 
-function mergeSupabaseRow(existing, incoming) {
+function mergeSupabaseRow(existing, incoming, table = "") {
   const next = { ...existing, ...incoming };
   if ("description" in existing || "description" in incoming) {
     next.description = mergePartDescriptions(existing.description, incoming.description);
-    next.normalized_description = normalizeDescription(next.description);
+    if (table === PARTS_TABLES.master || table === PARTS_TABLES.reviews) {
+      next.normalized_description = normalizeDescription(next.description);
+    }
   }
   if ("source" in existing || "source" in incoming) {
     next.source = mergeFileNameLabels(existing.source, incoming.source);
@@ -791,6 +795,46 @@ function mergeSupabaseRow(existing, incoming) {
   next.created_at = existing.created_at || incoming.created_at;
   next.updated_at = incoming.updated_at || existing.updated_at;
   return next;
+}
+
+function cleanSupabaseRowForTable(table, row, fallback = {}) {
+  const allowedColumns = {
+    [PARTS_TABLES.master]: [
+      "id", "current_part_number", "normalized_part_number", "compact_part_number", "description",
+      "normalized_description", "category", "manufacturer", "manufacturer_part_number",
+      "unit_of_measure", "source", "status", "needs_review", "record_type",
+      "referenced_drawing_number", "created_at", "updated_at"
+    ],
+    [PARTS_TABLES.aliases]: [
+      "id", "part_id", "old_part_number", "current_part_number", "description",
+      "match_type", "source", "notes", "created_at", "updated_at"
+    ],
+    [PARTS_TABLES.usage]: [
+      "id", "part_id", "current_part_number", "extracted_part_number", "description",
+      "drawing_number", "drawing_name", "item_number", "quantity", "pdf_file_name",
+      "pdf_page_number", "source_import_id", "referenced_drawing_number", "record_type",
+      "created_at", "updated_at"
+    ],
+    [PARTS_TABLES.reviews]: [
+      "id", "extracted_part_number", "extracted_description", "suggested_current_part_number",
+      "suggested_description", "match_type", "confidence", "source_file", "page",
+      "reason", "status", "created_at", "updated_at"
+    ],
+    [PARTS_TABLES.history]: [
+      "id", "file_name", "import_type", "row_count", "unique_parts_count",
+      "exact_match_count", "old_number_match_count", "suggested_match_count",
+      "review_count", "status", "created_at", "updated_at"
+    ]
+  }[table];
+  if (!allowedColumns) return row;
+  return allowedColumns.reduce((cleaned, column) => {
+    if (Object.prototype.hasOwnProperty.call(row, column)) {
+      cleaned[column] = row[column];
+    } else if (Object.prototype.hasOwnProperty.call(fallback, column)) {
+      cleaned[column] = fallback[column];
+    }
+    return cleaned;
+  }, {});
 }
 
 function getSupabaseConflictTarget(table) {
