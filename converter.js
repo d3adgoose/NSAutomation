@@ -500,27 +500,30 @@ function getConverterMasterPartLookup(workbookRecords) {
               "Product Description",
               "Desc"
             ]);
-            const normalizedDescription = normalizePartDescription(description);
+            if (!partNumber) return;
 
-            if (!partNumber || !isSpecificMasterDescription(normalizedDescription)) return;
+            getConverterDescriptionVariants(description).forEach(descriptionVariant => {
+              const normalizedDescription = normalizePartDescription(descriptionVariant);
+              if (!isSpecificMasterDescription(normalizedDescription)) return;
 
-            const entry = {
-              partNumber,
-              description,
-              normalizedDescription,
-              sourceFile: file.name,
-              sourceSheet: sheetName
-            };
-            entries.push(entry);
+              const entry = {
+                partNumber,
+                description: descriptionVariant,
+                normalizedDescription,
+                sourceFile: file.name,
+                sourceSheet: sheetName
+              };
+              entries.push(entry);
 
-            if (!entriesByDescription.has(normalizedDescription)) {
-              entriesByDescription.set(normalizedDescription, new Map());
-            }
+              if (!entriesByDescription.has(normalizedDescription)) {
+                entriesByDescription.set(normalizedDescription, new Map());
+              }
 
-            const partMap = entriesByDescription.get(normalizedDescription);
-            if (!partMap.has(partNumber)) {
-              partMap.set(partNumber, entry);
-            }
+              const partMap = entriesByDescription.get(normalizedDescription);
+              if (!partMap.has(partNumber)) {
+                partMap.set(partNumber, entry);
+              }
+            });
           });
         });
     });
@@ -532,7 +535,8 @@ function getConverterMasterPartLookup(workbookRecords) {
 
 function isConverterMasterListWorkbook(file, workbook) {
   const fileName = String(file?.name || "").toLowerCase();
-  if (/\b(master|pn master|part list|parts list)\b/.test(fileName)) return true;
+  if (/\b(master|pn master|part list|parts list|parts library|part library)\b/.test(fileName)) return true;
+  if (workbook?.SheetNames?.some(name => /^(master parts|old part number map|drawing usage)$/i.test(String(name || "").trim()))) return true;
 
   const numericSheetCount = workbook.SheetNames.filter(sheetName =>
     /^\d{4}/.test(String(sheetName || "").trim())
@@ -559,6 +563,22 @@ function normalizePartDescription(value) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getConverterDescriptionVariants(description) {
+  const variants = [
+    String(description || "").trim(),
+    ...String(description || "")
+      .split(/\s+\|\s+/)
+      .map(value => value.trim())
+  ].filter(Boolean);
+  const seen = new Set();
+  return variants.filter(value => {
+    const key = normalizePartDescription(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isSpecificMasterDescription(normalizedDescription) {
