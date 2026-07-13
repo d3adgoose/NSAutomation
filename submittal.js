@@ -870,8 +870,7 @@ async function renderPageManagerPreviews(item) {
       const page = await pdf.getPage(pageNumber);
       const viewport = page.getViewport({ scale: 1 });
       const card = document.createElement("div");
-      const header = document.createElement("label");
-      const checkbox = document.createElement("input");
+      const header = document.createElement("div");
       const label = document.createElement("span");
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
@@ -879,14 +878,11 @@ async function renderPageManagerPreviews(item) {
       card.className = "page-manager-card";
       card.dataset.pageNumber = String(pageNumber);
       header.className = "page-manager-card-header";
-      checkbox.type = "checkbox";
-      checkbox.value = String(pageNumber);
       label.textContent = `Page ${pageNumber}`;
       canvas.width = viewport.width;
       canvas.height = viewport.height;
 
       const updateSelection = checked => {
-        checkbox.checked = checked;
         card.classList.toggle("selected", checked);
 
         if (checked) {
@@ -898,15 +894,10 @@ async function renderPageManagerPreviews(item) {
         updatePageManagerStatus(pdf.numPages);
       };
 
-      checkbox.addEventListener("change", () => {
-        updateSelection(checkbox.checked);
-      });
-      card.addEventListener("click", event => {
-        if (event.target === checkbox) return;
-        updateSelection(!checkbox.checked);
+      card.addEventListener("click", () => {
+        updateSelection(!selectedManagedPages.has(pageNumber));
       });
 
-      header.appendChild(checkbox);
       header.appendChild(label);
       card.appendChild(header);
       card.appendChild(canvas);
@@ -946,8 +937,6 @@ function selectAllSubsectionPages() {
 
   previews.forEach(preview => {
     preview.classList.add("page-action-selected");
-    const checkbox = preview.querySelector(".page-edit-checkbox");
-    if (checkbox) checkbox.checked = true;
   });
 
   updateSubsectionPageSelectionStatus(previews.length);
@@ -959,8 +948,6 @@ function clearSubsectionPageSelection() {
 
   previews.forEach(preview => {
     preview.classList.remove("page-action-selected");
-    const checkbox = preview.querySelector(".page-edit-checkbox");
-    if (checkbox) checkbox.checked = false;
   });
 
   updateSubsectionPageSelectionStatus(previews.length);
@@ -974,8 +961,6 @@ function selectAllManagedPages() {
 
   cards.forEach(card => {
     card.classList.add("selected");
-    const checkbox = card.querySelector('input[type="checkbox"]');
-    if (checkbox) checkbox.checked = true;
   });
 
   updatePageManagerStatus(cards.length);
@@ -987,8 +972,6 @@ function clearManagedPageSelection() {
 
   cards.forEach(card => {
     card.classList.remove("selected");
-    const checkbox = card.querySelector('input[type="checkbox"]');
-    if (checkbox) checkbox.checked = false;
   });
 
   updatePageManagerStatus(cards.length);
@@ -3553,12 +3536,8 @@ async function renderPDFPagePreviews(item) {
     wrapper.dataset.pageNumber = pageNumber;
 
     const header = document.createElement("div");
-    const checkbox = document.createElement("input");
     const label = document.createElement("div");
     header.className = "page-preview-header";
-    checkbox.type = "checkbox";
-    checkbox.className = "page-edit-checkbox";
-    checkbox.setAttribute("aria-label", `Select page ${pageNumber} for PDF actions`);
     label.className = "page-preview-label";
     label.textContent = `Page ${pageNumber}`;
 
@@ -3568,30 +3547,12 @@ async function renderPDFPagePreviews(item) {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
 
-    header.appendChild(checkbox);
     header.appendChild(label);
     wrapper.appendChild(header);
     wrapper.appendChild(canvas);
     previewList.appendChild(wrapper);
 
-    checkbox.addEventListener("click", event => {
-      event.stopPropagation();
-    });
-    checkbox.addEventListener("change", () => {
-      wrapper.classList.toggle("page-action-selected", checkbox.checked);
-
-      if (checkbox.checked) {
-        selectedManagedPages.add(pageNumber);
-      } else {
-        selectedManagedPages.delete(pageNumber);
-      }
-
-      updateSubsectionPageSelectionStatus(pdf.numPages);
-    });
-
-    wrapper.addEventListener("click", event => {
-      if (event.target === checkbox) return;
-
+    wrapper.addEventListener("click", () => {
       document.querySelectorAll(".pdf-page-preview").forEach(el => {
         el.classList.remove("selected");
       });
