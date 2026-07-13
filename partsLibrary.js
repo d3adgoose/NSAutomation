@@ -24,6 +24,8 @@ let partsState = {
   history: [],
   activeTab: "master",
   sort: { key: "current_part_number", direction: "asc" },
+  page: 1,
+  pageSize: 10,
   previewRows: [],
   previewType: "",
   previewFileName: "",
@@ -43,8 +45,14 @@ async function initPartsDatabase() {
 }
 
 function bindPartsDatabaseEvents() {
-  document.getElementById("partsSearchInput")?.addEventListener("input", renderPartsDatabase);
-  document.getElementById("partsSourceFilter")?.addEventListener("change", renderPartsDatabase);
+  document.getElementById("partsSearchInput")?.addEventListener("input", () => {
+    resetPartsPage();
+    renderPartsDatabase();
+  });
+  document.getElementById("partsSourceFilter")?.addEventListener("change", () => {
+    resetPartsPage();
+    renderPartsDatabase();
+  });
   document.getElementById("partsSortSelect")?.addEventListener("change", event => setPartsSortFromValue(event.target.value));
   document.querySelectorAll("[data-parts-tab]").forEach(button => {
     button.addEventListener("click", () => setPartsActiveTab(button.dataset.partsTab));
@@ -938,6 +946,7 @@ function renderPartsTabs() {
 function setPartsActiveTab(tab) {
   if (!partsState[tab]) return;
   partsState.activeTab = tab;
+  resetPartsPage();
   partsState.sort = getDefaultPartsSort(tab);
   renderPartsDatabase();
 }
@@ -1137,6 +1146,11 @@ function renderActivePartsTable() {
     return;
   }
 
+  const pageCount = Math.max(1, Math.ceil(sorted.length / partsState.pageSize));
+  if (partsState.page > pageCount) partsState.page = pageCount;
+  if (partsState.page < 1) partsState.page = 1;
+  const pageRows = getPaginatedPartsRows(sorted);
+
   wrap.innerHTML = `
     <table class="parts-data-table">
       <thead>
@@ -1147,9 +1161,10 @@ function renderActivePartsTable() {
         </tr>
       </thead>
       <tbody>
-        ${sorted.map(row => renderPartsTableRow(row, config, selected.has(row.id))).join("")}
+        ${pageRows.map(row => renderPartsTableRow(row, config, selected.has(row.id))).join("")}
       </tbody>
     </table>
+    ${renderPartsPagination(sorted.length, pageCount)}
   `;
 
   wrap.querySelectorAll("[data-action]").forEach(button => {
@@ -1158,7 +1173,64 @@ function renderActivePartsTable() {
   wrap.querySelectorAll("[data-select-row]").forEach(input => {
     input.addEventListener("change", () => togglePartsRowSelection(input.dataset.selectRow, input.checked));
   });
+  wrap.querySelectorAll("[data-parts-page]").forEach(button => {
+    button.addEventListener("click", () => setPartsPage(Number(button.dataset.partsPage)));
+  });
   updatePartsBulkActions();
+}
+
+function getPaginatedPartsRows(rows) {
+  const start = (partsState.page - 1) * partsState.pageSize;
+  return rows.slice(start, start + partsState.pageSize);
+}
+
+function renderPartsPagination(totalRows, pageCount) {
+  if (pageCount <= 1) {
+    return `<div class="parts-pagination"><span>Showing ${totalRows} record${totalRows === 1 ? "" : "s"}.</span></div>`;
+  }
+
+  const startRow = (partsState.page - 1) * partsState.pageSize + 1;
+  const endRow = Math.min(totalRows, partsState.page * partsState.pageSize);
+  const pageButtons = getPartsPageNumbers(pageCount).map(page => `
+    <button
+      class="secondary parts-page-button ${page === partsState.page ? "active" : ""}"
+      type="button"
+      data-parts-page="${page}"
+      ${page === partsState.page ? "aria-current=\"page\"" : ""}
+    >${page}</button>
+  `).join("");
+
+  return `
+    <div class="parts-pagination">
+      <span>Showing ${startRow}-${endRow} of ${totalRows}</span>
+      <div class="button-row parts-page-actions">
+        <button class="secondary" type="button" data-parts-page="${partsState.page - 1}" ${partsState.page === 1 ? "disabled" : ""}>Previous</button>
+        ${pageButtons}
+        <button class="secondary" type="button" data-parts-page="${partsState.page + 1}" ${partsState.page === pageCount ? "disabled" : ""}>Next</button>
+      </div>
+    </div>
+  `;
+}
+
+function getPartsPageNumbers(pageCount) {
+  const visibleCount = Math.min(4, pageCount);
+  let start = Math.max(1, partsState.page - 1);
+  let end = Math.min(pageCount, start + visibleCount - 1);
+  start = Math.max(1, end - visibleCount + 1);
+  const pages = [];
+  for (let page = start; page <= end; page += 1) pages.push(page);
+  return pages;
+}
+
+function setPartsPage(page) {
+  const rows = sortRows(getFilteredRows(partsState.activeTab), partsState.sort);
+  const pageCount = Math.max(1, Math.ceil(rows.length / partsState.pageSize));
+  partsState.page = Math.min(Math.max(1, page || 1), pageCount);
+  renderActivePartsTable();
+}
+
+function resetPartsPage() {
+  partsState.page = 1;
 }
 
 function renderPartsTableRow(row, config, isSelected) {
@@ -1186,7 +1258,7 @@ function getSelectedPartsSet(tab = partsState.activeTab) {
 }
 
 function getVisiblePartsRows() {
-  return sortRows(getFilteredRows(partsState.activeTab), partsState.sort);
+  return getPaginatedPartsRows(sortRows(getFilteredRows(partsState.activeTab), partsState.sort));
 }
 
 function togglePartsRowSelection(id, checked) {
@@ -1329,6 +1401,7 @@ function setPartsSort(key) {
     key,
     direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
   };
+  resetPartsPage();
   renderActivePartsTable();
 }
 
@@ -1339,6 +1412,7 @@ function setPartsSortFromValue(value) {
     key,
     direction: direction === "desc" ? "desc" : "asc"
   };
+  resetPartsPage();
   renderActivePartsTable();
 }
 
@@ -2925,6 +2999,7 @@ function clearPartsFilters() {
     if (el) el.value = "";
   });
   partsState.sort = getDefaultPartsSort(partsState.activeTab);
+  resetPartsPage();
   renderPartsDatabase();
 }
 
