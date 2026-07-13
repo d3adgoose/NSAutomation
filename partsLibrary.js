@@ -616,54 +616,47 @@ async function upsertSupabaseRows(table, rows) {
     return saveSupabaseMasterRows(payload);
   }
   if (table === PARTS_TABLES.aliases) {
-    return saveSupabaseRowsByKey(PARTS_TABLES.aliases, payload, findSupabaseAliasRow);
+    return saveSupabaseRowsByLookup(PARTS_TABLES.aliases, payload);
   }
   if (table === PARTS_TABLES.usage) {
-    return saveSupabaseRowsByKey(PARTS_TABLES.usage, payload, findSupabaseUsageRow);
+    return saveSupabaseRowsByLookup(PARTS_TABLES.usage, payload);
   }
-  const { error } = await supabaseClient
-    .from(table)
-    .upsert(payload, { onConflict: getSupabaseConflictTarget(table) });
-  if (error) {
-    handlePartsRemoteError(error, table);
-    return false;
-  }
-  return true;
+  return saveSupabaseRowsInBatches(table, payload, getSupabaseConflictTarget(table));
 }
 
-async function saveSupabaseRowsByKey(table, rows, findExistingRow) {
-  for (const row of rows) {
-    const existing = await findExistingRow(row);
-    if (existing) {
-      const merged = cleanSupabaseRowForTable(table, mergeSupabaseRow(existing, row, table), existing);
-      const { error } = await supabaseClient
-        .from(table)
-        .update({ ...merged, id: existing.id })
-        .eq("id", existing.id);
-      if (error) {
-        handlePartsRemoteError(error, table);
-        return false;
-      }
-      continue;
-    }
+async function saveSupabaseRowsByLookup(table, rows) {
+  const label = getSupabaseSaveLabel(table);
+  setPartsStatus(`Checking shared ${label} before saving ${rows.length} record${rows.length === 1 ? "" : "s"}...`);
+  const existingRows = await fetchSupabaseRows(table);
+  const existingByKey = buildSupabaseRowLookup(table, existingRows);
+  const payload = rows.map(row => {
+    const existing = existingByKey.get(getSupabaseRowNaturalKey(table, row)) || existingByKey.get(row.id || "");
+    const merged = cleanSupabaseRowForTable(
+      table,
+      existing ? mergeSupabaseRow(existing, row, table) : row,
+      existing || {}
+    );
+    if (existing?.id) merged.id = existing.id;
+    return merged;
+  });
 
-    const { error } = await supabaseClient.from(table).insert(row);
+  return saveSupabaseRowsInBatches(table, payload, "id");
+}
+
+async function saveSupabaseRowsInBatches(table, rows, onConflict = "id") {
+  const label = getSupabaseSaveLabel(table);
+  const chunks = chunkPartsRows(rows, 250);
+  for (const [index, chunk] of chunks.entries()) {
+    setPartsStatus(`Saving ${label} batch ${index + 1} of ${chunks.length} (${chunk.length} records)...`);
+    addPartsImportLog(`Saving ${label} batch ${index + 1} of ${chunks.length}.`);
+    const { error } = await supabaseClient
+      .from(table)
+      .upsert(chunk, { onConflict });
     if (error) {
-      const retryExisting = await findExistingRow(row);
-      if (!retryExisting) {
-        handlePartsRemoteError(error, table);
-        return false;
-      }
-      const merged = cleanSupabaseRowForTable(table, mergeSupabaseRow(retryExisting, row, table), retryExisting);
-      const { error: updateError } = await supabaseClient
-        .from(table)
-        .update({ ...merged, id: retryExisting.id })
-        .eq("id", retryExisting.id);
-      if (updateError) {
-        handlePartsRemoteError(updateError, table);
-        return false;
-      }
+      handlePartsRemoteError(error, table);
+      return false;
     }
+    await pauseForPartsStatusUpdate();
   }
   return true;
 }
@@ -684,20 +677,7 @@ async function saveSupabaseMasterRows(rows) {
     return merged;
   });
 
-  const chunks = chunkPartsRows(payload, 250);
-  for (const [index, chunk] of chunks.entries()) {
-    setPartsStatus(`Saving current parts batch ${index + 1} of ${chunks.length} (${chunk.length} records)...`);
-    addPartsImportLog(`Saving current parts batch ${index + 1} of ${chunks.length}.`);
-    const { error } = await supabaseClient
-      .from(PARTS_TABLES.master)
-      .upsert(chunk, { onConflict: "normalized_part_number" });
-    if (error) {
-      handlePartsRemoteError(error, PARTS_TABLES.master);
-      return false;
-    }
-    await pauseForPartsStatusUpdate();
-  }
-  return true;
+  return saveSupabaseRowsInBatches(PARTS_TABLES.master, payload, "normalized_part_number");
 }
 
 function buildSupabaseMasterLookup(rows) {
@@ -709,6 +689,43 @@ function buildSupabaseMasterLookup(rows) {
     if (formatted) lookup.set(formatted, row);
   });
   return lookup;
+}
+
+function buildSupabaseRowLookup(table, rows) {
+  const lookup = new Map();
+  rows.forEach(row => {
+    const naturalKey = getSupabaseRowNaturalKey(table, row);
+    if (naturalKey) lookup.set(naturalKey, row);
+    if (row.id) lookup.set(row.id, row);
+  });
+  return lookup;
+}
+
+function getSupabaseRowNaturalKey(table, row) {
+  if (table === PARTS_TABLES.aliases) {
+    return `${normalizePartNumber(row.old_part_number)}=>${normalizePartNumber(row.current_part_number)}`;
+  }
+  if (table === PARTS_TABLES.usage) {
+    return [
+      normalizePartNumber(row.current_part_number),
+      normalizePartNumber(row.extracted_part_number),
+      normalizeSearch(row.drawing_number),
+      normalizeSearch(row.item_number),
+      normalizeSearch(row.pdf_file_name),
+      String(row.pdf_page_number || "")
+    ].join("|");
+  }
+  return row.id || "";
+}
+
+function getSupabaseSaveLabel(table) {
+  return {
+    [PARTS_TABLES.master]: "current parts",
+    [PARTS_TABLES.aliases]: "old part numbers",
+    [PARTS_TABLES.usage]: "drawing usage records",
+    [PARTS_TABLES.reviews]: "review records",
+    [PARTS_TABLES.history]: "import history"
+  }[table] || table;
 }
 
 function chunkPartsRows(rows, size) {
