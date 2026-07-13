@@ -2258,7 +2258,7 @@ header .storage-usage-bar span {
   display: grid;
   grid-template-columns: minmax(220px, 1fr);
   gap: 8px;
-  width: min(100%, 560px);
+  width: min(100%, 860px);
 }
 
 .library-merge-actions input {
@@ -2268,7 +2268,7 @@ header .storage-usage-bar span {
 
 .library-merge-buttons {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
 }
 

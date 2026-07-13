@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Database</title>
-  <link rel="stylesheet" href="style.css?v=20260713-parts-library" />
+  <link rel="stylesheet" href="style.css?v=20260713-database-action-order" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 </head>
 
@@ -211,9 +211,15 @@
         <div class="library-merge-actions">
           <input id="mergedLibraryFileName" placeholder="Merged PDF name" />
           <div class="library-merge-buttons">
-            <button onclick="openLibraryMergeOrderModal()">Merge</button>
+            <button id="selectVisibleLibraryEntries" class="secondary" type="button">
+              Select All
+            </button>
+            <button id="deselectLibraryEntries" class="secondary" type="button">
+              Deselect All
+            </button>
             <button onclick="addSelectedLibraryPDFsToBuilder('submittal')">Add to Submittal</button>
             <button onclick="addSelectedLibraryPDFsToBuilder('om')">Add to O&amp;M</button>
+            <button onclick="openLibraryMergeOrderModal()">Merge</button>
             <button class="delete-btn" onclick="removeSelectedLibraryEntries()">Remove</button>
           </div>
         </div>
@@ -355,7 +361,7 @@
   <script src="pdfStorage.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="supabaseClient.js"></script>
-  <script src="database.js?v=20260713-clean-pdf-name"></script>
+  <script src="database.js?v=20260713-database-action-order"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
 </body>

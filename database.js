@@ -401,6 +401,21 @@ function updateLibraryCount(visibleCount = libraryDB.length) {
     : "";
 }
 
+function updateLibrarySelectionControls(visibleItems = getFilteredLibraryItems()) {
+  const selectVisibleButton = document.getElementById("selectVisibleLibraryEntries");
+  const deselectButton = document.getElementById("deselectLibraryEntries");
+  const visibleIds = visibleItems.map(item => item.id).filter(Boolean);
+  const selectedVisibleCount = visibleIds.filter(id => selectedLibraryPDFIds.has(id)).length;
+
+  if (selectVisibleButton) {
+    selectVisibleButton.disabled = visibleIds.length === 0 || selectedVisibleCount === visibleIds.length;
+  }
+
+  if (deselectButton) {
+    deselectButton.disabled = selectedLibraryPDFIds.size === 0;
+  }
+}
+
 function fromSupabaseDocument(row) {
   const meta = getLibraryMetaFromTags(row.tags || "");
   const detectionName = row.file_name || row.display_title || "";
@@ -469,6 +484,7 @@ function renderLibraryDB() {
 
   const list = getFilteredLibraryItems();
   updateLibraryCount(list.length);
+  updateLibrarySelectionControls(list);
 
   DATABASE_CATEGORIES.forEach(category => {
     const categoryItems = list.filter(item => normalizeLibraryCategory(item.category) === category);
@@ -1410,8 +1426,26 @@ function toggleLibraryPDFSelection(id, checked) {
     selectedLibraryPDFIds.delete(id);
   }
 
-  updateLibraryCount(getFilteredLibraryItems().length);
+  const visibleItems = getFilteredLibraryItems();
+  updateLibraryCount(visibleItems.length);
+  updateLibrarySelectionControls(visibleItems);
   updateDatabaseStatus(`${selectedLibraryPDFIds.size} document(s) selected.`);
+}
+
+function selectVisibleLibraryEntries() {
+  const visibleItems = getFilteredLibraryItems();
+  visibleItems.forEach(item => {
+    if (item.id) selectedLibraryPDFIds.add(item.id);
+  });
+
+  renderLibraryDB();
+  updateDatabaseStatus(`${selectedLibraryPDFIds.size} document(s) selected.`);
+}
+
+function deselectLibraryEntries() {
+  selectedLibraryPDFIds.clear();
+  renderLibraryDB();
+  updateDatabaseStatus("No documents selected.");
 }
 
 async function getLibraryPDFBlob(item) {
@@ -2446,6 +2480,12 @@ window.addEventListener("load", async () => {
 
   const typeFilter = document.getElementById("libraryTypeFilter");
   if (typeFilter) typeFilter.addEventListener("change", renderLibraryDB);
+
+  const selectVisibleBtn = document.getElementById("selectVisibleLibraryEntries");
+  if (selectVisibleBtn) selectVisibleBtn.addEventListener("click", selectVisibleLibraryEntries);
+
+  const deselectBtn = document.getElementById("deselectLibraryEntries");
+  if (deselectBtn) deselectBtn.addEventListener("click", deselectLibraryEntries);
 
 });
 
