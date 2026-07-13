@@ -371,6 +371,7 @@ async function loadPartsDatabase() {
   }
 
   try {
+    setPartsStatus("Loading the full shared Parts Library...");
     const master = await fetchSupabaseRows(PARTS_TABLES.master);
     const [aliases, usage, reviews, history] = await Promise.all([
       fetchSupabaseRows(PARTS_TABLES.aliases),
@@ -579,9 +580,25 @@ function hasSupabaseParts() {
 }
 
 async function fetchSupabaseRows(table) {
-  const { data, error } = await supabaseClient.from(table).select("*").order("updated_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+  const pageSize = 1000;
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return rows;
 }
 
 async function upsertSupabaseRows(table, rows) {
