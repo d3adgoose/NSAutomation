@@ -2244,9 +2244,9 @@ async function persistPartsChanges(changed) {
   const steps = [
     { table: PARTS_TABLES.master, rows: changed.master, label: "current parts" },
     { table: PARTS_TABLES.aliases, rows: changed.aliases, label: "old part numbers" },
+    { table: PARTS_TABLES.history, rows: changed.history, label: "import history" },
     { table: PARTS_TABLES.usage, rows: changed.usage, label: "drawing usage records" },
-    { table: PARTS_TABLES.reviews, rows: changed.reviews, label: "review records" },
-    { table: PARTS_TABLES.history, rows: changed.history, label: "import history" }
+    { table: PARTS_TABLES.reviews, rows: changed.reviews, label: "review records" }
   ];
   const totalRows = steps.reduce((sum, step) => sum + getArrayLength(step.rows), 0);
   let synced = true;
