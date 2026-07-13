@@ -56,17 +56,17 @@ function bindPartsDatabaseEvents() {
     if (ensurePartsUnlocked()) openPartsEditModal("master");
   });
   document.getElementById("partsDrawingInput")?.addEventListener("change", event => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files || []);
     event.target.value = "";
-    if (file) handlePartsDrawingFile(file);
+    if (files.length) handlePartsDrawingFiles(files);
   });
   document.getElementById("partsExcelInput")?.addEventListener("change", event => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files || []);
     event.target.value = "";
-    if (file) handlePartsExcelFile(file);
+    if (files.length) handlePartsExcelFiles(files);
   });
-  bindPartsDropZone("partsDrawingDropZone", handlePartsDrawingFile, file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
-  bindPartsDropZone("partsExcelDropZone", handlePartsExcelFile, file => /\.(xlsx|xls|csv)$/i.test(file.name));
+  bindPartsDropZone("partsDrawingDropZone", handlePartsDrawingFiles, file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+  bindPartsDropZone("partsExcelDropZone", handlePartsExcelFiles, file => /\.(xlsx|xls|csv)$/i.test(file.name));
   document.getElementById("partsClosePreviewButton")?.addEventListener("click", closePartsPreview);
   document.getElementById("partsCancelImportButton")?.addEventListener("click", cancelPartsPreviewProcessing);
   document.getElementById("partsSaveImportButton")?.addEventListener("click", savePartsImportPreview);
@@ -183,25 +183,45 @@ function bindPartsDropZone(id, onFile, isValidFile) {
   });
 
   zone.addEventListener("drop", event => {
-    const file = Array.from(event.dataTransfer?.files || []).find(isValidFile);
-    if (!file) {
-      setPartsStatus(id === "partsDrawingDropZone" ? "Drop a PDF drawing package." : "Drop an Excel or CSV file.");
+    const files = Array.from(event.dataTransfer?.files || []).filter(isValidFile);
+    if (!files.length) {
+      setPartsStatus(id === "partsDrawingDropZone" ? "Drop one or more PDF drawings." : "Drop one or more Excel or CSV files.");
       return;
     }
-    onFile(file);
+    onFile(files);
   });
 }
 
-function handlePartsDrawingFile(file) {
+function handlePartsDrawingFiles(files) {
   if (!ensurePartsUnlocked()) return;
-  setText("selectedPartsDrawing", `Selected drawing: ${file.name}`);
-  startDrawingPDFImport(file);
+  const validFiles = normalizePartsFileList(files, file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+  if (!validFiles.length) return;
+  setText("selectedPartsDrawing", describeSelectedPartsFiles(validFiles, "drawing"));
+  startDrawingPDFImport(validFiles);
 }
 
-function handlePartsExcelFile(file) {
+function handlePartsExcelFiles(files) {
   if (!ensurePartsUnlocked()) return;
-  setText("selectedPartsExcel", `Selected Excel: ${file.name}`);
-  startExcelImport(file);
+  const validFiles = normalizePartsFileList(files, file => /\.(xlsx|xls|csv)$/i.test(file.name));
+  if (!validFiles.length) return;
+  setText("selectedPartsExcel", describeSelectedPartsFiles(validFiles, "Excel file"));
+  startExcelImport(validFiles);
+}
+
+function normalizePartsFileList(files, isValidFile) {
+  return Array.from(files || []).filter(file => file && isValidFile(file));
+}
+
+function describeSelectedPartsFiles(files, label) {
+  if (files.length === 1) return `Selected ${label}: ${files[0].name}`;
+  const shown = files.slice(0, 3).map(file => file.name).join(", ");
+  return `Selected ${files.length} ${label}s: ${shown}${files.length > 3 ? ", ..." : ""}`;
+}
+
+function getPartsImportFileLabel(files) {
+  if (files.length === 1) return files[0].name;
+  const shown = files.slice(0, 3).map(file => file.name).join(", ");
+  return `${files.length} files: ${shown}${files.length > 3 ? ", ..." : ""}`;
 }
 
 function ensurePartsUnlocked() {
@@ -776,51 +796,62 @@ function getSortMarker(key) {
   return partsState.sort.direction === "asc" ? " ▲" : " ▼";
 }
 
-async function startDrawingPDFImport(file) {
+async function startDrawingPDFImport(files) {
   if (typeof pdfjsLib === "undefined") {
     setPartsStatus("PDF import library is not loaded.");
     return;
   }
 
+  const importFiles = normalizePartsFileList(files, file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+  if (!importFiles.length) return;
+
   partsState.previewType = "drawing_pdf";
-  partsState.previewFileName = file.name;
+  partsState.previewFileName = getPartsImportFileLabel(importFiles);
   partsState.previewRows = [];
   partsState.cancelImport = false;
   partsState.isProcessing = true;
-  openPartsPreview("Review Drawing Import");
-  updatePartsProgress("Reading drawing PDF...", 2);
-  addPartsImportLog(`Started reading ${file.name}.`);
+  openPartsPreview(importFiles.length === 1 ? "Review Drawing Import" : "Review Drawing Imports");
+  updatePartsProgress("Reading drawing PDF(s)...", 2);
+  addPartsImportLog(`Started reading ${importFiles.length} drawing PDF${importFiles.length === 1 ? "" : "s"}.`);
 
   try {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
     const rows = [];
 
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    for (let fileIndex = 0; fileIndex < importFiles.length; fileIndex++) {
       if (partsState.cancelImport) break;
-      updatePartsProgress(`Scanning page ${pageNumber} of ${pdf.numPages}...`, (pageNumber / pdf.numPages) * 80);
-      if (pageNumber === 1 || pageNumber % 10 === 0 || pageNumber === pdf.numPages) {
-        addPartsImportLog(`Scanning page ${pageNumber} of ${pdf.numPages}.`);
+      const file = importFiles[fileIndex];
+      addPartsImportLog(`Reading ${file.name}.`);
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+        if (partsState.cancelImport) break;
+        const fileProgress = fileIndex / importFiles.length;
+        const pageProgress = pageNumber / pdf.numPages / importFiles.length;
+        updatePartsProgress(`Scanning ${file.name}, page ${pageNumber} of ${pdf.numPages}...`, (fileProgress + pageProgress) * 80);
+        if (pageNumber === 1 || pageNumber % 10 === 0 || pageNumber === pdf.numPages) {
+          addPartsImportLog(`Scanning ${file.name}, page ${pageNumber} of ${pdf.numPages}.`);
+        }
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const pageLines = getPDFTextLines(textContent.items);
+        const pageText = pageLines.join("\n");
+        const drawingInfo = extractDrawingInfo(pageLines, pageText);
+        const pageRows = extractBOMRowsFromPage(pageLines, {
+          fileName: file.name,
+          pageNumber,
+          drawingNumber: drawingInfo.drawingNumber,
+          drawingName: drawingInfo.drawingName
+        });
+        if (pageRows.length) {
+          addPartsImportLog(`Found ${pageRows.length} BOM row(s) in ${file.name} on page ${pageNumber}${drawingInfo.drawingNumber ? `, drawing ${drawingInfo.drawingNumber}` : ""}.`);
+        }
+        rows.push(...pageRows);
+        await waitForBrowser();
       }
-      const page = await pdf.getPage(pageNumber);
-      const textContent = await page.getTextContent();
-      const pageLines = getPDFTextLines(textContent.items);
-      const pageText = pageLines.join("\n");
-      const drawingInfo = extractDrawingInfo(pageLines, pageText);
-      const pageRows = extractBOMRowsFromPage(pageLines, {
-        fileName: file.name,
-        pageNumber,
-        drawingNumber: drawingInfo.drawingNumber,
-        drawingName: drawingInfo.drawingName
-      });
-      if (pageRows.length) {
-        addPartsImportLog(`Found ${pageRows.length} BOM row(s) on page ${pageNumber}${drawingInfo.drawingNumber ? `, drawing ${drawingInfo.drawingNumber}` : ""}.`);
-      }
-      rows.push(...pageRows);
-      await waitForBrowser();
     }
 
-    partsState.previewRows = rows.map(row => buildPreviewRow(row, file.name));
+    partsState.previewRows = rows.map(row => buildPreviewRow(row, row.pdf_file_name || partsState.previewFileName));
     partsState.isProcessing = false;
     updatePartsCancelButton();
     updatePartsProgress(partsState.cancelImport ? "Import canceled. Review rows scanned so far." : "PDF scan complete.", 100);
@@ -959,42 +990,66 @@ function extractReferencedDrawing(value) {
   return String(value || "").match(/REFER TO\s+(.+)$/i)?.[1]?.trim() || "";
 }
 
-async function startExcelImport(file) {
+async function startExcelImport(files) {
   if (typeof XLSX === "undefined") {
     setPartsStatus("Excel import library is not loaded.");
     return;
   }
 
+  const importFiles = normalizePartsFileList(files, file => /\.(xlsx|xls|csv)$/i.test(file.name));
+  if (!importFiles.length) return;
+
   partsState.previewType = "excel";
-  partsState.previewFileName = file.name;
+  partsState.previewFileName = getPartsImportFileLabel(importFiles);
   partsState.previewRows = [];
   partsState.cancelImport = false;
   partsState.isProcessing = true;
-  openPartsPreview("Review Excel Import");
-  updatePartsProgress("Reading workbook...", 15);
-  addPartsImportLog(`Started reading ${file.name}.`);
+  openPartsPreview(importFiles.length === 1 ? "Review Excel Import" : "Review Excel Imports");
+  updatePartsProgress("Reading workbook(s)...", 10);
+  addPartsImportLog(`Started reading ${importFiles.length} Excel file${importFiles.length === 1 ? "" : "s"}.`);
 
   try {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+    let lastColumnMapping = null;
 
-    if (isExportedPartsWorkbook(workbook)) {
-      await previewDatabaseWorkbook(workbook, file.name);
-      return;
+    for (let fileIndex = 0; fileIndex < importFiles.length; fileIndex++) {
+      if (partsState.cancelImport) break;
+      const file = importFiles[fileIndex];
+      updatePartsProgress(`Reading ${file.name}...`, 10 + (fileIndex / importFiles.length) * 80);
+      addPartsImportLog(`Started reading ${file.name}.`);
+
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+
+      if (isExportedPartsWorkbook(workbook)) {
+        const rows = getExportedPartsWorkbookPreviewRows(workbook, file.name);
+        partsState.previewRows.push(...rows);
+        addPartsImportLog(`Detected exported library workbook ${file.name} with ${rows.length} current part row(s).`);
+        continue;
+      }
+
+      const sheetName = chooseLikelySheet(workbook);
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "", raw: false });
+      const headers = rows.length ? Object.keys(rows[0]) : [];
+      const mapping = detectExcelColumnMapping(headers);
+      addPartsImportLog(`Using ${file.name}, sheet "${sheetName}" with ${rows.length} row(s).`);
+
+      partsState.previewRows.push(
+        ...rows
+          .map((row, index) => buildExcelPreviewRow(row, mapping, file.name, sheetName, index + 2))
+          .filter(Boolean)
+      );
+
+      lastColumnMapping = { headers, mapping, rows, fileName: file.name, sheetName };
+      await waitForBrowser();
     }
 
-    const sheetName = chooseLikelySheet(workbook);
-    const worksheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "", raw: false });
-    const headers = rows.length ? Object.keys(rows[0]) : [];
-    const mapping = detectExcelColumnMapping(headers);
-    addPartsImportLog(`Using sheet "${sheetName}" with ${rows.length} row(s).`);
+    if (importFiles.length === 1 && lastColumnMapping) {
+      renderColumnMapping(lastColumnMapping.headers, lastColumnMapping.mapping, lastColumnMapping.rows, lastColumnMapping.fileName, lastColumnMapping.sheetName);
+    } else {
+      document.getElementById("partsColumnMapping")?.classList.add("hidden");
+    }
 
-    partsState.previewRows = rows
-      .map((row, index) => buildExcelPreviewRow(row, mapping, file.name, sheetName, index + 2))
-      .filter(Boolean);
-
-    renderColumnMapping(headers, mapping, rows, file.name, sheetName);
     partsState.isProcessing = false;
     updatePartsCancelButton();
     updatePartsProgress("Workbook preview ready.", 100);
@@ -1717,16 +1772,20 @@ function isExportedPartsWorkbook(workbook) {
 }
 
 async function previewDatabaseWorkbook(workbook, fileName) {
-  const masterRows = sheetRows(workbook, "Master Parts");
-  addPartsImportLog(`Detected exported library workbook with ${masterRows.length} current part row(s).`);
-  partsState.previewRows = masterRows.map((row, index) => buildExcelPreviewRow(row, {
-    current_part_number: findHeaderKey(row, ["current part number", "current_part_number"]),
-    description: findHeaderKey(row, ["description"])
-  }, fileName, "Master Parts", index + 2)).filter(Boolean);
+  partsState.previewRows = getExportedPartsWorkbookPreviewRows(workbook, fileName);
+  addPartsImportLog(`Detected exported library workbook with ${partsState.previewRows.length} current part row(s).`);
   partsState.isProcessing = false;
   updatePartsCancelButton();
   updatePartsProgress("Library workbook preview ready.", 100);
   renderImportPreview();
+}
+
+function getExportedPartsWorkbookPreviewRows(workbook, fileName) {
+  const masterRows = sheetRows(workbook, "Master Parts");
+  return masterRows.map((row, index) => buildExcelPreviewRow(row, {
+    current_part_number: findHeaderKey(row, ["current part number", "current_part_number"]),
+    description: findHeaderKey(row, ["description"])
+  }, fileName, "Master Parts", index + 2)).filter(Boolean);
 }
 
 function sheetRows(workbook, sheetName) {

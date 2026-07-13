@@ -113,11 +113,11 @@
         <div class="upload-panel">
           <h3>Drawings</h3>
           <div id="partsDrawingDropZone" class="drop-zone upload-drop-zone">
-            <p><strong>Drop a Drawing PDF</strong></p>
-            <p>Imports part numbers and where they appear in the drawing.</p>
+            <p><strong>Drop Drawing PDF(s)</strong></p>
+            <p>Imports part numbers and where they appear in each drawing.</p>
             <label class="attach-pdf-btn">
-              Choose Drawing PDF
-              <input id="partsDrawingInput" type="file" accept="application/pdf" style="display:none;" />
+              Choose Drawing PDF(s)
+              <input id="partsDrawingInput" type="file" accept="application/pdf" multiple style="display:none;" />
             </label>
           </div>
           <p id="selectedPartsDrawing" class="selected-library-pdf">No drawing PDF selected yet.</p>
@@ -126,11 +126,11 @@
         <div class="upload-panel">
           <h3>Part Lists</h3>
           <div id="partsExcelDropZone" class="drop-zone upload-drop-zone">
-            <p><strong>Drop an Excel Part List</strong></p>
-            <p>Imports current part numbers, old numbers, and descriptions.</p>
+            <p><strong>Drop Excel Part List(s)</strong></p>
+            <p>Imports current part numbers, old numbers, and descriptions from each file.</p>
             <label class="attach-pdf-btn">
-              Choose Excel File
-              <input id="partsExcelInput" type="file" accept=".xlsx,.xls,.csv" style="display:none;" />
+              Choose Excel File(s)
+              <input id="partsExcelInput" type="file" accept=".xlsx,.xls,.csv" multiple style="display:none;" />
             </label>
           </div>
           <p id="selectedPartsExcel" class="selected-library-pdf">No Excel file selected yet.</p>
