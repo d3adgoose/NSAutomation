@@ -2202,19 +2202,51 @@ async function persistPartsChanges(changed) {
     return false;
   }
 
-  const results = await Promise.all([
-    upsertSupabaseRows(PARTS_TABLES.master, changed.master),
-    upsertSupabaseRows(PARTS_TABLES.aliases, changed.aliases),
-    upsertSupabaseRows(PARTS_TABLES.usage, changed.usage),
-    upsertSupabaseRows(PARTS_TABLES.reviews, changed.reviews),
-    upsertSupabaseRows(PARTS_TABLES.history, changed.history)
-  ]);
-  const synced = results.every(result => result !== false);
+  const steps = [
+    { table: PARTS_TABLES.master, rows: changed.master, label: "current parts" },
+    { table: PARTS_TABLES.aliases, rows: changed.aliases, label: "old part numbers" },
+    { table: PARTS_TABLES.usage, rows: changed.usage, label: "drawing usage records" },
+    { table: PARTS_TABLES.reviews, rows: changed.reviews, label: "review records" },
+    { table: PARTS_TABLES.history, rows: changed.history, label: "import history" }
+  ];
+  const totalRows = steps.reduce((sum, step) => sum + getArrayLength(step.rows), 0);
+  let synced = true;
+  let savedRows = 0;
+
+  setPartsStatus(`Saving ${totalRows} record${totalRows === 1 ? "" : "s"} to the shared Parts Library...`);
+  addPartsImportLog(`Saving ${totalRows} record${totalRows === 1 ? "" : "s"} to Supabase.`);
+
+  for (const [index, step] of steps.entries()) {
+    const rowCount = getArrayLength(step.rows);
+    if (!rowCount) {
+      addPartsImportLog(`Skipped ${step.label}: no changes to save.`);
+      continue;
+    }
+
+    setPartsStatus(`Saving ${step.label} (${rowCount} record${rowCount === 1 ? "" : "s"})... Step ${index + 1} of ${steps.length}.`);
+    addPartsImportLog(`Saving ${step.label}: ${rowCount} record${rowCount === 1 ? "" : "s"}.`);
+    const result = await upsertSupabaseRows(step.table, step.rows);
+    if (result === false) {
+      synced = false;
+      addPartsImportLog(`Stopped while saving ${step.label}.`);
+      break;
+    }
+
+    savedRows += rowCount;
+    setPartsStatus(`Saved ${savedRows} of ${totalRows} shared record${totalRows === 1 ? "" : "s"}...`);
+    addPartsImportLog(`Saved ${step.label}.`);
+    await pauseForPartsStatusUpdate();
+  }
 
   if (synced && hasSupabaseParts()) {
+    setPartsStatus(`Saved ${savedRows} record${savedRows === 1 ? "" : "s"} to the shared Parts Library.`);
     addPartsImportLog("Saved to shared Parts Library.");
   }
   return synced;
+}
+
+function pauseForPartsStatusUpdate() {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 function handlePartsAction(action, id) {
