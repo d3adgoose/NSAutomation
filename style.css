@@ -3553,6 +3553,11 @@ summary {
   white-space: nowrap;
 }
 
+.parts-local-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .parts-list-heading {
   display: flex;
   justify-content: space-between;

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Parts Library</title>
 
-  <link rel="stylesheet" href="style.css?v=20260713-parts-library" />
+  <link rel="stylesheet" href="style.css?v=20260713-local-sync" />
   <link rel="stylesheet" href="ghostAutocomplete.css" />
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -140,7 +140,9 @@
 
       <div class="parts-status-row">
         <p id="partsStatusMessage" class="warranty-status" aria-live="polite"></p>
-        <button class="secondary" id="partsClearLocalButton" type="button">Clear Local Copy</button>
+        <div class="button-row parts-local-actions">
+          <button class="secondary" id="partsClearLocalButton" type="button">Clear Local Copy</button>
+        </div>
       </div>
     </section>
 
@@ -152,6 +154,7 @@
         </div>
         <div class="button-row parts-db-actions">
           <button id="partsAddManualButton">Add Part</button>
+          <button id="partsSyncLocalButton" type="button">Save Browser Copy</button>
           <button id="partsExportButton">Export Library</button>
           <button class="secondary" id="partsClearFiltersButton">Clear Filters</button>
         </div>
@@ -270,6 +273,6 @@
   <script src="supabaseClient.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js"></script>
-  <script src="partsLibrary.js?v=20260713-shared-master-save"></script>
+  <script src="partsLibrary.js?v=20260713-drawing-usage-save"></script>
 </body>
 </html>

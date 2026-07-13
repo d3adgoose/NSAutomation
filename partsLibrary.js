@@ -78,6 +78,7 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsDeleteSelectedButton")?.addEventListener("click", deleteSelectedPartsRecords);
   document.getElementById("partsMessageCancelButton")?.addEventListener("click", () => closePartsMessage(false));
   document.getElementById("partsMessageConfirmButton")?.addEventListener("click", () => closePartsMessage(true));
+  document.getElementById("partsSyncLocalButton")?.addEventListener("click", syncLocalPartsCopyToShared);
   document.getElementById("partsClearLocalButton")?.addEventListener("click", clearLocalPartsCopy);
 }
 
@@ -178,13 +179,69 @@ function setPartsLoginStatus(message) {
 }
 
 function updatePartsLocalButton() {
-  const button = document.getElementById("partsClearLocalButton");
-  if (!button) return;
-  button.classList.toggle("hidden", hasSupabaseParts() || !hasLocalPartsCache());
+  const clearButton = document.getElementById("partsClearLocalButton");
+  const syncButton = document.getElementById("partsSyncLocalButton");
+  const hasCache = hasLocalPartsCache();
+
+  if (clearButton) clearButton.classList.toggle("hidden", hasSupabaseParts() || !hasCache);
+  if (syncButton) {
+    syncButton.classList.toggle("hidden", !hasCache);
+    syncButton.disabled = false;
+    syncButton.textContent = "Save Browser Copy";
+  }
 }
 
 function hasLocalPartsCache() {
   return !!localStorage.getItem(PARTS_STORAGE_KEY);
+}
+
+async function syncLocalPartsCopyToShared() {
+  const cached = loadLocalPartsDatabase();
+  if (!hasSupabaseParts()) {
+    openPartsLoginModal();
+    setPartsStatus("Log in first, then click Save Browser Copy again.");
+    return;
+  }
+
+  if (!getPartsDataCompletenessScore(cached)) {
+    setPartsStatus("There is no local Parts Library copy to save.");
+    updatePartsLocalButton();
+    return;
+  }
+
+  applyPartsData(cached);
+  normalizePartsFileNameLabels();
+  setPartsStatus("Checking local copy and saving it to the shared Parts Library...");
+  updatePartsLocalButton();
+
+  const synced = await persistPartsChanges({
+    master: partsState.master,
+    aliases: partsState.aliases,
+    usage: partsState.usage,
+    reviews: partsState.reviews,
+    history: partsState.history
+  });
+
+  if (synced) {
+    saveLocalPartsDatabase("shared", { pendingSync: false });
+    setPartsStatus("Local copy saved to the shared Parts Library. Other logged-in users should see it after refresh.");
+    await showPartsMessage(
+      "Shared Save Complete",
+      "The local Parts Library copy was saved to Supabase. Other logged-in users should see it after refreshing.",
+      { confirmText: "OK", cancelText: null }
+    );
+  } else {
+    saveLocalPartsDatabase("shared", { pendingSync: true });
+    setPartsStatus("The local copy is still saved in this browser, but Supabase did not accept everything yet. Check the status message for the table error.");
+    await showPartsMessage(
+      "Shared Save Failed",
+      "The local copy is still saved in this browser, but it did not fully save to Supabase. Check the import/status message for the Supabase table error.",
+      { confirmText: "OK", cancelText: null }
+    );
+  }
+
+  updatePartsLocalButton();
+  renderPartsDatabase();
 }
 
 async function loginPartsUser() {
@@ -533,12 +590,55 @@ async function upsertSupabaseRows(table, rows) {
   if (table === PARTS_TABLES.master) {
     return saveSupabaseMasterRows(payload);
   }
+  if (table === PARTS_TABLES.aliases) {
+    return saveSupabaseRowsByKey(PARTS_TABLES.aliases, payload, findSupabaseAliasRow);
+  }
+  if (table === PARTS_TABLES.usage) {
+    return saveSupabaseRowsByKey(PARTS_TABLES.usage, payload, findSupabaseUsageRow);
+  }
   const { error } = await supabaseClient
     .from(table)
     .upsert(payload, { onConflict: getSupabaseConflictTarget(table) });
   if (error) {
     handlePartsRemoteError(error, table);
     return false;
+  }
+  return true;
+}
+
+async function saveSupabaseRowsByKey(table, rows, findExistingRow) {
+  for (const row of rows) {
+    const existing = await findExistingRow(row);
+    if (existing) {
+      const merged = mergeSupabaseRow(existing, row);
+      const { error } = await supabaseClient
+        .from(table)
+        .update({ ...merged, id: existing.id })
+        .eq("id", existing.id);
+      if (error) {
+        handlePartsRemoteError(error, table);
+        return false;
+      }
+      continue;
+    }
+
+    const { error } = await supabaseClient.from(table).insert(row);
+    if (error) {
+      const retryExisting = await findExistingRow(row);
+      if (!retryExisting) {
+        handlePartsRemoteError(error, table);
+        return false;
+      }
+      const merged = mergeSupabaseRow(retryExisting, row);
+      const { error: updateError } = await supabaseClient
+        .from(table)
+        .update({ ...merged, id: retryExisting.id })
+        .eq("id", retryExisting.id);
+      if (updateError) {
+        handlePartsRemoteError(updateError, table);
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -603,6 +703,40 @@ async function findSupabaseMasterPart(currentPartNumber, normalizedPartNumber) {
     .eq("current_part_number", current)
     .maybeSingle();
   return error ? null : data;
+}
+
+async function findSupabaseAliasRow(row) {
+  const oldPart = normalizePartNumber(row.old_part_number);
+  const currentPart = normalizePartNumber(row.current_part_number);
+  if (!oldPart || !currentPart) return null;
+  const { data, error } = await supabaseClient
+    .from(PARTS_TABLES.aliases)
+    .select("*")
+    .eq("old_part_number", row.old_part_number)
+    .eq("current_part_number", row.current_part_number)
+    .limit(1);
+  return error ? null : data?.[0] || null;
+}
+
+async function findSupabaseUsageRow(row) {
+  let query = supabaseClient
+    .from(PARTS_TABLES.usage)
+    .select("*")
+    .eq("current_part_number", row.current_part_number || "")
+    .eq("extracted_part_number", row.extracted_part_number || "")
+    .eq("drawing_number", row.drawing_number || "")
+    .eq("item_number", row.item_number || "")
+    .eq("pdf_file_name", row.pdf_file_name || "")
+    .limit(1);
+
+  if (row.pdf_page_number === null || row.pdf_page_number === undefined || row.pdf_page_number === "") {
+    query = query.is("pdf_page_number", null);
+  } else {
+    query = query.eq("pdf_page_number", row.pdf_page_number);
+  }
+
+  const { data, error } = await query;
+  return error ? null : data?.[0] || null;
 }
 
 function prepareSupabaseRows(table, rows) {
