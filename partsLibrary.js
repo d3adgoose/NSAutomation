@@ -644,32 +644,54 @@ async function saveSupabaseRowsByKey(table, rows, findExistingRow) {
 }
 
 async function saveSupabaseMasterRows(rows) {
-  for (const row of rows) {
-    const normalizedPartNumber = row.normalized_part_number || normalizePartNumber(row.current_part_number);
-    const existing = await findSupabaseMasterPart(row.current_part_number, normalizedPartNumber);
-    if (existing) {
-      const merged = cleanSupabaseRowForTable(PARTS_TABLES.master, mergeSupabaseRow(existing, row, PARTS_TABLES.master), existing);
-      const { error } = await supabaseClient
-        .from(PARTS_TABLES.master)
-        .update({ ...merged, id: existing.id })
-        .eq("id", existing.id);
-      if (error) {
-        handlePartsRemoteError(error, PARTS_TABLES.master);
-        return false;
-      }
-      continue;
-    }
+  setPartsStatus(`Checking shared current parts before saving ${rows.length} record${rows.length === 1 ? "" : "s"}...`);
+  const existingRows = await fetchSupabaseRows(PARTS_TABLES.master);
+  const existingByPartNumber = buildSupabaseMasterLookup(existingRows);
+  const payload = rows.map(row => {
+    const key = row.normalized_part_number || normalizePartNumber(row.current_part_number);
+    const existing = existingByPartNumber.get(key) || existingByPartNumber.get(formatCurrentPartNumber(row.current_part_number));
+    const merged = cleanSupabaseRowForTable(
+      PARTS_TABLES.master,
+      existing ? mergeSupabaseRow(existing, row, PARTS_TABLES.master) : row,
+      existing || {}
+    );
+    if (existing?.id) merged.id = existing.id;
+    return merged;
+  });
 
-    const { error } = await supabaseClient.from(PARTS_TABLES.master).insert(row);
+  const chunks = chunkPartsRows(payload, 250);
+  for (const [index, chunk] of chunks.entries()) {
+    setPartsStatus(`Saving current parts batch ${index + 1} of ${chunks.length} (${chunk.length} records)...`);
+    addPartsImportLog(`Saving current parts batch ${index + 1} of ${chunks.length}.`);
+    const { error } = await supabaseClient
+      .from(PARTS_TABLES.master)
+      .upsert(chunk, { onConflict: "normalized_part_number" });
     if (error) {
-      const savedAfterConflict = await updateSupabaseMasterAfterInsertConflict(row);
-      if (!savedAfterConflict) {
-        handlePartsRemoteError(error, PARTS_TABLES.master);
-        return false;
-      }
+      handlePartsRemoteError(error, PARTS_TABLES.master);
+      return false;
     }
+    await pauseForPartsStatusUpdate();
   }
   return true;
+}
+
+function buildSupabaseMasterLookup(rows) {
+  const lookup = new Map();
+  rows.forEach(row => {
+    const normalized = row.normalized_part_number || normalizePartNumber(row.current_part_number);
+    const formatted = formatCurrentPartNumber(row.current_part_number);
+    if (normalized) lookup.set(normalized, row);
+    if (formatted) lookup.set(formatted, row);
+  });
+  return lookup;
+}
+
+function chunkPartsRows(rows, size) {
+  const chunks = [];
+  for (let index = 0; index < rows.length; index += size) {
+    chunks.push(rows.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function updateSupabaseMasterAfterInsertConflict(row) {
