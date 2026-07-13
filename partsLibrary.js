@@ -78,6 +78,7 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsDeleteSelectedButton")?.addEventListener("click", deleteSelectedPartsRecords);
   document.getElementById("partsMessageCancelButton")?.addEventListener("click", () => closePartsMessage(false));
   document.getElementById("partsMessageConfirmButton")?.addEventListener("click", () => closePartsMessage(true));
+  document.getElementById("partsClearLocalButton")?.addEventListener("click", clearLocalPartsCopy);
 }
 
 function openPartsLoginModal() {
@@ -137,8 +138,12 @@ async function checkPartsLogin() {
     return;
   }
 
-  const { data } = await supabaseClient.auth.getUser();
-  partsCurrentUser = data.user || null;
+  const { data: sessionData } = await supabaseClient.auth.getSession();
+  partsCurrentUser = sessionData.session?.user || null;
+  if (!partsCurrentUser) {
+    const { data } = await supabaseClient.auth.getUser();
+    partsCurrentUser = data.user || null;
+  }
   updatePartsLoginUI();
 
   if (!partsCurrentUser && partsLoginRequired) {
@@ -153,7 +158,7 @@ function updatePartsLoginUI() {
   const main = document.querySelector(".parts-db-page");
 
   setPartsLoginStatus(loggedIn ? `Logged in as ${partsCurrentUser.email}` : "Not logged in.");
-  setPartsStatus(loggedIn ? "Ready to use shared Parts Library." : "Log in to use the shared Parts Library.");
+  setPartsStatus(loggedIn ? "Ready to use shared Parts Library." : "Log in to load the shared Parts Library.");
 
   if (loginButton) {
     loginButton.textContent = loggedIn ? partsCurrentUser.email : "Login";
@@ -163,12 +168,23 @@ function updatePartsLoginUI() {
 
   if (logoutButton) logoutButton.classList.toggle("hidden", !loggedIn);
   if (main) main.classList.toggle("parts-login-locked", partsLoginRequired && !loggedIn);
+  updatePartsLocalButton();
   updatePartsSharedStorageUsage();
 }
 
 function setPartsLoginStatus(message) {
   const status = document.getElementById("partsLoginStatus");
   if (status) status.textContent = message;
+}
+
+function updatePartsLocalButton() {
+  const button = document.getElementById("partsClearLocalButton");
+  if (!button) return;
+  button.classList.toggle("hidden", hasSupabaseParts() || !hasLocalPartsCache());
+}
+
+function hasLocalPartsCache() {
+  return !!localStorage.getItem(PARTS_STORAGE_KEY);
 }
 
 async function loginPartsUser() {
@@ -277,12 +293,23 @@ function ensurePartsUnlocked() {
 }
 
 async function loadPartsDatabase() {
-  const local = loadLocalPartsDatabase();
-  Object.assign(partsState, local);
-  normalizePartsFileNameLabels();
+  updatePartsLocalButton();
+  const cached = loadLocalPartsDatabase();
 
   if (!hasSupabaseParts()) {
-    saveLocalPartsDatabase();
+    if (isSharedPartsCache(cached)) {
+      applyPartsData(cached);
+      normalizePartsFileNameLabels();
+      setPartsStatus("Showing the last shared Parts Library saved in this browser. Log in or refresh to update it.");
+    } else if (shouldUseLocalPartsCopy()) {
+      applyPartsData(cached);
+      normalizePartsFileNameLabels();
+      saveLocalPartsDatabase("local");
+      setPartsStatus("Showing this browser's local Parts Library copy because shared login is unavailable.");
+    } else {
+      clearRuntimePartsData();
+      setPartsStatus("Log in to load the shared Parts Library.");
+    }
     return;
   }
 
@@ -301,21 +328,62 @@ async function loadPartsDatabase() {
     partsState.reviews = reviews;
     partsState.history = history;
     normalizePartsFileNameLabels();
-    saveLocalPartsDatabase();
-    setPartsStatus("Loaded shared parts library.");
+    saveLocalPartsDatabase("shared");
+    setPartsStatus("Loaded shared Parts Library.");
+    updatePartsLocalButton();
   } catch (error) {
     console.warn("Could not load shared parts library.", error);
     if (isMissingPartsRemoteTableError(error)) {
       partsRemoteStorageAvailable = false;
     }
-    setPartsStatus("Using the local Parts Library. Run the Supabase migration to enable shared storage.");
+    const cached = loadLocalPartsDatabase();
+    if (isSharedPartsCache(cached)) {
+      applyPartsData(cached);
+      normalizePartsFileNameLabels();
+      setPartsStatus("Showing the last shared Parts Library saved in this browser. Shared storage could not be reached.");
+    } else if (shouldUseLocalPartsCopy()) {
+      applyPartsData(cached);
+      normalizePartsFileNameLabels();
+      setPartsStatus("Using this browser's local Parts Library copy. Shared storage could not be loaded.");
+    } else {
+      clearRuntimePartsData();
+      setPartsStatus("Shared Parts Library could not be loaded. Try refreshing or logging in again.");
+    }
+    updatePartsLocalButton();
   }
+}
+
+function shouldUseLocalPartsCopy() {
+  return !partsLoginRequired || !isSharedPartsLoginAvailable();
+}
+
+function isSharedPartsLoginAvailable() {
+  return typeof supabaseClient !== "undefined" && !!supabaseClient;
+}
+
+function clearRuntimePartsData() {
+  partsState.master = [];
+  partsState.aliases = [];
+  partsState.usage = [];
+  partsState.reviews = [];
+  partsState.history = [];
+  partsState.selected = {};
+}
+
+function applyPartsData(data) {
+  partsState.master = Array.isArray(data.master) ? data.master : [];
+  partsState.aliases = Array.isArray(data.aliases) ? data.aliases : [];
+  partsState.usage = Array.isArray(data.usage) ? data.usage : [];
+  partsState.reviews = Array.isArray(data.reviews) ? data.reviews : [];
+  partsState.history = Array.isArray(data.history) ? data.history : [];
+  partsState.selected = {};
 }
 
 function loadLocalPartsDatabase() {
   try {
     const parsed = JSON.parse(localStorage.getItem(PARTS_STORAGE_KEY) || "{}");
     return {
+      meta: parsed.meta || {},
       master: Array.isArray(parsed.master) ? parsed.master : [],
       aliases: Array.isArray(parsed.aliases) ? parsed.aliases : [],
       usage: Array.isArray(parsed.usage) ? parsed.usage : [],
@@ -323,8 +391,44 @@ function loadLocalPartsDatabase() {
       history: Array.isArray(parsed.history) ? parsed.history : []
     };
   } catch (error) {
-    return { master: [], aliases: [], usage: [], reviews: [], history: [] };
+    return { meta: {}, master: [], aliases: [], usage: [], reviews: [], history: [] };
   }
+}
+
+function isSharedPartsCache(data) {
+  return data?.meta?.storageMode === "shared" || (Array.isArray(data?.aliases) && data.aliases.length > 0);
+}
+
+async function clearLocalPartsCopy() {
+  const confirmed = await showPartsMessage(
+    "Clear Local Copy",
+    "Clear the Parts Library data saved in this browser? This does not delete the shared library.",
+    {
+      confirmText: "Clear Local Copy",
+      cancelText: "Cancel",
+      variant: "danger"
+    }
+  );
+  if (!confirmed) return;
+
+  localStorage.removeItem(PARTS_STORAGE_KEY);
+  partsState.master = [];
+  partsState.aliases = [];
+  partsState.usage = [];
+  partsState.reviews = [];
+  partsState.history = [];
+  partsState.selected = {};
+
+  if (hasSupabaseParts()) {
+    await loadPartsDatabase();
+  } else if (shouldUseLocalPartsCopy()) {
+    setPartsStatus("Local browser copy cleared. Log in to load the shared Parts Library.");
+  } else {
+    setPartsStatus("Local browser copy cleared.");
+  }
+
+  updatePartsLocalButton();
+  renderPartsDatabase();
 }
 
 function normalizePartsFileNameLabels() {
@@ -354,6 +458,8 @@ function normalizePartsFileNameLabels() {
   partsState.usage.forEach(row => {
     row.pdf_file_name = mergeFileNameLabels(cleanFileName(row.pdf_file_name), "");
     row.description = mergePartDescriptions(row.description, "");
+    row.drawing_number = cleanUsageDrawingLabel(row.drawing_number);
+    row.drawing_name = cleanUsageDrawingLabel(row.drawing_name);
   });
   partsState.reviews.forEach(row => {
     row.source_file = mergeFileNameLabels(cleanFileName(row.source_file), "");
@@ -362,8 +468,20 @@ function normalizePartsFileNameLabels() {
   });
 }
 
-function saveLocalPartsDatabase() {
+function cleanUsageDrawingLabel(value) {
+  const text = normalizeImportText(value);
+  if (!text) return "";
+  if (/^\d+\s+REFER\s+TO\b/i.test(text)) return "";
+  if (isBOMHeaderLine(text)) return "";
+  return text;
+}
+
+function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "local") {
   localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({
+    meta: {
+      storageMode,
+      saved_at: nowISO()
+    },
     master: partsState.master,
     aliases: partsState.aliases,
     usage: partsState.usage,
@@ -490,8 +608,9 @@ function renderPartsSummary() {
 
 function renderPartsHeaderSummary() {
   const totalRecords = partsState.master.length + partsState.aliases.length + partsState.usage.length + partsState.reviews.length + partsState.history.length;
+  const storageLabel = hasSupabaseParts() ? "shared" : "local";
 
-  setText("partsHeaderRecordCount", `${totalRecords} part record${totalRecords === 1 ? "" : "s"} saved`);
+  setText("partsHeaderRecordCount", `${totalRecords} ${storageLabel} part record${totalRecords === 1 ? "" : "s"} saved`);
   setText("partsHeaderUsageText", `Current parts: ${getUniqueCurrentPartsCount()} - Old part numbers: ${getUniqueOldPartNumbersCount()} - Drawing usage: ${partsState.usage.length}`);
   updatePartsSharedStorageUsage();
 }
@@ -765,14 +884,12 @@ function getPartsTableConfig(tab) {
       emptyLabel: "drawing usage records",
       columns: [
         { key: "current_part_number", label: "Current Part Number" },
-        { key: "extracted_part_number", label: "Extracted Part Number" },
         { key: "description", label: "Description" },
-        { key: "drawing_number", label: "Drawing Number" },
-        { key: "drawing_name", label: "Drawing Name" },
-        { key: "item_number", label: "Item Number" },
+        { key: "drawing_number", label: "Drawing / Sheet" },
+        { key: "item_number", label: "Item" },
         { key: "quantity", label: "Qty" },
         { key: "pdf_file_name", label: "File Name(s)" },
-        { key: "pdf_page_number", label: "PDF Page" }
+        { key: "pdf_page_number", label: "Page" }
       ],
       actions: row => actionButtons(row)
     },
@@ -847,7 +964,7 @@ function getDefaultPartsSort(tab) {
   const keys = {
     master: "current_part_number",
     aliases: "old_part_number",
-    usage: "pdf_page_number",
+    usage: "pdf_file_name",
     reviews: "status",
     history: "created_at"
   };
@@ -959,13 +1076,22 @@ function getPDFTextLines(items) {
 
 function extractDrawingInfo(lines, pageText) {
   const drawingNumber =
-    findTitleBlockValue(lines, "PART NUMBER") ||
+    cleanDrawingTitleBlockValue(findTitleBlockValue(lines, "PART NUMBER")) ||
     (pageText.match(/\b([A-Z]{1,4}\d+(?:\.\d+)?-DWG-[A-Z0-9.-]+)\b/i)?.[1] || "");
   const drawingName =
-    findTitleBlockValue(lines, "PART NAME") ||
-    findTitleBlockValue(lines, "TITLE") ||
+    cleanDrawingTitleBlockValue(findTitleBlockValue(lines, "PART NAME")) ||
+    cleanDrawingTitleBlockValue(findTitleBlockValue(lines, "TITLE")) ||
     "";
   return { drawingNumber, drawingName };
+}
+
+function cleanDrawingTitleBlockValue(value) {
+  const text = normalizeImportText(value);
+  if (!text) return "";
+  if (/^\d+\s+REFER\s+TO\b/i.test(text)) return "";
+  if (isBOMHeaderLine(text)) return "";
+  if (parseBOMRow(text, { drawingNumber: "", drawingName: "", fileName: "", pageNumber: "" })) return "";
+  return text;
 }
 
 function findTitleBlockValue(lines, label) {
@@ -2157,14 +2283,12 @@ function getEditableFields(tab) {
   ];
   if (tab === "usage") return [
     { key: "current_part_number", label: "Current Part Number" },
-    { key: "extracted_part_number", label: "Extracted Part Number" },
     { key: "description", label: "Description" },
-    { key: "drawing_number", label: "Drawing Number" },
-    { key: "drawing_name", label: "Drawing Name" },
-    { key: "item_number", label: "Item Number" },
+    { key: "drawing_number", label: "Drawing / Sheet" },
+    { key: "item_number", label: "Item" },
     { key: "quantity", label: "Quantity" },
     { key: "pdf_file_name", label: "File Name(s)" },
-    { key: "pdf_page_number", label: "PDF Page Number" }
+    { key: "pdf_page_number", label: "Page" }
   ];
   if (tab === "reviews") return [
     { key: "extracted_part_number", label: "Extracted Part Number" },

@@ -3537,6 +3537,22 @@ summary {
   gap: 16px;
 }
 
+.parts-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.parts-status-row .warranty-status {
+  flex: 1;
+}
+
+.parts-status-row button {
+  width: auto;
+  white-space: nowrap;
+}
+
 .parts-list-heading {
   display: flex;
   justify-content: space-between;
