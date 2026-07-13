@@ -39,6 +39,7 @@ document.addEventListener("DOMContentLoaded", initPartsDatabase);
 
 async function initPartsDatabase() {
   bindPartsDatabaseEvents();
+  registerPartsGhostAutocompleteSource();
   await checkPartsLogin();
   await loadPartsDatabase();
   renderPartsDatabase();
@@ -88,6 +89,48 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsMessageConfirmButton")?.addEventListener("click", () => closePartsMessage(true));
   document.getElementById("partsSyncLocalButton")?.addEventListener("click", syncLocalPartsCopyToShared);
   document.getElementById("partsClearLocalButton")?.addEventListener("click", clearLocalPartsCopy);
+}
+
+function registerPartsGhostAutocompleteSource() {
+  if (typeof window.registerGhostAutocompleteSource !== "function") return;
+  window.registerGhostAutocompleteSource(() => getPartsGhostAutocompleteSuggestions());
+}
+
+function getPartsGhostAutocompleteSuggestions() {
+  const values = [];
+  const addValue = value => {
+    const clean = String(value || "").trim();
+    if (clean) values.push(clean);
+  };
+  const addMultiline = value => getMultilineValues(value).forEach(addValue);
+
+  partsState.master.forEach(row => {
+    addValue(row.current_part_number);
+    addMultiline(row.description);
+    addMultiline(row.source);
+  });
+  partsState.aliases.forEach(row => {
+    addValue(row.old_part_number);
+    addValue(row.current_part_number);
+    addMultiline(row.description);
+    addMultiline(row.source);
+  });
+  partsState.usage.forEach(row => {
+    addValue(row.current_part_number);
+    addValue(row.extracted_part_number);
+    addMultiline(row.description);
+    addValue(row.drawing_number);
+    addValue(row.drawing_name);
+    addMultiline(row.pdf_file_name);
+  });
+
+  const seen = new Set();
+  return values.filter(value => {
+    const key = normalizeSearch(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function openPartsLoginModal() {

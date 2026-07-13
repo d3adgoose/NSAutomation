@@ -5,6 +5,40 @@ let currentUser = null;
 let useRemoteDatabase = false;
 const libraryPDFBlobCache = new Map();
 
+function registerDatabaseGhostAutocompleteSource() {
+  if (typeof window.registerGhostAutocompleteSource !== "function") return;
+  window.registerGhostAutocompleteSource(() => getDatabaseGhostAutocompleteSuggestions());
+}
+
+function getDatabaseGhostAutocompleteSuggestions() {
+  const values = [];
+  const addValue = value => {
+    const clean = String(value || "").trim();
+    if (clean) values.push(clean);
+  };
+
+  libraryDB.forEach(item => {
+    addValue(item.fileName);
+    addValue(item.displayTitle);
+    addValue(item.attachmentFileName);
+    addValue(item.category);
+    addValue(item.documentType);
+    addValue(item.packetSection);
+    (item.tocEntries || []).forEach(entry => {
+      addValue(entry.title);
+      addValue(entry.parentTitle);
+    });
+  });
+
+  const seen = new Set();
+  return values.filter(value => {
+    const key = String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function openDatabaseMessageModal(title = "Action Needed", message = "", options = {}) {
   return new Promise(resolve => {
     const modal = document.getElementById("appPromptModal");
@@ -2389,6 +2423,7 @@ async function confirmLibraryMergeOrder() {
 }
 
 window.addEventListener("load", async () => {
+  registerDatabaseGhostAutocompleteSource();
   await checkDatabaseLogin();
   populateLibraryTypeFilter();
   await loadLibraryDB();
@@ -2406,4 +2441,9 @@ window.addEventListener("load", async () => {
   const typeFilter = document.getElementById("libraryTypeFilter");
   if (typeFilter) typeFilter.addEventListener("change", renderLibraryDB);
 
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  registerDatabaseGhostAutocompleteSource();
+  window.setTimeout(registerDatabaseGhostAutocompleteSource, 0);
 });

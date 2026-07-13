@@ -5,25 +5,57 @@
   const MAX_SAVED_SUGGESTIONS = 80;
 
   const FALLBACK_SUGGESTIONS = [
-    "Activation Sensors",
-    "Aluminum Rack",
-    "Brush Motor",
-    "Control Panel",
-    "Electrical Schematic",
-    "Emergency Shutdown",
-    "Flange Coupler",
-    "Gear Reducer",
-    "Heavy Duty Bearing",
-    "Maintenance Manual",
+    "Add Part",
+    "Build PDF",
+    "Change Mapping",
+    "Clear Filters",
+    "Clear Local Copy",
+    "Current Parts",
+    "Current Part Number",
+    "Delete Selected",
+    "Detected Columns",
+    "Drawing Number",
+    "Drawing Package",
+    "Drawing PDF",
+    "Drawing Usage",
+    "Drawing Usage Records",
+    "Excel Part List",
+    "Export CSV",
+    "Export Library",
+    "File Name",
+    "File Names",
+    "Import History",
+    "Import Selected Rows",
+    "Items to Check",
+    "Last Updated",
+    "Local Copy",
+    "Manual PDF",
+    "Needs Review",
+    "Normal PDF",
+    "NS Automation",
+    "Old Part Numbers",
+    "Old Part Number",
+    "Operation Manual",
     "Operating Instructions",
-    "Parts List",
-    "Revision Remarks",
-    "Sequence of Operations",
-    "Shop Drawing",
-    "Signal Light",
-    "Testing Checklist",
+    "Page Number Format",
+    "Part List",
+    "Part Description",
+    "Part Number",
+    "Parts Library",
+    "PDF Page",
+    "Review Excel Import",
+    "Review PDF Import",
+    "Save Library",
+    "Search",
+    "Select All",
+    "Shared Parts Library",
+    "Sort",
+    "Source File",
+    "Submittal",
+    "Submittal Package",
+    "Suggested Match",
     "Warranty",
-    "Wrap Brush Adjustment"
+    "Warranty Prompt"
   ];
 
   const DEFAULT_SELECTORS = [
@@ -38,11 +70,13 @@
     "#librarySearch",
     "#databaseSearch",
     "#converterSearch",
+    "#partsSearchInput",
     "input[data-ghost-autocomplete]",
     "input.ghost-autocomplete-input"
   ];
 
   const activeInputs = new WeakMap();
+  const customSuggestionSources = [];
   let observerStarted = false;
 
   function normalizeGhostSuggestion(value) {
@@ -53,6 +87,15 @@
 
   function normalizeForMatch(value) {
     return normalizeGhostSuggestion(value).toLowerCase();
+  }
+
+  function normalizeLooseMatch(value) {
+    return normalizeForMatch(value).replace(/[^a-z0-9]+/g, "");
+  }
+
+  function registerGhostAutocompleteSource(source) {
+    if (typeof source !== "function" || customSuggestionSources.includes(source)) return;
+    customSuggestionSources.push(source);
   }
 
   function getSavedGhostSuggestions() {
@@ -124,8 +167,16 @@
       });
     }
 
-    document.querySelectorAll(".uploaded-pdf-name, .uploaded-pdf-title, .toc-tree-title, .toc-template-level-name, .library-file-name, .library-display-title, .database-file-name, .database-display-title").forEach(el => {
+    document.querySelectorAll("nav a, h1, h2, h3, summary, .uploaded-pdf-name, .uploaded-pdf-title, .toc-tree-title, .toc-template-level-name, .library-file-name, .library-display-title, .database-file-name, .database-display-title").forEach(el => {
       addSuggestion(values, el.textContent.replace(/^TOC Name:\s*/i, ""));
+    });
+
+    customSuggestionSources.forEach(source => {
+      try {
+        addSuggestions(values, source());
+      } catch (error) {
+        console.warn("Ghost autocomplete suggestion source skipped:", error);
+      }
     });
 
     addSuggestions(values, getSavedGhostSuggestions());
@@ -154,10 +205,21 @@
     return score - Math.max(0, candidate.length - typed.length) * 0.03;
   }
 
+  function tokenScore(typed, candidate) {
+    const typedTokens = normalizeForMatch(typed).split(" ").filter(Boolean);
+    const candidateTokens = normalizeForMatch(candidate).split(" ").filter(Boolean);
+    if (!typedTokens.length || !candidateTokens.length) return 0;
+
+    const matched = typedTokens.filter(token =>
+      candidateTokens.some(candidateToken => candidateToken.startsWith(token))
+    ).length;
+    return matched === typedTokens.length ? matched * 20 - candidateTokens.length : 0;
+  }
+
   function getBestGhostSuggestion(value, suggestions) {
     const typed = normalizeGhostSuggestion(value);
     const typedMatch = normalizeForMatch(typed);
-    if (!typedMatch) return "";
+    if (typedMatch.length < 2) return "";
 
     const candidates = (suggestions || [])
       .map(normalizeGhostSuggestion)
@@ -175,6 +237,20 @@
       .sort((a, b) => normalizeForMatch(a).indexOf(typedMatch) - normalizeForMatch(b).indexOf(typedMatch) || a.length - b.length);
 
     if (containsMatches.length > 0) return containsMatches[0];
+
+    const typedLoose = normalizeLooseMatch(typed);
+    const looseMatches = candidates
+      .filter(candidate => typedLoose.length >= 3 && normalizeLooseMatch(candidate).startsWith(typedLoose))
+      .sort((a, b) => a.length - b.length || a.localeCompare(b));
+
+    if (looseMatches.length > 0) return looseMatches[0];
+
+    const tokenMatches = candidates
+      .map(candidate => ({ candidate, score: tokenScore(typedMatch, candidate) }))
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score || a.candidate.length - b.candidate.length);
+
+    if (tokenMatches.length > 0) return tokenMatches[0].candidate;
 
     const fuzzyMatches = candidates
       .map(candidate => ({ candidate, score: fuzzyScore(typedMatch, normalizeForMatch(candidate)) }))
@@ -197,6 +273,10 @@
 
   function hasMiddleSelection(input) {
     return input.selectionStart !== input.selectionEnd;
+  }
+
+  function isCaretAtEnd(input) {
+    return (input.selectionStart ?? input.value.length) === input.value.length;
   }
 
   function createOverlay() {
@@ -269,7 +349,7 @@
       }
     }
 
-    return "  -> " + suggestion;
+    return "  " + suggestion;
   }
 
   function hideSuggestion(state) {
@@ -365,7 +445,7 @@
     input.addEventListener("scroll", () => positionOverlay(input, state));
 
     input.addEventListener("keydown", event => {
-      if (event.key === "Tab" && state.suggestion) {
+      if ((event.key === "Tab" || event.key === "ArrowRight") && state.suggestion && isCaretAtEnd(input)) {
         event.preventDefault();
         acceptSuggestion(input, state);
         return;
@@ -435,6 +515,7 @@
   window.enableGhostAutocomplete = enableGhostAutocomplete;
   window.collectGhostAutocompleteSuggestions = collectGhostAutocompleteSuggestions;
   window.saveGhostAutocompleteSuggestion = saveGhostAutocompleteSuggestion;
+  window.registerGhostAutocompleteSource = registerGhostAutocompleteSource;
   window.normalizeGhostSuggestion = normalizeGhostSuggestion;
   window.getBestGhostSuggestion = getBestGhostSuggestion;
   window.enableGhostAutocompleteFor = enableGhostAutocompleteFor;

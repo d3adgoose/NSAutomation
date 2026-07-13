@@ -22,6 +22,7 @@
 .ghost-autocomplete-suffix {
   color: rgba(100, 116, 139, 0.68);
   user-select: none;
+  font-style: italic;
 }
 
 @media (prefers-color-scheme: dark) {
