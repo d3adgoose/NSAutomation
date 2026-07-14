@@ -948,7 +948,7 @@ function openPartsHealthReport() {
     button.addEventListener("click", () => {
       const action = button.dataset.healthException;
       if (action === "approve-health" || action === "revoke-health") {
-        updateGeneralHealthException(action, button.dataset.id, button.dataset.exceptionText);
+        updateGeneralHealthException(action, button.dataset.id, button.dataset.exceptionText, button.dataset.exceptionCategory);
       } else {
         updatePartNumberException(action, button.dataset.id);
       }
@@ -962,7 +962,7 @@ function renderPartsHealthItem(item) {
   return `
     <li class="parts-health-item-action">
       <span>${escapeHTML(item.text)}</span>
-      <button class="secondary" type="button" data-health-exception="${escapeAttr(item.action)}" data-id="${escapeAttr(item.id)}" data-exception-text="${escapeAttr(item.exceptionText || item.text)}">${escapeHTML(item.label)}</button>
+      <button class="secondary" type="button" data-health-exception="${escapeAttr(item.action)}" data-id="${escapeAttr(item.id)}" data-exception-text="${escapeAttr(item.exceptionText || item.text)}" data-exception-category="${escapeAttr(item.exceptionCategory || "")}">${escapeHTML(item.label)}</button>
     </li>
   `;
 }
@@ -980,20 +980,20 @@ function saveGeneralHealthExceptions(exceptions) {
   else localStorage.removeItem(PARTS_HEALTH_EXCEPTIONS_KEY);
 }
 
-async function updateGeneralHealthException(action, key, text) {
+async function updateGeneralHealthException(action, key, text, category) {
   const exceptions = loadGeneralHealthExceptions();
   if (action === "approve-health") {
     closePartsHealthReport();
     const confirmed = await showPartsMessage(
       "Allow Health Exception",
-      `Allow this Library Health exception?\n\n${text}\n\nIt will remain approved in this browser until revoked.`,
+      `Allow this exception only for “${category}”?\n\n${text}\n\nOther Library Health categories for this record will still require separate approval.`,
       { confirmText: "Allow Exception", cancelText: "Cancel" }
     );
     if (!confirmed) {
       openPartsHealthReport();
       return;
     }
-    exceptions[key] = { text, approved_at: nowISO() };
+    exceptions[key] = { text, category, approved_at: nowISO() };
     setPartsStatus("Library Health exception approved.");
   } else {
     delete exceptions[key];
@@ -1112,10 +1112,24 @@ function buildPartsHealthReport() {
       if (typeof item !== "string") return item;
       const key = getGeneralHealthExceptionKey(section.title, item);
       if (generalExceptions[key]) {
-        approvedExceptions.push({ text: item, action: "revoke-health", id: key, label: "Revoke", exceptionText: item });
+        approvedExceptions.push({
+          text: `${item} — Approved only for: ${section.title}`,
+          action: "revoke-health",
+          id: key,
+          label: "Revoke",
+          exceptionText: item,
+          exceptionCategory: section.title
+        });
         return null;
       }
-      return { text: item, action: "approve-health", id: key, label: "Allow Exception", exceptionText: item };
+      return {
+        text: item,
+        action: "approve-health",
+        id: key,
+        label: "Allow Exception",
+        exceptionText: item,
+        exceptionCategory: section.title
+      };
     }).filter(Boolean);
   });
   sections.push({
