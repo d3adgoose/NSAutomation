@@ -3923,6 +3923,34 @@ summary {
   pointer-events: none;
 }
 
+#databaseHealthModal {
+  justify-content: flex-end;
+  align-items: flex-start;
+  padding: 72px 18px 18px;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+}
+
+.database-health-modal-content {
+  pointer-events: auto;
+}
+
+.database-health-drag-handle {
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.database-inline-health-button {
+  width: auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  white-space: nowrap;
+  font-size: 0.76rem;
+}
+
 .parts-health-modal-content .parts-modal-heading {
   cursor: move;
   user-select: none;
@@ -4016,6 +4044,14 @@ summary {
 
 @media (max-width: 900px) {
   #partsHealthModal {
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+    background: rgba(10, 25, 38, 0.42);
+    pointer-events: auto;
+  }
+
+  #databaseHealthModal {
     justify-content: center;
     align-items: center;
     padding: 18px;

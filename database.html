@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Database</title>
-  <link rel="stylesheet" href="style.css?v=20260713-database-action-order" />
+  <link rel="stylesheet" href="style.css?v=20260714-inline-database-health" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 </head>
 
@@ -236,7 +236,16 @@
         </select>
       </div>
 
-      <p id="databaseStatus" class="warranty-status" aria-live="polite"></p>
+      <div class="parts-status-row parts-list-status-row database-health-strip">
+        <div class="parts-status-copy">
+          <div id="databaseSaveIndicator" class="parts-save-indicator saved-shared" role="status" aria-live="polite">
+            <span class="parts-save-dot" aria-hidden="true"></span>
+            <strong id="databaseSaveIndicatorText">Saved to shared library</strong>
+          </div>
+          <button id="databaseHealthButton" class="secondary database-inline-health-button" type="button">Check Health</button>
+          <p id="databaseStatus" class="warranty-status" aria-live="polite"></p>
+        </div>
+      </div>
 
       <p id="libraryCount" class="builder-history-status" aria-live="polite"></p>
 
@@ -351,6 +360,21 @@
     </div>
   </div>
 
+  <div id="databaseHealthModal" class="modal hidden">
+    <div class="modal-content parts-health-modal-content database-health-modal-content">
+      <div class="parts-modal-heading database-health-drag-handle">
+        <span class="parts-health-corner-grip" aria-label="Drag panel to move" title="Drag to move">⠿</span>
+        <div>
+          <h2>Database Health Check</h2>
+          <p id="databaseHealthSummary" class="card-intro"></p>
+          <p class="parts-health-panel-hint">Keep this panel open while you search or edit the Database behind it.</p>
+        </div>
+        <button class="secondary" id="databaseHealthCloseButton" type="button">Close</button>
+      </div>
+      <div id="databaseHealthReport" class="parts-health-report"></div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
@@ -361,7 +385,7 @@
   <script src="pdfStorage.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="supabaseClient.js"></script>
-  <script src="database.js?v=20260713-database-action-order"></script>
+  <script src="database.js?v=20260714-database-message-strip"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
 </body>

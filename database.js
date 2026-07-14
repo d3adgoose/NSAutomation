@@ -4,6 +4,8 @@ let selectedLibraryPDFIds = new Set();
 let currentUser = null;
 let useRemoteDatabase = false;
 const libraryPDFBlobCache = new Map();
+const DATABASE_HEALTH_EXCEPTIONS_KEY = "ns_database_health_exceptions_v1";
+let currentDatabaseHealthIssues = new Map();
 
 function registerDatabaseGhostAutocompleteSource() {
   if (typeof window.registerGhostAutocompleteSource !== "function") return;
@@ -382,12 +384,35 @@ function updateDatabaseStatus(message = "") {
   const status = document.getElementById("databaseStatus");
   if (!status) return;
   status.textContent = message || "";
+  updateDatabaseSaveIndicator(message);
 }
 
 function updateDatabaseUploadStatus(message = "") {
   const status = document.getElementById("databaseUploadStatus");
   if (!status) return;
   status.textContent = message || "";
+  const libraryStatus = document.getElementById("databaseStatus");
+  if (libraryStatus) libraryStatus.textContent = message || "";
+  updateDatabaseSaveIndicator(message);
+}
+
+function updateDatabaseSaveIndicator(message = "") {
+  const indicator = document.getElementById("databaseSaveIndicator");
+  const text = document.getElementById("databaseSaveIndicatorText");
+  if (!indicator || !text) return;
+  const normalized = String(message || "").toLowerCase();
+  let state = useRemoteDatabase ? "shared" : "local";
+  if (/could not|failed|error|unavailable/.test(normalized)) state = "failed";
+  else if (/loading|saving|adding|updating|uploading|removing|merging|preparing|checking/.test(normalized)) state = "saving";
+  const config = {
+    saving: ["saving", "Saving…"],
+    shared: ["saved-shared", "Saved to shared library"],
+    local: ["saved-local", "Saved locally"],
+    failed: ["save-failed", "Shared save failed"]
+  }[state];
+  indicator.classList.remove("saving", "saved-shared", "saved-local", "save-failed", "unsaved");
+  indicator.classList.add(config[0]);
+  text.textContent = config[1];
 }
 
 function updateLibraryCount(visibleCount = libraryDB.length) {
@@ -1098,13 +1123,13 @@ async function renameLibraryFile(id) {
   const currentName = item.attachmentFileName || item.fileName || "";
 
   const newName = await openDatabaseMessageModal(
-    "Rename PDF",
-    "Enter the new PDF file name.",
+    "Rename File",
+    "Enter the new file name. The .pdf extension is optional.",
     {
       input: {
-        label: "PDF file name",
+        label: "File name",
         value: currentName,
-        placeholder: "Example: Brush Machine.pdf"
+        placeholder: "Example: Brush Machine"
       },
       confirmLabel: "Rename",
       cancelLabel: "Cancel"
@@ -1117,10 +1142,6 @@ async function renameLibraryFile(id) {
   if (!cleanName) {
     await showLibraryMessage("File Name Required", "File name cannot be blank.");
     return;
-  }
-
-  if (!cleanName.toLowerCase().endsWith(".pdf")) {
-    cleanName += ".pdf";
   }
 
   item.fileName = cleanName;
@@ -1417,6 +1438,160 @@ async function addLibraryEntryFromForm() {
       ? `Added document record: ${addedName}. The PDF was not attached.`
       : `Added document: ${addedName}`
   );
+}
+
+function getDatabaseHealthExceptions() {
+  try {
+    return JSON.parse(localStorage.getItem(DATABASE_HEALTH_EXCEPTIONS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDatabaseHealthExceptions(exceptions) {
+  if (Object.keys(exceptions).length) localStorage.setItem(DATABASE_HEALTH_EXCEPTIONS_KEY, JSON.stringify(exceptions));
+  else localStorage.removeItem(DATABASE_HEALTH_EXCEPTIONS_KEY);
+}
+
+function getDatabaseHealthKey(category, text) {
+  const source = `${category}|${text}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `db-health-${(hash >>> 0).toString(16)}`;
+}
+
+function buildDatabaseHealthReport() {
+  const sections = [
+    { title: "Duplicate document records", description: "Documents with the same file name and file location should normally be one record.", items: [] },
+    { title: "Missing file names", description: "Every Database record should have a recognizable PDF file name.", items: [] },
+    { title: "Missing file locations", description: "File Location helps users recognize where the document belongs.", items: [] },
+    { title: "Missing document types", description: "Document Type controls filtering and packet placement.", items: [] },
+    { title: "Missing TOC sections", description: "A TOC Section is needed when sending documents to a builder.", items: [] },
+    { title: "Invalid categories", description: "Database categories must be Generic, Car Wash, or Transit Wash.", items: [] },
+    { title: "Missing PDF attachments", description: "These records exist, but no shared PDF storage path is attached.", items: [] },
+    { title: "Incomplete formatted levels", description: "Formatted TOC levels must include a title.", items: [] }
+  ];
+  const byTitle = new Map(sections.map(section => [section.title, section]));
+  const duplicateGroups = new Map();
+
+  libraryDB.forEach(item => {
+    const name = String(item.fileName || "").trim();
+    const location = String(item.displayTitle || "").trim();
+    const identity = `${name.toLowerCase()}|${location.toLowerCase()}`;
+    if (name || location) {
+      if (!duplicateGroups.has(identity)) duplicateGroups.set(identity, []);
+      duplicateGroups.get(identity).push(item);
+    }
+    if (!name) byTitle.get("Missing file names").items.push(`Record ${item.id || "(unknown ID)"} has no file name.`);
+    if (!location) byTitle.get("Missing file locations").items.push(`${name || item.id || "Unknown record"} has no file location.`);
+    if (!String(item.documentType || "").trim()) byTitle.get("Missing document types").items.push(`${name || location || item.id} has no document type.`);
+    if (!String(item.packetSection || "").trim()) byTitle.get("Missing TOC sections").items.push(`${name || location || item.id} has no TOC section.`);
+    if (!DATABASE_CATEGORIES.includes(item.category)) byTitle.get("Invalid categories").items.push(`${name || location || item.id} uses category “${item.category || "blank"}”.`);
+    if (!String(item.storagePath || "").trim()) byTitle.get("Missing PDF attachments").items.push(`${name || location || item.id} has no attached shared PDF.`);
+    (item.tocEntries || []).forEach((entry, index) => {
+      if (!String(entry.title || "").trim()) byTitle.get("Incomplete formatted levels").items.push(`${name || location || item.id} has a formatted level without a title at position ${index + 1}.`);
+    });
+  });
+  duplicateGroups.forEach(group => {
+    if (group.length > 1) {
+      const first = group[0];
+      byTitle.get("Duplicate document records").items.push(`${first.fileName || first.displayTitle || "Unnamed document"} appears ${group.length} times.`);
+    }
+  });
+
+  const exceptions = getDatabaseHealthExceptions();
+  const approved = [];
+  currentDatabaseHealthIssues = new Map();
+  sections.forEach(section => {
+    section.items = section.items.map(text => {
+      const key = getDatabaseHealthKey(section.title, text);
+      const issue = { key, category: section.title, text };
+      currentDatabaseHealthIssues.set(key, issue);
+      if (exceptions[key]) {
+        approved.push({ ...issue, text: `${text} — Approved only for: ${section.title}`, approved: true });
+        return null;
+      }
+      return issue;
+    }).filter(Boolean);
+  });
+  sections.push({ title: "Approved exceptions", description: "Each exception applies only to the health category shown and can be revoked here.", items: approved, informational: true });
+  return sections;
+}
+
+function openDatabaseHealthReport() {
+  const report = buildDatabaseHealthReport();
+  const issueCount = report.reduce((sum, section) => sum + (section.informational ? 0 : section.items.length), 0);
+  const summary = document.getElementById("databaseHealthSummary");
+  if (summary) summary.textContent = issueCount ? `${issueCount} issue${issueCount === 1 ? "" : "s"} found.` : "No Database health issues were found.";
+  const container = document.getElementById("databaseHealthReport");
+  if (container) {
+    container.innerHTML = report.map(section => `
+      <section class="parts-health-section ${section.items.length ? "" : "good"}">
+        <h3><span>${escapeHTML(section.title)}</span><span>${section.items.length}</span></h3>
+        <p>${escapeHTML(section.description)}</p>
+        ${section.items.length ? `<ul>${section.items.slice(0, 50).map(issue => `
+          <li class="parts-health-item-action">
+            <span>${escapeHTML(issue.text)}</span>
+            <button class="secondary" type="button" data-db-health-action="${issue.approved ? "revoke" : "approve"}" data-db-health-key="${issue.key}">${issue.approved ? "Revoke" : "Allow Exception"}</button>
+          </li>`).join("")}</ul>` : ""}
+      </section>`).join("");
+    container.querySelectorAll("[data-db-health-action]").forEach(button => {
+      button.addEventListener("click", () => updateDatabaseHealthException(button.dataset.dbHealthAction, button.dataset.dbHealthKey));
+    });
+  }
+  document.getElementById("databaseHealthModal")?.classList.remove("hidden");
+}
+
+function closeDatabaseHealthReport() {
+  document.getElementById("databaseHealthModal")?.classList.add("hidden");
+}
+
+async function updateDatabaseHealthException(action, key) {
+  const exceptions = getDatabaseHealthExceptions();
+  const issue = currentDatabaseHealthIssues.get(key) || exceptions[key];
+  if (action === "approve") {
+    closeDatabaseHealthReport();
+    const confirmed = await openDatabaseMessageModal(
+      "Allow Database Health Exception",
+      `Allow this exception only for “${issue.category}”?\n\n${issue.text}`,
+      { confirmLabel: "Allow Exception", cancelLabel: "Cancel" }
+    );
+    if (!confirmed) {
+      openDatabaseHealthReport();
+      return;
+    }
+    exceptions[key] = { ...issue, approvedAt: new Date().toISOString() };
+  } else {
+    delete exceptions[key];
+  }
+  saveDatabaseHealthExceptions(exceptions);
+  openDatabaseHealthReport();
+}
+
+function bindDatabaseHealthPanelDrag() {
+  const panel = document.querySelector(".database-health-modal-content");
+  const handle = panel?.querySelector(".database-health-drag-handle");
+  if (!panel || !handle) return;
+  let drag = null;
+  handle.addEventListener("pointerdown", event => {
+    if (window.innerWidth <= 900 || event.button !== 0 || event.target.closest("button")) return;
+    const rect = panel.getBoundingClientRect();
+    drag = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    Object.assign(panel.style, { position: "fixed", left: `${rect.left}px`, top: `${rect.top}px`, right: "auto", margin: "0" });
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", event => {
+    if (!drag) return;
+    panel.style.left = `${Math.max(8, Math.min(window.innerWidth - panel.offsetWidth - 8, event.clientX - drag.x))}px`;
+    panel.style.top = `${Math.max(8, Math.min(window.innerHeight - panel.offsetHeight - 8, event.clientY - drag.y))}px`;
+  });
+  const stop = event => { drag = null; try { handle.releasePointerCapture?.(event.pointerId); } catch {} };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
 }
 
 function toggleLibraryPDFSelection(id, checked) {
@@ -2468,6 +2643,9 @@ window.addEventListener("load", async () => {
   populateLibraryTypeFilter();
   await loadLibraryDB();
   setupLibraryDropZone();
+  document.getElementById("databaseHealthButton")?.addEventListener("click", openDatabaseHealthReport);
+  document.getElementById("databaseHealthCloseButton")?.addEventListener("click", closeDatabaseHealthReport);
+  bindDatabaseHealthPanelDrag();
 
   const addBtn = document.getElementById("addLibraryEntryButton");
   if (addBtn) addBtn.addEventListener("click", addLibraryEntryFromForm);
