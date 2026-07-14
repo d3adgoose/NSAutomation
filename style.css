@@ -3809,6 +3809,103 @@ summary {
   width: 280px;
 }
 
+/* Compact only the wide review list so its actions fit without changing its layout. */
+.parts-review-table th,
+.parts-review-table td {
+  padding-left: 4px;
+  padding-right: 4px;
+  overflow-wrap: anywhere;
+}
+
+.parts-review-table {
+  min-width: 1289px;
+  table-layout: fixed;
+}
+
+.parts-review-table .parts-select-column {
+  width: 50px;
+  max-width: 50px;
+  min-width: 0;
+  padding-left: 2px;
+  padding-right: 2px;
+  white-space: nowrap;
+}
+
+.parts-review-table col.parts-review-select-col {
+  width: 50px;
+}
+
+.parts-review-table col.parts-review-actions-col {
+  width: 244px;
+}
+
+.parts-review-table col.review-col-found-number { width: 80px; }
+.parts-review-table col.review-col-found-description { width: 130px; }
+.parts-review-table col.review-col-source-file { width: 110px; }
+.parts-review-table col.review-col-source-page { width: 75px; }
+.parts-review-table col.review-col-suggested-number { width: 110px; }
+.parts-review-table col.review-col-category { width: 95px; }
+.parts-review-table col.review-col-subcategory { width: 100px; }
+.parts-review-table col.review-col-suggested-description { width: 125px; }
+.parts-review-table col.review-col-confidence { width: 85px; }
+.parts-review-table col.review-col-type { width: 135px; }
+
+.parts-review-table .parts-review-group-headings th {
+  padding: 7px 10px;
+  border-bottom: 1px solid #cbd9e5;
+  background: #dce9f3;
+  color: #31536d;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.parts-review-table tbody td {
+  vertical-align: top;
+  padding-top: 18px;
+  padding-bottom: 18px;
+  line-height: 1.4;
+}
+
+.parts-review-table tbody .parts-actions-column {
+  padding-top: 14px;
+  padding-bottom: 8px;
+  padding-left: 10px;
+}
+
+.parts-review-table thead tr:not(.parts-review-group-headings) th:first-child,
+.parts-review-table tbody td:first-child {
+  padding-left: 10px;
+}
+
+
+.parts-review-table .parts-select-column input {
+  display: block;
+  margin: 0;
+}
+
+.parts-review-table .parts-select-control {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.parts-review-table .parts-actions-column {
+  width: 244px;
+  min-width: 244px;
+}
+
+.parts-review-table .review-action-group {
+  width: 236px;
+}
+
+.parts-review-table .review-list-action {
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
 .review-action-menu {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

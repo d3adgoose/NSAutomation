@@ -1304,12 +1304,34 @@ function renderActivePartsTable() {
   const pageRows = getPaginatedPartsRows(sorted);
 
   wrap.innerHTML = `
-    <table class="parts-data-table">
+    <table class="parts-data-table ${partsState.activeTab === "reviews" ? "parts-review-table" : ""}">
+      ${partsState.activeTab === "reviews" ? `
+        <colgroup>
+          <col class="review-col-found-number" />
+          <col class="review-col-found-description" />
+          <col class="review-col-source-file" />
+          <col class="review-col-source-page" />
+          <col class="review-col-suggested-number" />
+          <col class="review-col-category" />
+          <col class="review-col-subcategory" />
+          <col class="review-col-suggested-description" />
+          <col class="review-col-confidence" />
+          <col class="review-col-type" />
+          <col class="parts-review-actions-col" />
+        </colgroup>
+      ` : ""}
       <thead>
+        ${partsState.activeTab === "reviews" ? `
+          <tr class="parts-review-group-headings">
+            <th colspan="4">Found in Source</th>
+            <th colspan="5">Suggested Library Match</th>
+            <th colspan="2">Review Decision</th>
+          </tr>
+        ` : ""}
         <tr>
-          <th class="parts-select-column">Select</th>
+          ${partsState.activeTab === "reviews" ? "" : `<th class="parts-select-column">Select</th>`}
           ${config.columns.map(col => `<th>${escapeHTML(col.label)}</th>`).join("")}
-          <th>Actions</th>
+          <th class="parts-actions-column">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -1386,13 +1408,16 @@ function resetPartsPage() {
 }
 
 function renderPartsTableRow(row, config, isSelected) {
+  const showSelection = partsState.activeTab !== "reviews";
   return `
     <tr class="${isSelected ? "selected" : ""}">
-      <td class="parts-select-column">
-        <input type="checkbox" data-select-row="${escapeAttr(row.id)}" ${isSelected ? "checked" : ""} aria-label="Select row" />
-      </td>
+      ${showSelection ? `<td class="parts-select-column">
+        <span class="parts-select-control">
+          <input type="checkbox" data-select-row="${escapeAttr(row.id)}" ${isSelected ? "checked" : ""} aria-label="Select row" />
+        </span>
+      </td>` : ""}
       ${config.columns.map(col => `<td>${formatPartsCell(row, col)}</td>`).join("")}
-      <td><div class="parts-row-actions">${config.actions(row).join("")}</div></td>
+      <td class="parts-actions-column"><div class="parts-row-actions">${config.actions(row).join("")}</div></td>
     </tr>
   `;
 }
@@ -1455,6 +1480,9 @@ function updatePartsBulkActions() {
   const selectedVisibleCount = rows.filter(row => selected.has(row.id)).length;
   const selectButton = document.getElementById("partsSelectVisibleButton");
   const deleteButton = document.getElementById("partsDeleteSelectedButton");
+  const bulkActions = selectButton?.closest(".parts-list-bulk-actions");
+
+  if (bulkActions) bulkActions.classList.toggle("hidden", partsState.activeTab === "reviews");
 
   if (selectButton) {
     selectButton.disabled = rows.length === 0;
