@@ -949,6 +949,8 @@ function openPartsHealthReport() {
       const action = button.dataset.healthException;
       if (action === "approve-health" || action === "revoke-health") {
         updateGeneralHealthException(action, button.dataset.id, button.dataset.exceptionText, button.dataset.exceptionCategory);
+      } else if (action === "approve-old" || action === "revoke-old") {
+        updateOldNumberException(action, button.dataset.id);
       } else {
         updatePartNumberException(action, button.dataset.id);
       }
@@ -1038,6 +1040,30 @@ async function updatePartNumberException(action, id) {
   openPartsHealthReport();
 }
 
+async function updateOldNumberException(action, id) {
+  const alias = partsState.aliases.find(row => row.id === id);
+  if (!alias) return;
+  const approving = action === "approve-old";
+  if (approving) {
+    closePartsHealthReport();
+    const confirmed = await showPartsMessage(
+      "Allow Old Number Exception",
+      `Allow ${alias.old_part_number} in Old Part Numbers even though it is not seven digits?`,
+      { confirmText: "Allow Exception", cancelText: "Cancel" }
+    );
+    if (!confirmed) {
+      openPartsHealthReport();
+      return;
+    }
+  }
+  alias.match_type = approving ? "manual_number_exception" : "manual";
+  alias.updated_at = nowISO();
+  saveLocalPartsDatabase();
+  const saved = await upsertSupabaseRows(PARTS_TABLES.aliases, [alias]);
+  if (saved) setPartsStatus(approving ? `Approved ${alias.old_part_number} as an old-number exception.` : `Removed the old-number exception for ${alias.old_part_number}.`);
+  openPartsHealthReport();
+}
+
 function closePartsHealthReport() {
   document.getElementById("partsHealthModal")?.classList.add("hidden");
 }
@@ -1065,7 +1091,13 @@ function buildPartsHealthReport() {
   });
   partsState.aliases.forEach(row => {
     const oldNumber = row.old_part_number || "(blank)";
-    if (!isOldPartNumberCandidate(oldNumber)) invalidNumbers.push(`Old Part ${oldNumber} is not a seven-digit number.`);
+    if (!isOldPartNumberCandidate(oldNumber)) {
+      if (isApprovedOldNumberException(row)) {
+        approvedExceptions.push({ text: `${oldNumber} is approved as an Old Part Number exception.`, action: "revoke-old", id: row.id, label: "Revoke" });
+      } else {
+        invalidNumbers.push({ text: `Old Part ${oldNumber} is not a seven-digit number.`, action: "approve-old", id: row.id, label: "Allow Exception" });
+      }
+    }
     if (row.current_part_number && !isCurrentPartNumberCandidate(row.current_part_number) && !findApprovedLongCurrentPart(row.current_part_number)) {
       invalidNumbers.push(`Old Part ${oldNumber} links to invalid Current Part ${row.current_part_number}.`);
     }
@@ -1152,6 +1184,10 @@ function isLongPartNumberExceptionCandidate(value) {
 function findApprovedLongCurrentPart(value) {
   const part = findMasterPartByNumber(value);
   return isApprovedPartNumberException(part) ? part : null;
+}
+
+function isApprovedOldNumberException(row) {
+  return row?.match_type === "manual_number_exception" && !isOldPartNumberCandidate(row.old_part_number);
 }
 
 function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "local", options = {}) {
@@ -2097,7 +2133,18 @@ function getPartsCategoryNumber(row) {
 function getPartsDisplayValue(row, key) {
   if (key === "category_group") return getPartNumberCategoryInfo(getPartsCategoryNumber(row)).group;
   if (key === "subcategory") return getPartNumberCategoryInfo(getPartsCategoryNumber(row)).subcategory;
+  if (key === "old_part_numbers") return getOldPartNumbersForCurrent(row?.current_part_number).join("\n");
   return row?.[key];
+}
+
+function getOldPartNumbersForCurrent(currentPartNumber) {
+  const currentKey = getPartNumberKey(currentPartNumber);
+  if (!currentKey) return [];
+  return uniqueValues(
+    partsState.aliases
+      .filter(row => getPartNumberKey(row.current_part_number) === currentKey)
+      .map(row => row.old_part_number)
+  );
 }
 
 function getSelectedPartsSet(tab = partsState.activeTab) {
@@ -2164,6 +2211,7 @@ function getPartsTableConfig(tab) {
       emptyLabel: "current parts",
       columns: [
         { key: "current_part_number", label: "Current Part Number" },
+        { key: "old_part_numbers", label: "Old Part Number(s)", emptyLabel: "" },
         { key: "category_group", label: "Category" },
         { key: "subcategory", label: "Subcategory" },
         { key: "description", label: "Description" },
@@ -2282,7 +2330,8 @@ function getFilteredRows(tab) {
 
   return (partsState[tab] || []).filter(row => {
     if (tab === "reviews" && ["accepted", "ignored"].includes(row.status)) return false;
-    const haystack = normalizeSearch(Object.values(row).join(" "));
+    const relatedOldNumbers = tab === "master" ? getOldPartNumbersForCurrent(row.current_part_number).join(" ") : "";
+    const haystack = normalizeSearch(`${Object.values(row).join(" ")} ${relatedOldNumbers}`);
     if (query && !haystack.includes(query)) return false;
     if (source && !rowMatchesFileName(row, source)) return false;
     return true;
@@ -3993,7 +4042,10 @@ function openPartsEditModal(tab, id = "") {
   setText("partsEditTitle", row ? "Edit Record" : "Add Part");
   const destination = document.getElementById("partsEditDestination");
   if (destination) destination.value = tab;
-  renderPartsEditFields(tab, row || {});
+  const values = row && tab === "master"
+    ? { ...row, old_part_numbers: getOldPartNumbersForCurrent(row.current_part_number).join(", ") }
+    : (row || {});
+  renderPartsEditFields(tab, values);
   document.getElementById("partsEditModal")?.classList.remove("hidden");
 }
 
@@ -4005,8 +4057,8 @@ function renderPartsEditFields(tab, values = {}) {
     <label>
       <span>${escapeHTML(field.label)}</span>
       ${isMultilineEditField(field.key)
-        ? `<textarea data-edit-field="${field.key}" rows="3">${escapeHTML(values?.[field.key] ?? field.defaultValue ?? "")}</textarea>`
-        : `<input data-edit-field="${field.key}" value="${escapeAttr(values?.[field.key] ?? field.defaultValue ?? "")}" />`}
+        ? `<textarea data-edit-field="${field.key}" rows="3" placeholder="${escapeAttr(field.placeholder || "")}">${escapeHTML(values?.[field.key] ?? field.defaultValue ?? "")}</textarea>`
+        : `<input data-edit-field="${field.key}" value="${escapeAttr(values?.[field.key] ?? field.defaultValue ?? "")}" placeholder="${escapeAttr(field.placeholder || "")}" />`}
     </label>
   `).join("");
 }
@@ -4084,6 +4136,40 @@ async function savePartsEditModal() {
   const isMove = !!target.id && tab !== sourceTab;
   let row = !isMove && target.id ? partsState[tab].find(item => item.id === target.id) : null;
   let approvedLongNumber = false;
+  let approvedAliasOldNumber = false;
+  const requestedOldNumbers = tab === "master" ? parseOldPartNumberList(values.old_part_numbers) : [];
+  const approvedOldNumberKeys = new Set();
+  delete values.old_part_numbers;
+
+  if (tab === "master") {
+    const invalidOldNumbers = requestedOldNumbers.filter(number => !isOldPartNumberCandidate(number));
+    const unapprovedOldNumbers = invalidOldNumbers.filter(number => {
+      const existing = partsState.aliases.find(alias => getPartNumberKey(alias.old_part_number) === getPartNumberKey(number));
+      if (isApprovedOldNumberException(existing)) {
+        approvedOldNumberKeys.add(getPartNumberKey(number));
+        return false;
+      }
+      return true;
+    });
+    if (unapprovedOldNumbers.length) {
+      const confirmed = await showPartsMessage(
+        "Allow Old Number Exception",
+        `Allow ${unapprovedOldNumbers.join(", ")} in Old Part Numbers even though ${unapprovedOldNumbers.length === 1 ? "it is" : "they are"} not seven digits?`,
+        { confirmText: "Allow Exception", cancelText: "Cancel" }
+      );
+      if (!confirmed) return;
+      unapprovedOldNumbers.forEach(number => approvedOldNumberKeys.add(getPartNumberKey(number)));
+    }
+    const conflictingAlias = partsState.aliases.find(alias =>
+      requestedOldNumbers.some(number => getPartNumberKey(number) === getPartNumberKey(alias.old_part_number)) &&
+      Boolean(getPartNumberKey(alias.current_part_number)) &&
+      getPartNumberKey(alias.current_part_number) !== getPartNumberKey(values.current_part_number)
+    );
+    if (conflictingAlias) {
+      await showPartsError(`${conflictingAlias.old_part_number} is already linked to Current Part ${conflictingAlias.current_part_number || "(none)"}.`, "Old Part Number Already Mapped");
+      return;
+    }
+  }
 
   if (tab === "master" && !isCurrentPartNumberCandidate(values.current_part_number)) {
     const alreadyApproved = row && isApprovedPartNumberException(row) && getPartNumberKey(row.current_part_number) === getPartNumberKey(values.current_part_number);
@@ -4103,11 +4189,12 @@ async function savePartsEditModal() {
     }
   }
   if (tab === "aliases" && !isOldPartNumberCandidate(values.old_part_number)) {
-    await showPartsError(
-      "Old Part Numbers requires a seven-digit old number. The current part number may be left blank until the replacement is known.",
-      "Seven-Digit Old Number Required"
+    approvedAliasOldNumber = isApprovedOldNumberException(row) || await showPartsMessage(
+      "Allow Old Number Exception",
+      `Allow ${values.old_part_number} in Old Part Numbers even though it is not seven digits?`,
+      { confirmText: "Allow Exception", cancelText: "Cancel" }
     );
-    return;
+    if (!approvedAliasOldNumber) return;
   }
   if (tab === "aliases" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number) && !findApprovedLongCurrentPart(values.current_part_number)) {
     await showPartsError("When provided, the linked current part number must contain eight digits.", "Current Part Number Format");
@@ -4141,6 +4228,50 @@ async function savePartsEditModal() {
     row.needs_review = row.needs_review === true || row.needs_review === "true";
   }
 
+  let changedMasterAliases = [];
+  let removedMasterAliasIds = [];
+  if (tab === "master") {
+    const originalCurrentKey = getPartNumberKey(target.originalRow?.current_part_number);
+    const currentKey = getPartNumberKey(row.current_part_number);
+    const desiredKeys = new Set(requestedOldNumbers.map(getPartNumberKey));
+    const existingForPart = partsState.aliases.filter(alias => {
+      const aliasCurrentKey = getPartNumberKey(alias.current_part_number);
+      return aliasCurrentKey === currentKey || (originalCurrentKey && aliasCurrentKey === originalCurrentKey);
+    });
+
+    const keptIds = new Set();
+    requestedOldNumbers.forEach(oldNumber => {
+      const oldKey = getPartNumberKey(oldNumber);
+      let alias = partsState.aliases.find(item => getPartNumberKey(item.old_part_number) === oldKey);
+      if (!alias) {
+        alias = {
+          id: makeId("alias"),
+          created_at: now,
+          old_part_number: oldNumber,
+          match_type: "manual",
+          notes: ""
+        };
+        partsState.aliases.unshift(alias);
+      }
+      alias.part_id = row.id;
+      alias.current_part_number = row.current_part_number;
+      if (approvedOldNumberKeys.has(oldKey)) alias.match_type = "manual_number_exception";
+      else if (!alias.match_type || alias.match_type === "manual_number_exception") alias.match_type = "manual";
+      alias.description = alias.description || row.description;
+      alias.source = mergeFileNameLabels(alias.source, row.source || "Manual");
+      alias.updated_at = now;
+      keptIds.add(alias.id);
+      changedMasterAliases.push(alias);
+    });
+
+    const removedAliases = existingForPart.filter(alias => !keptIds.has(alias.id) && !desiredKeys.has(getPartNumberKey(alias.old_part_number)));
+    removedMasterAliasIds = removedAliases.map(alias => alias.id);
+    if (removedMasterAliasIds.length) {
+      const removedSet = new Set(removedMasterAliasIds);
+      partsState.aliases = partsState.aliases.filter(alias => !removedSet.has(alias.id));
+    }
+  }
+
   if (tab === "aliases") {
     const currentPart = row.current_part_number ? findMasterPartByNumber(row.current_part_number) : null;
     if (row.current_part_number && !currentPart) {
@@ -4149,11 +4280,18 @@ async function savePartsEditModal() {
       return;
     }
     row.part_id = currentPart?.id || null;
+    row.match_type = approvedAliasOldNumber ? "manual_number_exception" : (row.match_type || "manual");
   }
 
   saveLocalPartsDatabase();
   const synced = await upsertSupabaseRows(PARTS_TABLES[tab], [row]);
   let deleteSynced = true;
+  if (changedMasterAliases.length) {
+    deleteSynced = await upsertSupabaseRows(PARTS_TABLES.aliases, changedMasterAliases) && deleteSynced;
+  }
+  for (const aliasId of removedMasterAliasIds) {
+    deleteSynced = await deleteSupabaseRow(PARTS_TABLES.aliases, aliasId) && deleteSynced;
+  }
   if (isMove) {
     let movedUsage = [];
     if (sourceTab === "master") {
@@ -4196,6 +4334,10 @@ function normalizeEditedPartsValue(key, value) {
   return String(value || "").trim();
 }
 
+function parseOldPartNumberList(value) {
+  return uniqueValues(String(value || "").split(/[\n,;]+/).map(number => number.trim()).filter(Boolean));
+}
+
 function getEditableFields(tab) {
   if (tab === "aliases") return [
     { key: "old_part_number", label: "Old Part Number" },
@@ -4226,6 +4368,7 @@ function getEditableFields(tab) {
   ];
   return [
     { key: "current_part_number", label: "Current Part Number" },
+    { key: "old_part_numbers", label: "Old Part Number(s)", placeholder: "Optional" },
     { key: "description", label: "Description" },
     { key: "source", label: "File Name(s)", defaultValue: "Manual" }
   ];
