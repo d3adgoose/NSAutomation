@@ -253,10 +253,12 @@ if (pdfUpload) {
 }
 
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   const dropZone = document.getElementById("dropZone");
   renderPacketHistory();
   setupBuilderHistoryControls();
+  await restorePacketDraft();
+  setupPacketDraftAutosave();
   importPendingDatabasePDFsForBuilder();
 
   if (!dropZone) return;
@@ -1359,6 +1361,114 @@ function getBuildErrorMessage(buildLabel, error, context = "") {
 const PACKET_HISTORY_DB_NAME = "ns-packet-history";
 const PACKET_HISTORY_STORE_NAME = "packets";
 const PACKET_HISTORY_LIMIT = 3;
+const PACKET_DRAFT_AUTOSAVE_DELAY = 900;
+let packetDraftAutosaveTimer = null;
+let packetDraftReady = false;
+let packetDraftSavePromise = Promise.resolve();
+
+function getPacketDraftId() {
+  return `draft-${getPacketHistoryType()}`;
+}
+
+function getPacketDraftFormState() {
+  const fields = {};
+  document.querySelectorAll("input[id], select[id], textarea[id]").forEach(field => {
+    if (field.type === "file" || field.id.startsWith("appPrompt")) return;
+    fields[field.id] = field.type === "checkbox" || field.type === "radio"
+      ? { checked: field.checked, value: field.value }
+      : { value: field.value };
+  });
+  return fields;
+}
+
+function applyPacketDraftFormState(fields = {}) {
+  Object.entries(fields).forEach(([id, state]) => {
+    const field = document.getElementById(id);
+    if (!field || field.type === "file") return;
+    if (field.type === "checkbox" || field.type === "radio") {
+      field.checked = !!state.checked;
+    } else {
+      field.value = state.value ?? "";
+    }
+  });
+}
+
+function setPacketDraftStatus(message, className = "") {
+  const status = document.getElementById("draftSaveStatus");
+  if (!status) return;
+  status.textContent = message;
+  status.className = `draft-save-status${className ? ` ${className}` : ""}`;
+}
+
+async function savePacketDraft({ manual = false } = {}) {
+  if (!packetDraftReady && !manual) return;
+  clearTimeout(packetDraftAutosaveTimer);
+  const snapshot = getLivePacketBuilderSnapshot();
+  const entry = {
+    id: getPacketDraftId(),
+    type: `draft-${getPacketHistoryType()}`,
+    updatedAt: Date.now(),
+    builderState: snapshot,
+    formFields: getPacketDraftFormState()
+  };
+
+  setPacketDraftStatus(manual ? "Saving progress..." : "Autosaving...", "is-saving");
+  packetDraftSavePromise = packetDraftSavePromise.catch(() => {}).then(() =>
+    runPacketHistoryTransaction("readwrite", store => store.put(entry))
+  );
+
+  try {
+    await packetDraftSavePromise;
+    const time = new Date(entry.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    setPacketDraftStatus(`${manual ? "Progress saved" : "Autosaved"} at ${time}.`, "is-saved");
+  } catch (error) {
+    console.warn("Could not save packet draft:", error);
+    setPacketDraftStatus("Progress could not be saved. Try Save Progress again.", "is-error");
+  }
+}
+
+function schedulePacketDraftAutosave() {
+  if (!packetDraftReady) return;
+  clearTimeout(packetDraftAutosaveTimer);
+  packetDraftAutosaveTimer = setTimeout(() => savePacketDraft(), PACKET_DRAFT_AUTOSAVE_DELAY);
+}
+
+async function restorePacketDraft() {
+  try {
+    const draft = await getPacketHistoryItem(getPacketDraftId());
+    if (!draft?.builderState) return;
+    applyPacketBuilderSnapshot(draft.builderState);
+    applyPacketDraftFormState(draft.formFields);
+    renderUploadedPdfList();
+    const time = new Date(draft.updatedAt || draft.builderState.savedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    setPacketDraftStatus(`Saved progress restored from ${time}. Autosave is on.`, "is-saved");
+  } catch (error) {
+    console.warn("Could not restore packet draft:", error);
+    setPacketDraftStatus("Autosave is unavailable in this browser.", "is-error");
+  }
+}
+
+function setupPacketDraftAutosave() {
+  packetDraftReady = true;
+  document.addEventListener("input", schedulePacketDraftAutosave);
+  document.addEventListener("change", schedulePacketDraftAutosave);
+
+  // Builder actions can change PDFs and TOC data without changing a form field.
+  window.setInterval(schedulePacketDraftAutosave, 5000);
+
+  document.querySelectorAll("#sideMenu a").forEach(link => {
+    link.addEventListener("click", async event => {
+      if (event.defaultPrevented || event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      await savePacketDraft();
+      window.location.href = link.href;
+    });
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") savePacketDraft();
+  });
+}
 
 function getPacketHistoryType() {
   return typeof isOMPacket === "function" && isOMPacket()

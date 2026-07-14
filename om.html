@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>O&M Automation</title>
-  <link rel="stylesheet" href="style.css?v=20260713-parts-library" />
+  <link rel="stylesheet" href="style.css?v=20260714-packet-autosave" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
@@ -197,6 +197,7 @@
 
 <div class="button-row">
   <button onclick="buildPacket()">Build PDF</button>
+  <button id="saveDraftButton" class="secondary" type="button" onclick="savePacketDraft({ manual: true })">Save Progress</button>
         <button id="builderUndoButton" class="secondary" type="button" onclick="undoBuilderAction()" disabled>Undo</button>
         <button id="builderRedoButton" class="secondary" type="button" onclick="redoBuilderAction()" disabled>Redo</button>
   <button onclick="exportCSV()">Export CSV</button>
@@ -204,6 +205,8 @@
       </div>
 
       <p id="builderHistoryStatus" class="builder-history-status" aria-live="polite"></p>
+
+      <p id="draftSaveStatus" class="draft-save-status" aria-live="polite">Autosave is on.</p>
 
       <p id="packetBuildStatus" class="warranty-status" aria-live="polite"></p>
     </section>
@@ -482,7 +485,7 @@
   <script src="pdfStorage.js"></script>
   <script src="database.js"></script>
   <script src="tocDetection.js"></script>
-  <script src="submittal.js?v=20260713-page-preview-no-checkbox"></script>
+  <script src="submittal.js?v=20260714-packet-autosave"></script>
   <script src="om.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>

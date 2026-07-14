@@ -139,6 +139,25 @@ button:hover {
   box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
 }
 
+.draft-save-status {
+  min-height: 1.2em;
+  margin: 10px 0 0;
+  color: #526476;
+  font-size: 13px;
+}
+
+.draft-save-status.is-saving {
+  color: #76520f;
+}
+
+.draft-save-status.is-saved {
+  color: #267044;
+}
+
+.draft-save-status.is-error {
+  color: #b42318;
+}
+
 .home-heading {
   display: flex;
   align-items: flex-start;
