@@ -943,12 +943,16 @@ function saveGeneralHealthExceptions(exceptions) {
 async function updateGeneralHealthException(action, key, text) {
   const exceptions = loadGeneralHealthExceptions();
   if (action === "approve-health") {
+    closePartsHealthReport();
     const confirmed = await showPartsMessage(
       "Allow Health Exception",
       `Allow this Library Health exception?\n\n${text}\n\nIt will remain approved in this browser until revoked.`,
       { confirmText: "Allow Exception", cancelText: "Cancel" }
     );
-    if (!confirmed) return;
+    if (!confirmed) {
+      openPartsHealthReport();
+      return;
+    }
     exceptions[key] = { text, approved_at: nowISO() };
     setPartsStatus("Library Health exception approved.");
   } else {
@@ -974,12 +978,16 @@ async function updatePartNumberException(action, id) {
   if (!part) return;
   const approving = action === "approve";
   if (approving) {
+    closePartsHealthReport();
     const confirmed = await showPartsMessage(
       "Approve Part Number Exception",
       `Allow ${part.current_part_number} as a Current Part even though it contains more than eight digits? This exception will be saved with the shared record.`,
       { confirmText: "Approve Exception", cancelText: "Cancel" }
     );
-    if (!confirmed) return;
+    if (!confirmed) {
+      openPartsHealthReport();
+      return;
+    }
   }
   part.status = "active";
   part.record_type = approving ? "Part Number Exception" : "Part";
