@@ -1582,7 +1582,7 @@ function getPartsTableConfig(tab) {
         const suggestedNumber = escapeHTML(row.suggested_current_part_number || "suggested part");
         const isSevenDigitOldNumber = isOldPartNumberCandidate(row.extracted_part_number);
         const addNewAction = isSevenDigitOldNumber
-          ? `<button class="secondary parts-action-button review-list-action review-action-disabled" type="button" disabled><strong>Old Number Only</strong><span>Seven-digit numbers cannot be Current Parts</span></button>`
+          ? `<button class="secondary parts-action-button review-list-action" data-action="old-review" data-id="${id}"><strong>Add Old Number</strong><span>Save ${extractedNumber} to Old Part Numbers</span></button>`
           : `<button class="secondary parts-action-button review-list-action" data-action="new-review" data-id="${id}"><strong>Create New Part</strong><span>Add ${extractedNumber} to Current Parts</span></button>`;
         const aliasAction = row.suggested_current_part_number
           ? `<button class="secondary parts-action-button review-list-action" data-action="alias-review" data-id="${id}"><strong>Save Suggested Number</strong><span>Use ${suggestedNumber}; keep ${extractedNumber} as its old number</span></button>`
@@ -3084,11 +3084,6 @@ function getDeletePlanParts(plan) {
 async function handleReviewAction(action, id) {
   const review = partsState.reviews.find(row => row.id === id);
   if (!review) return;
-  if (action === "new-review" && isOldPartNumberCandidate(review.extracted_part_number)) {
-    setPartsStatus("Seven-digit numbers are old part numbers. Add or choose a suggested current number, then use Save Suggested Number.");
-    openPartsEditModal("reviews", review.id);
-    return;
-  }
   const countsBefore = getPartsReviewActionCounts();
   const relatedReviews = getRelatedReviewRows(review, action);
   let changedUsage = [];
@@ -3098,6 +3093,30 @@ async function handleReviewAction(action, id) {
     review.status = "ignored";
     review.updated_at = nowISO();
     savePromise = persistPartsChanges({ master: [], aliases: [], usage: [], reviews: [review], history: [] });
+  } else if (action === "old-review") {
+    const oldKey = getPartNumberKey(review.extracted_part_number);
+    let alias = partsState.aliases.find(row => getPartNumberKey(row.old_part_number) === oldKey);
+    if (alias) {
+      alias.description = alias.description || review.extracted_description;
+      alias.source = mergeFileNameLabels(alias.source, relatedReviews.map(row => row.source_file).join("\n"));
+      alias.updated_at = nowISO();
+    } else {
+      alias = {
+        id: makeId("alias"),
+        part_id: null,
+        old_part_number: review.extracted_part_number,
+        current_part_number: "",
+        description: review.extracted_description,
+        match_type: "old_number_only",
+        source: relatedReviews.map(row => row.source_file).filter(Boolean).join("\n"),
+        notes: review.reason,
+        created_at: nowISO(),
+        updated_at: nowISO()
+      };
+      partsState.aliases.unshift(alias);
+    }
+    markReviewGroupResolved(relatedReviews, "accepted");
+    savePromise = persistPartsChanges({ master: [], aliases: [alias], usage: [], reviews: relatedReviews, history: [] });
   } else if (action === "accept-review" || action === "new-review") {
     const partNumber = action === "accept-review" ? review.suggested_current_part_number : review.extracted_part_number;
     let approvedPart = findMasterPartByNumber(partNumber);
@@ -3190,6 +3209,8 @@ async function handleReviewAction(action, id) {
   const countSummary = formatPartsReviewCountChange(countsBefore, countsAfter);
   if (relatedReviews.length > 1 && action !== "ignore-review") {
     setPartsStatus(`Resolved ${relatedReviews.length} matching review rows together. ${countSummary}`);
+  } else if (action === "old-review") {
+    setPartsStatus(`The found number was saved to Old Part Numbers without requiring a linked Current Part. ${countSummary}`);
   } else if (action === "new-review") {
     const result = reusedExistingPart
       ? "That part number already existed, so it was reused without creating a duplicate."
@@ -3220,7 +3241,7 @@ function getRelatedReviewRows(review, action) {
   return partsState.reviews.filter(row => {
     if (["accepted", "ignored"].includes(row.status)) return false;
     if (getPartNumberKey(row.extracted_part_number) !== extractedKey) return false;
-    if (action === "new-review") return true;
+    if (action === "new-review" || action === "old-review") return true;
     return getPartNumberKey(row.suggested_current_part_number) === suggestedKey;
   });
 }
