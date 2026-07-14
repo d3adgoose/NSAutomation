@@ -1398,7 +1398,7 @@ function renderPartsTableRow(row, config, isSelected) {
 }
 
 function formatPartsCell(row, col) {
-  const value = row[col.key];
+  const value = getPartsDisplayValue(row, col.key);
   const hasValue = value !== null && value !== undefined && String(value).trim() !== "";
   const displayValue = hasValue
     ? (col.valueLabels?.[value] || formatValue(value))
@@ -1406,6 +1406,17 @@ function formatPartsCell(row, col) {
   if (col.badge) return `<span class="parts-badge ${getBadgeClass(value)}">${escapeHTML(displayValue)}</span>`;
   if (col.check) return value ? `<span class="parts-badge needs-review">Needs Review</span>` : "";
   return `<span class="parts-cell-lines${hasValue ? "" : " parts-cell-empty"}">${escapeHTML(displayValue)}</span>`;
+}
+
+function getPartsCategoryNumber(row) {
+  return [row?.suggested_current_part_number, row?.current_part_number, row?.extracted_part_number]
+    .find(isCurrentPartNumberCandidate) || "";
+}
+
+function getPartsDisplayValue(row, key) {
+  if (key === "category_group") return getPartNumberCategoryInfo(getPartsCategoryNumber(row)).group;
+  if (key === "subcategory") return getPartNumberCategoryInfo(getPartsCategoryNumber(row)).subcategory;
+  return row?.[key];
 }
 
 function getSelectedPartsSet(tab = partsState.activeTab) {
@@ -1469,6 +1480,8 @@ function getPartsTableConfig(tab) {
       emptyLabel: "current parts",
       columns: [
         { key: "current_part_number", label: "Current Part Number" },
+        { key: "category_group", label: "Category" },
+        { key: "subcategory", label: "Subcategory" },
         { key: "description", label: "Description" },
         { key: "source", label: "File Name(s)" },
         { key: "updated_at", label: "Last Updated" }
@@ -1481,6 +1494,8 @@ function getPartsTableConfig(tab) {
       columns: [
         { key: "old_part_number", label: "Old Part Number" },
         { key: "current_part_number", label: "Current Part Number" },
+        { key: "category_group", label: "Current Category" },
+        { key: "subcategory", label: "Current Subcategory" },
         { key: "description", label: "Description" },
         { key: "match_type", label: "Match Type", badge: true },
         { key: "source", label: "File Name(s)" },
@@ -1494,6 +1509,8 @@ function getPartsTableConfig(tab) {
       emptyLabel: "drawing usage records",
       columns: [
         { key: "current_part_number", label: "Current Part Number" },
+        { key: "category_group", label: "Category" },
+        { key: "subcategory", label: "Subcategory" },
         { key: "description", label: "Description" },
         { key: "drawing_number", label: "Drawing / Sheet" },
         { key: "item_number", label: "Item" },
@@ -1512,6 +1529,8 @@ function getPartsTableConfig(tab) {
         { key: "source_file", label: "Source File" },
         { key: "page", label: "Source Page", emptyLabel: "Not provided by source" },
         { key: "suggested_current_part_number", label: "Suggested Current Number", emptyLabel: "No suggested match" },
+        { key: "category_group", label: "Suggested Category" },
+        { key: "subcategory", label: "Suggested Subcategory" },
         { key: "suggested_description", label: "Suggested Current Description", emptyLabel: "No suggested description" },
         { key: "confidence", label: "Match Confidence" },
         {
@@ -1636,8 +1655,8 @@ function sortRows(rows, sort) {
         sensitivity: "base"
       });
     }
-    const av = a[sort.key] ?? "";
-    const bv = b[sort.key] ?? "";
+    const av = getPartsDisplayValue(a, sort.key) ?? "";
+    const bv = getPartsDisplayValue(b, sort.key) ?? "";
     const result = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
     return sort.direction === "asc" ? result : -result;
   });
@@ -2401,7 +2420,7 @@ function applyPreviewRow(row, importId, changed) {
       compact_part_number: compactPartNumber(currentPartNumber),
       description: row.description,
       normalized_description: normalizeDescription(row.description),
-      category: source.category || "",
+      category: getPartNumberCategoryInfo(currentPartNumber).group,
       manufacturer: source.manufacturer || "",
       manufacturer_part_number: source.manufacturer_part_number || "",
       unit_of_measure: source.unit_of_measure || "",
@@ -3223,7 +3242,7 @@ function createPartFromReview(review, partNumber) {
     compact_part_number: compactPartNumber(partNumber),
     description: review.extracted_description || review.suggested_description,
     normalized_description: normalizeDescription(review.extracted_description || review.suggested_description),
-    category: "",
+    category: getPartNumberCategoryInfo(partNumber).group,
     manufacturer: "",
     manufacturer_part_number: "",
     unit_of_measure: "",
@@ -3372,6 +3391,7 @@ async function savePartsEditModal() {
     row.normalized_part_number = normalizePartNumber(row.current_part_number);
     row.compact_part_number = compactPartNumber(row.current_part_number);
     row.normalized_description = normalizeDescription(row.description);
+    row.category = getPartNumberCategoryInfo(row.current_part_number).group;
     row.status = row.status || "active";
     row.record_type = row.record_type || "Part";
     row.needs_review = row.needs_review === true || row.needs_review === "true";
@@ -3482,7 +3502,7 @@ async function exportPartsDatabase() {
   ];
 
   sheets.forEach(([name, rows]) => {
-    const worksheet = XLSX.utils.json_to_sheet(rows.map(row => stringifyPartNumbers(row)));
+    const worksheet = XLSX.utils.json_to_sheet(rows.map(row => stringifyPartNumbers(addCategoryFieldsForExport(row))));
     worksheet["!autofilter"] = { ref: worksheet["!ref"] || "A1" };
     worksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
     worksheet["!cols"] = getWorksheetColumns(rows);
@@ -3498,6 +3518,15 @@ function filterForExport(tab) {
     if (tab !== partsState.activeTab) return unresolved;
   }
   return tab === partsState.activeTab ? getFilteredRows(tab) : partsState[tab];
+}
+
+function addCategoryFieldsForExport(row) {
+  const category = getPartNumberCategoryInfo(getPartsCategoryNumber(row));
+  return {
+    ...row,
+    category_group: category.group,
+    subcategory: category.subcategory
+  };
 }
 
 const PARTS_EXPORT_SORT_KEYS = {

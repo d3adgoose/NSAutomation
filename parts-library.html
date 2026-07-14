@@ -97,6 +97,7 @@
             <li><strong>Track usage:</strong> Current Parts stores the part list, Old Part Numbers stores prior numbers, and Drawing Usage shows where parts were found.</li>
             <li><strong>Review Items to Check:</strong> Found values are read from the imported file. Suggested Current values are the closest existing Current Part the library found. Higher confidence means a stronger suggested match. Create a new part when the found number is truly new, or save the suggested number when the found number should become an old-number reference to that current part.</li>
             <li><strong>Seven-digit numbers:</strong> numeric part numbers containing exactly seven digits are always treated as old part numbers. They must be linked to a suggested/current part number and cannot be created in Current Parts.</li>
+            <li><strong>Categories:</strong> eight-digit Current Parts use the first four digits for the exact subcategory and the first digit for the major category from the approved Part Number Category document.</li>
             <li><strong>Same number, different wording:</strong> the library keeps one part row, adds each new file name on its own line, and saves each description on its own line so either wording can be searched.</li>
             <li><strong>Export:</strong> download the library to Excel when you need a backup or want to review the list outside the website.</li>
           </ol>
@@ -294,6 +295,7 @@
   <script src="supabaseClient.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="partsLibrary.js?v=20260714-auto-resolve-repeats"></script>
+  <script src="partCategories.js?v=20231013"></script>
+  <script src="partsLibrary.js?v=20260714-part-categories"></script>
 </body>
 </html>
