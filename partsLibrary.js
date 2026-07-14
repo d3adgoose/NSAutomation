@@ -19,6 +19,7 @@ const partsUndoStack = [];
 const partsRedoStack = [];
 const PARTS_HISTORY_LIMIT = 20;
 const PARTS_RETRY_QUEUE_KEY = "ns_parts_retry_queue_v1";
+const PARTS_HEALTH_EXCEPTIONS_KEY = "ns_parts_health_exceptions_v1";
 let partsRetryInProgress = false;
 
 let partsState = {
@@ -640,6 +641,7 @@ async function clearLocalPartsCopy() {
 
   localStorage.removeItem(PARTS_STORAGE_KEY);
   localStorage.removeItem(PARTS_RETRY_QUEUE_KEY);
+  localStorage.removeItem(PARTS_HEALTH_EXCEPTIONS_KEY);
   partsState.master = [];
   partsState.aliases = [];
   partsState.usage = [];
@@ -676,6 +678,10 @@ function normalizePartsFileNameLabels() {
   };
 
   partsState.master.forEach(row => {
+    if (row.status === "active_number_exception") {
+      row.status = "active";
+      row.record_type = "Part Number Exception";
+    }
     row.source = mergeFileNameLabels(cleanFileName(row.source), "");
     row.description = mergePartDescriptions(row.description, "");
   });
@@ -883,9 +889,9 @@ async function retryPendingPartsChanges(options = {}) {
 
 function openPartsHealthReport() {
   const report = buildPartsHealthReport();
-  const issueCount = report.reduce((sum, section) => sum + section.items.length, 0);
+  const issueCount = report.reduce((sum, section) => sum + (section.informational ? 0 : section.items.length), 0);
   setText("partsHealthSummary", issueCount
-    ? `${issueCount} issue${issueCount === 1 ? "" : "s"} found across ${report.filter(section => section.items.length).length} categories.`
+    ? `${issueCount} issue${issueCount === 1 ? "" : "s"} found across ${report.filter(section => !section.informational && section.items.length).length} categories.`
     : "No library health issues were found.");
   const container = document.getElementById("partsHealthReport");
   if (container) {
@@ -893,12 +899,95 @@ function openPartsHealthReport() {
       <section class="parts-health-section ${section.items.length ? "" : "good"}">
         <h3><span>${escapeHTML(section.title)}</span><span>${section.items.length}</span></h3>
         <p>${escapeHTML(section.description)}</p>
-        ${section.items.length ? `<ul>${section.items.slice(0, 50).map(item => `<li>${escapeHTML(item)}</li>`).join("")}</ul>` : ""}
+        ${section.items.length ? `<ul>${section.items.slice(0, 50).map(item => renderPartsHealthItem(item)).join("")}</ul>` : ""}
         ${section.items.length > 50 ? `<p>Showing the first 50 of ${section.items.length} issues.</p>` : ""}
       </section>
     `).join("");
   }
+  container?.querySelectorAll("[data-health-exception]").forEach(button => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.healthException;
+      if (action === "approve-health" || action === "revoke-health") {
+        updateGeneralHealthException(action, button.dataset.id, button.dataset.exceptionText);
+      } else {
+        updatePartNumberException(action, button.dataset.id);
+      }
+    });
+  });
   document.getElementById("partsHealthModal")?.classList.remove("hidden");
+}
+
+function renderPartsHealthItem(item) {
+  if (typeof item === "string") return `<li>${escapeHTML(item)}</li>`;
+  return `
+    <li class="parts-health-item-action">
+      <span>${escapeHTML(item.text)}</span>
+      <button class="secondary" type="button" data-health-exception="${escapeAttr(item.action)}" data-id="${escapeAttr(item.id)}" data-exception-text="${escapeAttr(item.exceptionText || item.text)}">${escapeHTML(item.label)}</button>
+    </li>
+  `;
+}
+
+function loadGeneralHealthExceptions() {
+  try {
+    return JSON.parse(localStorage.getItem(PARTS_HEALTH_EXCEPTIONS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveGeneralHealthExceptions(exceptions) {
+  if (Object.keys(exceptions).length) localStorage.setItem(PARTS_HEALTH_EXCEPTIONS_KEY, JSON.stringify(exceptions));
+  else localStorage.removeItem(PARTS_HEALTH_EXCEPTIONS_KEY);
+}
+
+async function updateGeneralHealthException(action, key, text) {
+  const exceptions = loadGeneralHealthExceptions();
+  if (action === "approve-health") {
+    const confirmed = await showPartsMessage(
+      "Allow Health Exception",
+      `Allow this Library Health exception?\n\n${text}\n\nIt will remain approved in this browser until revoked.`,
+      { confirmText: "Allow Exception", cancelText: "Cancel" }
+    );
+    if (!confirmed) return;
+    exceptions[key] = { text, approved_at: nowISO() };
+    setPartsStatus("Library Health exception approved.");
+  } else {
+    delete exceptions[key];
+    setPartsStatus("Library Health exception revoked.");
+  }
+  saveGeneralHealthExceptions(exceptions);
+  openPartsHealthReport();
+}
+
+function getGeneralHealthExceptionKey(sectionTitle, text) {
+  const source = `${sectionTitle}|${text}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `health-${(hash >>> 0).toString(16)}`;
+}
+
+async function updatePartNumberException(action, id) {
+  const part = partsState.master.find(row => row.id === id);
+  if (!part) return;
+  const approving = action === "approve";
+  if (approving) {
+    const confirmed = await showPartsMessage(
+      "Approve Part Number Exception",
+      `Allow ${part.current_part_number} as a Current Part even though it contains more than eight digits? This exception will be saved with the shared record.`,
+      { confirmText: "Approve Exception", cancelText: "Cancel" }
+    );
+    if (!confirmed) return;
+  }
+  part.status = "active";
+  part.record_type = approving ? "Part Number Exception" : "Part";
+  part.updated_at = nowISO();
+  saveLocalPartsDatabase();
+  const saved = await upsertSupabaseRows(PARTS_TABLES.master, [part]);
+  if (saved) setPartsStatus(approving ? `Approved ${part.current_part_number} as a number-length exception.` : `Removed the exception for ${part.current_part_number}.`);
+  openPartsHealthReport();
 }
 
 function closePartsHealthReport() {
@@ -912,17 +1001,24 @@ function buildPartsHealthReport() {
   const brokenMappings = [];
   const usageWithoutParts = [];
   const coveredReviews = [];
+  const approvedExceptions = [];
 
   partsState.master.forEach(row => {
     const number = row.current_part_number || "(blank)";
     if (isOldPartNumberCandidate(number)) oldNumbersInCurrent.push(`${number} is stored in Current Parts.`);
-    else if (!isCurrentPartNumberCandidate(number)) invalidNumbers.push(`Current Part ${number} is not an eight-digit number.`);
+    else if (isApprovedPartNumberException(row)) {
+      approvedExceptions.push({ text: `${number} is approved as a long Current Part number.`, action: "revoke", id: row.id, label: "Revoke" });
+    } else if (!isCurrentPartNumberCandidate(number)) {
+      invalidNumbers.push(isLongPartNumberExceptionCandidate(number)
+        ? { text: `Current Part ${number} contains more than eight digits.`, action: "approve", id: row.id, label: "Allow Exception" }
+        : `Current Part ${number} is not an eight-digit number.`);
+    }
     if (!String(row.description || "").trim()) missingDescriptions.push(`Current Part ${number} has no description.`);
   });
   partsState.aliases.forEach(row => {
     const oldNumber = row.old_part_number || "(blank)";
     if (!isOldPartNumberCandidate(oldNumber)) invalidNumbers.push(`Old Part ${oldNumber} is not a seven-digit number.`);
-    if (row.current_part_number && !isCurrentPartNumberCandidate(row.current_part_number)) {
+    if (row.current_part_number && !isCurrentPartNumberCandidate(row.current_part_number) && !findApprovedLongCurrentPart(row.current_part_number)) {
       invalidNumbers.push(`Old Part ${oldNumber} links to invalid Current Part ${row.current_part_number}.`);
     }
     if (!String(row.description || "").trim()) missingDescriptions.push(`Old Part ${oldNumber} has no description.`);
@@ -933,7 +1029,7 @@ function buildPartsHealthReport() {
   partsState.usage.forEach(row => {
     const shown = row.current_part_number || row.extracted_part_number || "(blank)";
     const usageDigits = getNumericPartDigits(shown);
-    if (usageDigits && usageDigits.length !== 7 && usageDigits.length !== 8) {
+    if (usageDigits && usageDigits.length !== 7 && usageDigits.length !== 8 && !findApprovedLongCurrentPart(shown)) {
       invalidNumbers.push(`Drawing Usage ${shown} does not contain seven or eight digits.`);
     }
     if (!String(row.description || "").trim()) missingDescriptions.push(`Drawing Usage ${shown} has no description.`);
@@ -945,7 +1041,7 @@ function buildPartsHealthReport() {
     if (["accepted", "ignored"].includes(row.status)) return;
     const found = row.extracted_part_number;
     const foundDigits = getNumericPartDigits(found);
-    if (foundDigits && foundDigits.length !== 7 && foundDigits.length !== 8) {
+    if (foundDigits && foundDigits.length !== 7 && foundDigits.length !== 8 && !findApprovedLongCurrentPart(found)) {
       invalidNumbers.push(`Item to Check ${found} does not contain seven or eight digits.`);
     }
     const savedFound = findMasterPartByNumber(found) || partsState.aliases.some(alias => getPartNumberKey(alias.old_part_number) === getPartNumberKey(found));
@@ -953,7 +1049,7 @@ function buildPartsHealthReport() {
     if (savedFound || savedSuggestion) coveredReviews.push(`${found || "Unknown number"} is still open even though its saved part-number decision already exists.`);
   });
 
-  return [
+  const sections = [
     { title: "Invalid part-number lengths", description: "Current numbers must contain eight digits; old numbers must contain seven.", items: invalidNumbers },
     { title: "Old numbers stored as current parts", description: "Seven-digit numbers belong in Old Part Numbers, not Current Parts.", items: oldNumbersInCurrent },
     { title: "Missing descriptions", description: "Records without descriptions are harder to match during future imports.", items: missingDescriptions },
@@ -961,6 +1057,39 @@ function buildPartsHealthReport() {
     { title: "Drawing usage with missing parts", description: "These drawing references are not connected to a current or old part record.", items: usageWithoutParts },
     { title: "Reviews covered by saved decisions", description: "These reviews can be resolved automatically because their part-number decision is already saved.", items: coveredReviews }
   ];
+
+  const generalExceptions = loadGeneralHealthExceptions();
+  sections.forEach(section => {
+    section.items = section.items.map(item => {
+      if (typeof item !== "string") return item;
+      const key = getGeneralHealthExceptionKey(section.title, item);
+      if (generalExceptions[key]) {
+        approvedExceptions.push({ text: item, action: "revoke-health", id: key, label: "Revoke", exceptionText: item });
+        return null;
+      }
+      return { text: item, action: "approve-health", id: key, label: "Allow Exception", exceptionText: item };
+    }).filter(Boolean);
+  });
+  sections.push({
+    title: "Approved exceptions",
+    description: "Long-number exceptions are shared with the part record. Other health exceptions are retained in this browser and can be revoked here.",
+    items: approvedExceptions,
+    informational: true
+  });
+  return sections;
+}
+
+function isApprovedPartNumberException(row) {
+  return (row?.record_type === "Part Number Exception" || row?.status === "active_number_exception") && isLongPartNumberExceptionCandidate(row.current_part_number);
+}
+
+function isLongPartNumberExceptionCandidate(value) {
+  return getPartNumberKey(value).length > 8 && !isOldPartNumberCandidate(value);
+}
+
+function findApprovedLongCurrentPart(value) {
+  const part = findMasterPartByNumber(value);
+  return isApprovedPartNumberException(part) ? part : null;
 }
 
 function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "local", options = {}) {
@@ -1102,19 +1231,41 @@ async function saveSupabaseMasterRows(rows) {
   setPartsStatus(`Checking shared current parts before saving ${rows.length} record${rows.length === 1 ? "" : "s"}...`);
   const existingRows = await fetchSupabaseRows(PARTS_TABLES.master);
   const existingByPartNumber = buildSupabaseMasterLookup(existingRows);
-  const payload = rows.map(row => {
+  const existingById = new Map(existingRows.filter(row => row.id).map(row => [row.id, row]));
+  const updates = [];
+  const inserts = [];
+
+  rows.forEach(row => {
     const key = row.normalized_part_number || normalizePartNumber(row.current_part_number);
-    const existing = existingByPartNumber.get(key) || existingByPartNumber.get(formatCurrentPartNumber(row.current_part_number));
+    const existingByPrimaryKey = row.id ? existingById.get(row.id) : null;
+    const existing = existingByPrimaryKey || existingByPartNumber.get(key) || existingByPartNumber.get(formatCurrentPartNumber(row.current_part_number));
     const merged = cleanSupabaseRowForTable(
       PARTS_TABLES.master,
       existing ? mergeSupabaseRow(existing, row, PARTS_TABLES.master) : row,
       existing || {}
     );
     if (existing?.id) merged.id = existing.id;
-    return merged;
+    if (existingByPrimaryKey) updates.push(merged);
+    else inserts.push(merged);
   });
 
-  return saveSupabaseRowsInBatches(PARTS_TABLES.master, payload, "normalized_part_number");
+  for (const [index, row] of updates.entries()) {
+    setPartsStatus(`Updating shared current part ${index + 1} of ${updates.length}...`);
+    const { id, ...changes } = row;
+    const { error } = await supabaseClient
+      .from(PARTS_TABLES.master)
+      .update(changes)
+      .eq("id", id);
+    if (error) {
+      handlePartsRemoteError(error, PARTS_TABLES.master);
+      return false;
+    }
+  }
+
+  if (inserts.length) {
+    return saveSupabaseRowsInBatches(PARTS_TABLES.master, inserts, "normalized_part_number");
+  }
+  return true;
 }
 
 function buildSupabaseMasterLookup(rows) {
@@ -1309,6 +1460,12 @@ function mergeSupabaseRow(existing, incoming, table = "") {
 }
 
 function cleanSupabaseRowForTable(table, row, fallback = {}) {
+  if (table === PARTS_TABLES.master && row?.status === "active_number_exception") {
+    row = { ...row, status: "active", record_type: "Part Number Exception" };
+  }
+  if (table === PARTS_TABLES.master && fallback?.status === "active_number_exception") {
+    fallback = { ...fallback, status: "active", record_type: "Part Number Exception" };
+  }
   const allowedColumns = {
     [PARTS_TABLES.master]: [
       "id", "current_part_number", "normalized_part_number", "compact_part_number", "description",
@@ -3530,6 +3687,15 @@ function getDeletePlanParts(plan) {
 async function handleReviewAction(action, id) {
   const review = partsState.reviews.find(row => row.id === id);
   if (!review) return;
+  let approvedReviewLongNumber = false;
+  if (action === "new-review" && isLongPartNumberExceptionCandidate(review.extracted_part_number)) {
+    approvedReviewLongNumber = await showPartsMessage(
+      "Approve Part Number Exception",
+      `Create ${review.extracted_part_number} as a Current Part even though it contains more than eight digits?`,
+      { confirmText: "Create as Exception", cancelText: "Cancel" }
+    );
+    if (!approvedReviewLongNumber) return;
+  }
   const countsBefore = getPartsReviewActionCounts();
   const relatedReviews = getRelatedReviewRows(review, action);
   let changedUsage = [];
@@ -3572,6 +3738,10 @@ async function handleReviewAction(action, id) {
     const changedMaster = [];
     if (!approvedPart) {
       const part = createPartFromReview(review, partNumber);
+      if (approvedReviewLongNumber) {
+        part.status = "active";
+        part.record_type = "Part Number Exception";
+      }
       partsState.master.unshift(part);
       approvedPart = part;
       changedMaster.push(part);
@@ -3851,13 +4021,24 @@ async function savePartsEditModal() {
   const tab = document.getElementById("partsEditDestination")?.value || sourceTab;
   const isMove = !!target.id && tab !== sourceTab;
   let row = !isMove && target.id ? partsState[tab].find(item => item.id === target.id) : null;
+  let approvedLongNumber = false;
 
   if (tab === "master" && !isCurrentPartNumberCandidate(values.current_part_number)) {
-    await showPartsError(
-      "Current Parts requires an eight-digit numeric part number. Choose Old Part Numbers for seven digits or Items to Check when the role is unclear.",
-      "Current Part Number Required"
-    );
-    return;
+    const alreadyApproved = row && isApprovedPartNumberException(row) && getPartNumberKey(row.current_part_number) === getPartNumberKey(values.current_part_number);
+    if (isLongPartNumberExceptionCandidate(values.current_part_number)) {
+      approvedLongNumber = alreadyApproved || await showPartsMessage(
+        "Approve Part Number Exception",
+        `Allow ${values.current_part_number} as a Current Part even though it contains more than eight digits? The exception will be shown in Library Health and can be revoked later.`,
+        { confirmText: "Approve Exception", cancelText: "Cancel" }
+      );
+      if (!approvedLongNumber) return;
+    } else {
+      await showPartsError(
+        "Current Parts normally requires an eight-digit numeric part number. Numbers longer than eight digits may be approved as exceptions.",
+        "Current Part Number Required"
+      );
+      return;
+    }
   }
   if (tab === "aliases" && !isOldPartNumberCandidate(values.old_part_number)) {
     await showPartsError(
@@ -3866,11 +4047,11 @@ async function savePartsEditModal() {
     );
     return;
   }
-  if (tab === "aliases" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number)) {
+  if (tab === "aliases" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number) && !findApprovedLongCurrentPart(values.current_part_number)) {
     await showPartsError("When provided, the linked current part number must contain eight digits.", "Current Part Number Format");
     return;
   }
-  if (tab === "usage" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number)) {
+  if (tab === "usage" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number) && !findApprovedLongCurrentPart(values.current_part_number)) {
     await showPartsError("Drawing Usage current part numbers must contain eight digits.", "Current Part Number Required");
     return;
   }
@@ -3893,8 +4074,8 @@ async function savePartsEditModal() {
     row.compact_part_number = compactPartNumber(row.current_part_number);
     row.normalized_description = normalizeDescription(row.description);
     row.category = getPartNumberCategoryInfo(row.current_part_number).group;
-    row.status = row.status || "active";
-    row.record_type = row.record_type || "Part";
+    row.status = "active";
+    row.record_type = approvedLongNumber ? "Part Number Exception" : (row.record_type === "Part Number Exception" ? "Part" : (row.record_type || "Part"));
     row.needs_review = row.needs_review === true || row.needs_review === "true";
   }
 

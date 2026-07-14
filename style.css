@@ -3943,6 +3943,22 @@ summary {
   font-size: 0.82rem;
 }
 
+.parts-health-item-action {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.parts-health-item-action button {
+  width: auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
 /* Compact only the wide review list so its actions fit without changing its layout. */
 .parts-review-table th,
 .parts-review-table td {
