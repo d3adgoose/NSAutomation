@@ -101,18 +101,20 @@ function autoResolveReviewsFromSavedNumbers() {
     if (!extractedKey) return;
 
     let part = partsState.master.find(row => getPartNumberKey(row.current_part_number) === extractedKey) || null;
+    let knownUnlinkedOldNumber = false;
     if (!part) {
       const alias = partsState.aliases.find(row =>
         getPartNumberKey(row.old_part_number) === extractedKey
       );
       if (alias?.current_part_number) part = findMasterPartByNumber(alias.current_part_number);
+      else if (alias) knownUnlinkedOldNumber = true;
     }
-    if (!part) return;
+    if (!part && !knownUnlinkedOldNumber) return;
 
     review.status = "accepted";
     review.updated_at = updatedAt;
     resolvedReviews.push(review);
-    linkReviewUsageToPart(review, part).forEach(row => changedUsage.set(row.id, row));
+    if (part) linkReviewUsageToPart(review, part).forEach(row => changedUsage.set(row.id, row));
   });
 
   return { reviews: resolvedReviews, usage: [...changedUsage.values()] };
@@ -3089,6 +3091,7 @@ async function handleReviewAction(action, id) {
   let changedUsage = [];
   let savePromise = null;
   let reusedExistingPart = false;
+  let reusedExistingOldNumber = false;
   if (action === "ignore-review") {
     review.status = "ignored";
     review.updated_at = nowISO();
@@ -3097,6 +3100,7 @@ async function handleReviewAction(action, id) {
     const oldKey = getPartNumberKey(review.extracted_part_number);
     let alias = partsState.aliases.find(row => getPartNumberKey(row.old_part_number) === oldKey);
     if (alias) {
+      reusedExistingOldNumber = true;
       alias.description = alias.description || review.extracted_description;
       alias.source = mergeFileNameLabels(alias.source, relatedReviews.map(row => row.source_file).join("\n"));
       alias.updated_at = nowISO();
@@ -3210,7 +3214,10 @@ async function handleReviewAction(action, id) {
   if (relatedReviews.length > 1 && action !== "ignore-review") {
     setPartsStatus(`Resolved ${relatedReviews.length} matching review rows together. ${countSummary}`);
   } else if (action === "old-review") {
-    setPartsStatus(`The found number was saved to Old Part Numbers without requiring a linked Current Part. ${countSummary}`);
+    const result = reusedExistingOldNumber
+      ? "That old part number already existed, so it was reused without creating a duplicate."
+      : "A new Old Part Number was added without requiring a linked Current Part.";
+    setPartsStatus(`${result} ${countSummary}`);
   } else if (action === "new-review") {
     const result = reusedExistingPart
       ? "That part number already existed, so it was reused without creating a duplicate."
