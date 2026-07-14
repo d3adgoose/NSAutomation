@@ -1063,6 +1063,7 @@ function renderPartsSummary() {
   setText("partsTotalCount", getUniqueCurrentPartsCount());
   setText("partsAliasCount", getUniqueOldPartNumbersCount());
   setText("partsUsageCount", partsState.usage.length);
+  setText("partsReviewCount", partsState.reviews.filter(row => !["accepted", "ignored"].includes(row.status)).length);
   setText("partsHistoryCount", partsState.history.length);
   renderPartsHeaderSummary();
 }
@@ -1431,7 +1432,36 @@ function getPartsTableConfig(tab) {
         { key: "page", label: "Page" },
         { key: "status", label: "Status", badge: true }
       ],
-      actions: row => actionButtons(row)
+      actions: row => {
+        const isResolved = ["accepted", "ignored"].includes(row.status);
+        if (isResolved) return actionButtons(row);
+
+        const id = escapeAttr(row.id);
+        const primaryAction = row.suggested_current_part_number
+          ? `<button class="parts-action-button review-primary-action" data-action="accept-review" data-id="${id}">Approve Match</button>`
+          : `<button class="parts-action-button review-primary-action" data-action="new-review" data-id="${id}">Add New Part</button>`;
+        const addNewAction = row.suggested_current_part_number
+          ? `<button class="review-menu-action" data-action="new-review" data-id="${id}"><strong>Add as New Part</strong><span>Keep the extracted part number</span></button>`
+          : "";
+        const aliasAction = row.suggested_current_part_number
+          ? `<button class="review-menu-action" data-action="alias-review" data-id="${id}"><strong>Save as Old Number</strong><span>Link it to the suggested part</span></button>`
+          : "";
+
+        return [`
+          <div class="review-action-group">
+            ${primaryAction}
+            <details class="review-more-actions">
+              <summary>More actions</summary>
+              <div class="review-action-menu">
+                ${addNewAction}
+                ${aliasAction}
+                <button class="review-menu-action" data-action="edit:reviews" data-id="${id}"><strong>Edit Details</strong><span>Correct the numbers or descriptions</span></button>
+                <button class="review-menu-action review-dismiss-action" data-action="ignore-review" data-id="${id}"><strong>Dismiss Item</strong><span>Mark it as not needed</span></button>
+              </div>
+            </details>
+          </div>
+        `];
+      }
     },
     history: {
       title: "Import History",
@@ -2903,11 +2933,11 @@ async function exportPartsDatabase() {
   }
   const workbook = XLSX.utils.book_new();
   const sheets = [
-    ["Master Parts", filterForExport("master")],
-    ["Old Part Number Map", filterForExport("aliases")],
-    ["Drawing Usage", filterForExport("usage")],
-    ["Items to Check", filterForExport("reviews")],
-    ["Import History", filterForExport("history")]
+    ["Master Parts", getSortedExportRows("master")],
+    ["Old Part Number Map", getSortedExportRows("aliases")],
+    ["Drawing Usage", getSortedExportRows("usage")],
+    ["Items to Check", getSortedExportRows("reviews")],
+    ["Import History", getSortedExportRows("history")]
   ];
 
   sheets.forEach(([name, rows]) => {
@@ -2923,6 +2953,37 @@ async function exportPartsDatabase() {
 
 function filterForExport(tab) {
   return tab === partsState.activeTab ? getFilteredRows(tab) : partsState[tab];
+}
+
+const PARTS_EXPORT_SORT_KEYS = {
+  master: ["current_part_number", "description"],
+  aliases: ["old_part_number", "current_part_number", "description"],
+  usage: ["current_part_number", "drawing_number", "item_number", "pdf_page_number"],
+  reviews: ["extracted_part_number", "suggested_current_part_number", "source_file", "page"],
+  history: ["file_name", "created_at"]
+};
+
+function getSortedExportRows(tab) {
+  const rows = filterForExport(tab) || [];
+  const keys = PARTS_EXPORT_SORT_KEYS[tab] || [];
+
+  return [...rows].sort((a, b) => {
+    for (const key of keys) {
+      const av = String(a?.[key] ?? "").trim();
+      const bv = String(b?.[key] ?? "").trim();
+
+      if (!av && bv) return 1;
+      if (av && !bv) return -1;
+
+      const result = av.localeCompare(bv, undefined, {
+        numeric: true,
+        sensitivity: "base",
+        ignorePunctuation: false
+      });
+      if (result !== 0) return result;
+    }
+    return 0;
+  });
 }
 
 function stringifyPartNumbers(row) {

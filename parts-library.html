@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Parts Library</title>
 
-  <link rel="stylesheet" href="style.css?v=20260713-paged-parts" />
+  <link rel="stylesheet" href="style.css?v=20260714-review-actions" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -195,6 +195,10 @@
         <strong id="partsUsageCount">0</strong>
         <span>Drawing Usage Records</span>
         </button>
+        <button class="parts-summary-card" data-parts-tab="reviews" type="button">
+        <strong id="partsReviewCount">0</strong>
+        <span>Items to Check</span>
+        </button>
         <button class="parts-summary-card" data-parts-tab="history" type="button">
         <strong id="partsHistoryCount">0</strong>
         <span>Import History</span>
@@ -273,6 +277,6 @@
   <script src="supabaseClient.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="partsLibrary.js?v=20260713-ghost-source"></script>
+  <script src="partsLibrary.js?v=20260714-review-actions"></script>
 </body>
 </html>
