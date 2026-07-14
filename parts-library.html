@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Parts Library</title>
 
-  <link rel="stylesheet" href="style.css?v=20260714-review-layout-9" />
+  <link rel="stylesheet" href="style.css?v=20260714-compact-status-strip" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -141,12 +141,6 @@
         </div>
       </div>
 
-      <div class="parts-status-row">
-        <p id="partsStatusMessage" class="warranty-status" aria-live="polite"></p>
-        <div class="button-row parts-local-actions">
-          <button class="secondary" id="partsClearLocalButton" type="button">Clear Local Copy</button>
-        </div>
-      </div>
     </section>
 
     <section class="card parts-list-card">
@@ -189,6 +183,21 @@
           </select>
         </label>
 
+      </div>
+
+      <div class="parts-status-row parts-list-status-row">
+        <div class="parts-status-copy">
+          <div id="partsSaveIndicator" class="parts-save-indicator saved-local" role="status" aria-live="polite">
+            <span class="parts-save-dot" aria-hidden="true"></span>
+            <strong id="partsSaveIndicatorText">Saved locally</strong>
+            <button id="partsRetrySaveButton" class="secondary hidden" type="button">Retry now</button>
+          </div>
+          <p id="partsStatusMessage" class="warranty-status" aria-live="polite"></p>
+        </div>
+        <div class="button-row parts-local-actions">
+          <button class="secondary" id="partsHealthCheckButton" type="button">Check Health</button>
+          <button class="secondary parts-quiet-action" id="partsClearLocalButton" type="button">Clear Local</button>
+        </div>
       </div>
 
       <div class="parts-summary-grid" aria-label="Parts library views">
@@ -292,10 +301,23 @@
     </div>
   </div>
 
+  <div id="partsHealthModal" class="modal hidden">
+    <div class="modal-content parts-health-modal-content">
+      <div class="parts-modal-heading">
+        <div>
+          <h2>Library Health Check</h2>
+          <p id="partsHealthSummary" class="card-intro"></p>
+        </div>
+        <button class="secondary" id="partsHealthCloseButton" type="button">Close</button>
+      </div>
+      <div id="partsHealthReport" class="parts-health-report"></div>
+    </div>
+  </div>
+
   <script src="supabaseClient.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
   <script src="partCategories.js?v=20231013"></script>
-  <script src="partsLibrary.js?v=20260714-old-number-count"></script>
+  <script src="partsLibrary.js?v=20260714-health-save-recovery"></script>
 </body>
 </html>

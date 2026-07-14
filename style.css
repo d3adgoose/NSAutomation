@@ -3809,6 +3809,140 @@ summary {
   width: 280px;
 }
 
+.parts-status-copy {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.parts-list-status-row {
+  margin: -6px 0 -2px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+}
+
+.parts-list-status-row .warranty-status {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: #687b8c;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parts-list-status-row .parts-local-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.parts-list-status-row .parts-local-actions button {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 0.76rem;
+}
+
+.parts-list-status-row .parts-quiet-action {
+  border-color: transparent;
+  background: transparent;
+  color: #65798a;
+}
+
+.parts-save-indicator {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid #cbd9e5;
+  border-radius: 999px;
+  background: #f6f9fb;
+  color: #42586b;
+  font-size: 0.78rem;
+}
+
+.parts-save-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6d8193;
+}
+
+.parts-save-indicator.saving .parts-save-dot {
+  background: #d38b16;
+  animation: parts-save-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.parts-save-indicator.saved-shared .parts-save-dot { background: #26845b; }
+.parts-save-indicator.saved-local .parts-save-dot { background: #557b98; }
+.parts-save-indicator.unsaved .parts-save-dot { background: #b87518; }
+.parts-save-indicator.save-failed {
+  border-color: #e4aaa5;
+  background: #fff4f3;
+  color: #8d2c25;
+}
+.parts-save-indicator.save-failed .parts-save-dot { background: #c7352b; }
+
+.parts-save-indicator button {
+  width: auto;
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+}
+
+@keyframes parts-save-pulse {
+  from { opacity: 0.45; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.parts-health-modal-content {
+  width: min(920px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+
+.parts-health-report {
+  display: grid;
+  gap: 12px;
+}
+
+.parts-health-section {
+  padding: 12px 14px;
+  border: 1px solid #d7e1e9;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.parts-health-section.good {
+  border-color: #b9ddca;
+  background: #f1faf5;
+}
+
+.parts-health-section h3 {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 5px;
+  font-size: 0.96rem;
+}
+
+.parts-health-section p {
+  margin: 0;
+  color: #536779;
+  font-size: 0.84rem;
+}
+
+.parts-health-section ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: #34495b;
+  font-size: 0.82rem;
+}
+
 /* Compact only the wide review list so its actions fit without changing its layout. */
 .parts-review-table th,
 .parts-review-table td {

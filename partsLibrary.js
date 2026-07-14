@@ -18,6 +18,8 @@ let partsMessageResolver = null;
 const partsUndoStack = [];
 const partsRedoStack = [];
 const PARTS_HISTORY_LIMIT = 20;
+const PARTS_RETRY_QUEUE_KEY = "ns_parts_retry_queue_v1";
+let partsRetryInProgress = false;
 
 let partsState = {
   master: [],
@@ -42,9 +44,16 @@ document.addEventListener("DOMContentLoaded", initPartsDatabase);
 
 async function initPartsDatabase() {
   bindPartsDatabaseEvents();
+  initializePartsSaveIndicator();
   registerPartsGhostAutocompleteSource();
   await checkPartsLogin();
   await loadPartsDatabase();
+  applyPendingPartsChangesToState();
+  const duplicateCleanup = deduplicatePartsDatabase();
+  if (duplicateCleanup.removedCount || duplicateCleanup.changedCount) {
+    saveLocalPartsDatabase();
+    await persistPartsDuplicateCleanup(duplicateCleanup);
+  }
   const reopenedReviews = reconcilePreviouslyAcceptedReviews();
   const autoResolved = autoResolveReviewsFromSavedNumbers();
   renderPartsDatabase();
@@ -60,6 +69,7 @@ async function initPartsDatabase() {
     setPartsStatus(`${messages.join("; ")}.`);
     renderPartsDatabase();
   }
+  await retryPendingPartsChanges({ silent: true });
 }
 
 function reconcilePreviouslyAcceptedReviews() {
@@ -134,6 +144,9 @@ function bindPartsDatabaseEvents() {
     button.addEventListener("click", () => setPartsActiveTab(button.dataset.partsTab));
   });
   document.getElementById("partsClearFiltersButton")?.addEventListener("click", clearPartsFilters);
+  document.getElementById("partsHealthCheckButton")?.addEventListener("click", openPartsHealthReport);
+  document.getElementById("partsHealthCloseButton")?.addEventListener("click", closePartsHealthReport);
+  document.getElementById("partsRetrySaveButton")?.addEventListener("click", () => retryPendingPartsChanges());
   document.getElementById("partsExportButton")?.addEventListener("click", () => {
     if (ensurePartsUnlocked()) exportPartsDatabase();
   });
@@ -167,6 +180,9 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsMessageConfirmButton")?.addEventListener("click", () => closePartsMessage(true));
   document.getElementById("partsSyncLocalButton")?.addEventListener("click", syncLocalPartsCopyToShared);
   document.getElementById("partsClearLocalButton")?.addEventListener("click", clearLocalPartsCopy);
+  document.getElementById("partsEditFields")?.addEventListener("input", markPartsUnsaved);
+  document.getElementById("partsEditDestination")?.addEventListener("change", markPartsUnsaved);
+  window.addEventListener("online", () => retryPendingPartsChanges({ silent: true }));
 }
 
 function registerPartsGhostAutocompleteSource() {
@@ -398,6 +414,8 @@ async function loginPartsUser() {
   closePartsLoginModal();
   updatePartsLoginUI();
   await loadPartsDatabase();
+  applyPendingPartsChangesToState();
+  await retryPendingPartsChanges({ silent: true });
   renderPartsDatabase();
 }
 
@@ -519,7 +537,8 @@ async function loadPartsDatabase() {
 
     applyPartsData(remote);
     normalizePartsFileNameLabels();
-    saveLocalPartsDatabase("shared");
+    saveLocalPartsDatabase("shared", { preserveSaveState: true });
+    setPartsSaveState("shared");
     setPartsStatus("Loaded shared Parts Library.");
     updatePartsLocalButton();
   } catch (error) {
@@ -607,9 +626,10 @@ function getArrayLength(value) {
 }
 
 async function clearLocalPartsCopy() {
+  const pendingCount = getPartsRetryQueueSize();
   const confirmed = await showPartsMessage(
     "Clear Local Copy",
-    "Clear the Parts Library data saved in this browser? This does not delete the shared library.",
+    `Clear the Parts Library data saved in this browser? This does not delete the shared library.${pendingCount ? ` This will also discard ${pendingCount} pending shared change${pendingCount === 1 ? "" : "s"}.` : ""}`,
     {
       confirmText: "Clear Local Copy",
       cancelText: "Cancel",
@@ -619,6 +639,7 @@ async function clearLocalPartsCopy() {
   if (!confirmed) return;
 
   localStorage.removeItem(PARTS_STORAGE_KEY);
+  localStorage.removeItem(PARTS_RETRY_QUEUE_KEY);
   partsState.master = [];
   partsState.aliases = [];
   partsState.usage = [];
@@ -683,11 +704,273 @@ function cleanUsageDrawingLabel(value) {
   return text;
 }
 
+function initializePartsSaveIndicator() {
+  const queue = loadPartsRetryQueue();
+  const cached = loadLocalPartsDatabase();
+  if (getPartsRetryQueueSize(queue)) {
+    setPartsSaveState("failed");
+  } else if (cached?.meta?.pendingSync) {
+    setPartsSaveState("local");
+  } else if (cached) {
+    setPartsSaveState(cached.meta?.storageMode === "shared" ? "shared" : "local");
+  } else {
+    setPartsSaveState("local");
+  }
+}
+
+function setPartsSaveState(state) {
+  const indicator = document.getElementById("partsSaveIndicator");
+  const text = document.getElementById("partsSaveIndicatorText");
+  const retryButton = document.getElementById("partsRetrySaveButton");
+  if (!indicator || !text) return;
+  const config = {
+    saving: ["saving", "Saving…"],
+    shared: ["saved-shared", "Saved to shared library"],
+    local: ["saved-local", "Saved locally"],
+    failed: ["save-failed", "Shared save failed"],
+    unsaved: ["unsaved", "Unsaved changes"]
+  }[state] || ["saved-local", "Saved locally"];
+  indicator.classList.remove("saving", "saved-shared", "saved-local", "save-failed", "unsaved");
+  indicator.classList.add(config[0]);
+  text.textContent = config[1];
+  retryButton?.classList.toggle("hidden", state !== "failed");
+}
+
+function markPartsUnsaved() {
+  setPartsSaveState("unsaved");
+}
+
+function getEmptyPartsRetryQueue() {
+  return {
+    upserts: { master: [], aliases: [], usage: [], reviews: [], history: [] },
+    deletes: [],
+    updated_at: ""
+  };
+}
+
+function loadPartsRetryQueue() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PARTS_RETRY_QUEUE_KEY) || "null");
+    if (!parsed?.upserts) return getEmptyPartsRetryQueue();
+    const empty = getEmptyPartsRetryQueue();
+    Object.keys(empty.upserts).forEach(tab => {
+      empty.upserts[tab] = Array.isArray(parsed.upserts[tab]) ? parsed.upserts[tab] : [];
+    });
+    empty.deletes = Array.isArray(parsed.deletes) ? parsed.deletes : [];
+    empty.updated_at = parsed.updated_at || "";
+    return empty;
+  } catch {
+    return getEmptyPartsRetryQueue();
+  }
+}
+
+function savePartsRetryQueue(queue) {
+  queue.updated_at = nowISO();
+  if (!getPartsRetryQueueSize(queue)) {
+    localStorage.removeItem(PARTS_RETRY_QUEUE_KEY);
+    return;
+  }
+  localStorage.setItem(PARTS_RETRY_QUEUE_KEY, JSON.stringify(queue));
+}
+
+function getPartsRetryQueueSize(queue = loadPartsRetryQueue()) {
+  const upserts = Object.values(queue.upserts || {}).reduce((sum, rows) => sum + getArrayLength(rows), 0);
+  return upserts + getArrayLength(queue.deletes);
+}
+
+function applyPendingPartsChangesToState() {
+  const queue = loadPartsRetryQueue();
+  if (!getPartsRetryQueueSize(queue)) return;
+  Object.keys(queue.upserts).forEach(tab => {
+    queue.upserts[tab].forEach(pending => {
+      const key = pending.id || getRetryRowKey(tab, pending);
+      const index = partsState[tab].findIndex(row => (row.id || getRetryRowKey(tab, row)) === key);
+      if (index >= 0) partsState[tab][index] = { ...partsState[tab][index], ...pending };
+      else partsState[tab].unshift({ ...pending });
+    });
+  });
+  queue.deletes.forEach(operation => {
+    const tab = getPartsTabForTable(operation.table);
+    if (tab) partsState[tab] = partsState[tab].filter(row => row.id !== operation.id);
+  });
+  saveLocalPartsDatabase("shared", { pendingSync: true, preserveSaveState: true });
+  setPartsSaveState(hasSupabaseParts() ? "failed" : "local");
+}
+
+function queueFailedPartsChanges(changed) {
+  const queue = loadPartsRetryQueue();
+  Object.keys(queue.upserts).forEach(tab => {
+    const incoming = getArrayLength(changed?.[tab]) ? changed[tab] : [];
+    if (!incoming.length) return;
+    const merged = new Map(queue.upserts[tab].map(row => [row.id || getRetryRowKey(tab, row), row]));
+    incoming.forEach(row => merged.set(row.id || getRetryRowKey(tab, row), { ...row }));
+    queue.upserts[tab] = [...merged.values()];
+  });
+  savePartsRetryQueue(queue);
+  setPartsSaveState("failed");
+}
+
+function removeQueuedPartsChanges(changed) {
+  const queue = loadPartsRetryQueue();
+  Object.keys(queue.upserts).forEach(tab => {
+    const savedKeys = new Set((changed?.[tab] || []).map(row => row.id || getRetryRowKey(tab, row)));
+    if (savedKeys.size) queue.upserts[tab] = queue.upserts[tab].filter(row => !savedKeys.has(row.id || getRetryRowKey(tab, row)));
+  });
+  savePartsRetryQueue(queue);
+}
+
+function getRetryRowKey(tab, row) {
+  if (tab === "master") return getPartNumberKey(row.current_part_number);
+  if (tab === "aliases") return getPartNumberKey(row.old_part_number);
+  if (tab === "usage") return getUsageLocationKey(row);
+  if (tab === "reviews") return getReviewDuplicateKey(row);
+  return row.id || JSON.stringify(row);
+}
+
+function queueFailedPartsDelete(table, id) {
+  if (!id) return;
+  const queue = loadPartsRetryQueue();
+  const key = `${table}:${id}`;
+  if (!queue.deletes.some(item => `${item.table}:${item.id}` === key)) queue.deletes.push({ table, id });
+  savePartsRetryQueue(queue);
+  setPartsSaveState("failed");
+}
+
+function removeQueuedPartsDelete(table, id) {
+  const queue = loadPartsRetryQueue();
+  queue.deletes = queue.deletes.filter(item => item.table !== table || item.id !== id);
+  savePartsRetryQueue(queue);
+}
+
+async function retryPendingPartsChanges(options = {}) {
+  if (partsRetryInProgress) return false;
+  const queue = loadPartsRetryQueue();
+  const total = getPartsRetryQueueSize(queue);
+  if (!total) return true;
+  if (!hasSupabaseParts()) {
+    setPartsSaveState("local");
+    return false;
+  }
+
+  partsRetryInProgress = true;
+  setPartsSaveState("saving");
+  if (!options.silent) setPartsStatus(`Retrying ${total} pending shared change${total === 1 ? "" : "s"}...`);
+  const remaining = getEmptyPartsRetryQueue();
+  try {
+    for (const tab of Object.keys(queue.upserts)) {
+      if (!queue.upserts[tab].length) continue;
+      const saved = await upsertSupabaseRows(PARTS_TABLES[tab], queue.upserts[tab], { manageSaveState: false });
+      if (!saved) remaining.upserts[tab] = queue.upserts[tab];
+    }
+    for (const operation of queue.deletes) {
+      const deleted = await deleteSupabaseRow(operation.table, operation.id, { queueOnFailure: false });
+      if (!deleted) remaining.deletes.push(operation);
+    }
+    savePartsRetryQueue(remaining);
+    if (getPartsRetryQueueSize(remaining)) {
+      setPartsSaveState("failed");
+      if (!options.silent) setPartsStatus("Some shared changes still could not be saved. They remain queued for another retry.");
+      return false;
+    }
+    saveLocalPartsDatabase("shared", { pendingSync: false, preserveSaveState: true });
+    setPartsSaveState("shared");
+    if (!options.silent) setPartsStatus("All pending changes were saved to the shared Parts Library.");
+    return true;
+  } finally {
+    partsRetryInProgress = false;
+  }
+}
+
+function openPartsHealthReport() {
+  const report = buildPartsHealthReport();
+  const issueCount = report.reduce((sum, section) => sum + section.items.length, 0);
+  setText("partsHealthSummary", issueCount
+    ? `${issueCount} issue${issueCount === 1 ? "" : "s"} found across ${report.filter(section => section.items.length).length} categories.`
+    : "No library health issues were found.");
+  const container = document.getElementById("partsHealthReport");
+  if (container) {
+    container.innerHTML = report.map(section => `
+      <section class="parts-health-section ${section.items.length ? "" : "good"}">
+        <h3><span>${escapeHTML(section.title)}</span><span>${section.items.length}</span></h3>
+        <p>${escapeHTML(section.description)}</p>
+        ${section.items.length ? `<ul>${section.items.slice(0, 50).map(item => `<li>${escapeHTML(item)}</li>`).join("")}</ul>` : ""}
+        ${section.items.length > 50 ? `<p>Showing the first 50 of ${section.items.length} issues.</p>` : ""}
+      </section>
+    `).join("");
+  }
+  document.getElementById("partsHealthModal")?.classList.remove("hidden");
+}
+
+function closePartsHealthReport() {
+  document.getElementById("partsHealthModal")?.classList.add("hidden");
+}
+
+function buildPartsHealthReport() {
+  const invalidNumbers = [];
+  const oldNumbersInCurrent = [];
+  const missingDescriptions = [];
+  const brokenMappings = [];
+  const usageWithoutParts = [];
+  const coveredReviews = [];
+
+  partsState.master.forEach(row => {
+    const number = row.current_part_number || "(blank)";
+    if (isOldPartNumberCandidate(number)) oldNumbersInCurrent.push(`${number} is stored in Current Parts.`);
+    else if (!isCurrentPartNumberCandidate(number)) invalidNumbers.push(`Current Part ${number} is not an eight-digit number.`);
+    if (!String(row.description || "").trim()) missingDescriptions.push(`Current Part ${number} has no description.`);
+  });
+  partsState.aliases.forEach(row => {
+    const oldNumber = row.old_part_number || "(blank)";
+    if (!isOldPartNumberCandidate(oldNumber)) invalidNumbers.push(`Old Part ${oldNumber} is not a seven-digit number.`);
+    if (row.current_part_number && !isCurrentPartNumberCandidate(row.current_part_number)) {
+      invalidNumbers.push(`Old Part ${oldNumber} links to invalid Current Part ${row.current_part_number}.`);
+    }
+    if (!String(row.description || "").trim()) missingDescriptions.push(`Old Part ${oldNumber} has no description.`);
+    if (row.current_part_number && !findMasterPartByNumber(row.current_part_number)) {
+      brokenMappings.push(`${oldNumber} points to missing Current Part ${row.current_part_number}.`);
+    }
+  });
+  partsState.usage.forEach(row => {
+    const shown = row.current_part_number || row.extracted_part_number || "(blank)";
+    const usageDigits = getNumericPartDigits(shown);
+    if (usageDigits && usageDigits.length !== 7 && usageDigits.length !== 8) {
+      invalidNumbers.push(`Drawing Usage ${shown} does not contain seven or eight digits.`);
+    }
+    if (!String(row.description || "").trim()) missingDescriptions.push(`Drawing Usage ${shown} has no description.`);
+    const current = row.current_part_number && findMasterPartByNumber(row.current_part_number);
+    const alias = partsState.aliases.find(item => getPartNumberKey(item.old_part_number) === getPartNumberKey(row.extracted_part_number));
+    if (!current && !alias) usageWithoutParts.push(`${shown} in ${row.pdf_file_name || row.drawing_number || "an unknown drawing"} is not linked to a saved part.`);
+  });
+  partsState.reviews.forEach(row => {
+    if (["accepted", "ignored"].includes(row.status)) return;
+    const found = row.extracted_part_number;
+    const foundDigits = getNumericPartDigits(found);
+    if (foundDigits && foundDigits.length !== 7 && foundDigits.length !== 8) {
+      invalidNumbers.push(`Item to Check ${found} does not contain seven or eight digits.`);
+    }
+    const savedFound = findMasterPartByNumber(found) || partsState.aliases.some(alias => getPartNumberKey(alias.old_part_number) === getPartNumberKey(found));
+    const savedSuggestion = row.suggested_current_part_number && findMasterPartByNumber(row.suggested_current_part_number);
+    if (savedFound || savedSuggestion) coveredReviews.push(`${found || "Unknown number"} is still open even though its saved part-number decision already exists.`);
+  });
+
+  return [
+    { title: "Invalid part-number lengths", description: "Current numbers must contain eight digits; old numbers must contain seven.", items: invalidNumbers },
+    { title: "Old numbers stored as current parts", description: "Seven-digit numbers belong in Old Part Numbers, not Current Parts.", items: oldNumbersInCurrent },
+    { title: "Missing descriptions", description: "Records without descriptions are harder to match during future imports.", items: missingDescriptions },
+    { title: "Broken old-to-current mappings", description: "Old-only records are allowed; this reports only mappings that name a missing current part.", items: brokenMappings },
+    { title: "Drawing usage with missing parts", description: "These drawing references are not connected to a current or old part record.", items: usageWithoutParts },
+    { title: "Reviews covered by saved decisions", description: "These reviews can be resolved automatically because their part-number decision is already saved.", items: coveredReviews }
+  ];
+}
+
 function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "local", options = {}) {
+  const pendingSync = options.pendingSync === undefined
+    ? getPartsRetryQueueSize() > 0
+    : Boolean(options.pendingSync);
   localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({
     meta: {
       storageMode,
-      pendingSync: Boolean(options.pendingSync),
+      pendingSync,
       recordCount: getPartsDataCompletenessScore(partsState),
       saved_at: nowISO()
     },
@@ -697,6 +980,7 @@ function saveLocalPartsDatabase(storageMode = hasSupabaseParts() ? "shared" : "l
     reviews: partsState.reviews,
     history: partsState.history
   }));
+  if (!options.preserveSaveState) setPartsSaveState("local");
 }
 
 function hasSupabaseParts() {
@@ -730,19 +1014,51 @@ async function fetchSupabaseRows(table) {
   return rows;
 }
 
-async function upsertSupabaseRows(table, rows) {
-  if (!hasSupabaseParts() || !rows.length) return true;
-  const payload = prepareSupabaseRows(table, rows);
-  if (table === PARTS_TABLES.master) {
-    return saveSupabaseMasterRows(payload);
+async function upsertSupabaseRows(table, rows, options = {}) {
+  if (!rows.length) return true;
+  const manageSaveState = options.manageSaveState !== false;
+  const tab = getPartsTabForTable(table);
+  const changed = { master: [], aliases: [], usage: [], reviews: [], history: [] };
+  if (tab) changed[tab] = rows;
+  if (!hasSupabaseParts()) {
+    if (manageSaveState) {
+      queueFailedPartsChanges(changed);
+      setPartsSaveState("local");
+    }
+    return false;
   }
-  if (table === PARTS_TABLES.aliases) {
-    return saveSupabaseRowsByLookup(PARTS_TABLES.aliases, payload);
+  if (manageSaveState) setPartsSaveState("saving");
+  let saved = false;
+  try {
+    const payload = prepareSupabaseRows(table, rows);
+    if (table === PARTS_TABLES.master) {
+      saved = await saveSupabaseMasterRows(payload);
+    } else if (table === PARTS_TABLES.aliases) {
+      saved = await saveSupabaseRowsByLookup(PARTS_TABLES.aliases, payload);
+    } else if (table === PARTS_TABLES.usage) {
+      saved = await saveSupabaseRowsByLookup(PARTS_TABLES.usage, payload);
+    } else {
+      saved = await saveSupabaseRowsInBatches(table, payload, getSupabaseConflictTarget(table));
+    }
+  } catch (error) {
+    console.warn("Shared Parts Library save failed.", error);
+    setPartsStatus(`Shared save failed: ${error?.message || "network connection error"}`);
   }
-  if (table === PARTS_TABLES.usage) {
-    return saveSupabaseRowsByLookup(PARTS_TABLES.usage, payload);
+  if (manageSaveState) {
+    if (saved) {
+      removeQueuedPartsChanges(changed);
+      const pending = getPartsRetryQueueSize() > 0;
+      saveLocalPartsDatabase("shared", { pendingSync: pending, preserveSaveState: true });
+      setPartsSaveState(pending ? "failed" : "shared");
+    } else {
+      queueFailedPartsChanges(changed);
+    }
   }
-  return saveSupabaseRowsInBatches(table, payload, getSupabaseConflictTarget(table));
+  return saved;
+}
+
+function getPartsTabForTable(table) {
+  return Object.keys(PARTS_TABLES).find(tab => PARTS_TABLES[tab] === table) || "";
 }
 
 async function saveSupabaseRowsByLookup(table, rows) {
@@ -1039,13 +1355,28 @@ function getSupabaseConflictTarget(table) {
   return "id";
 }
 
-async function deleteSupabaseRow(table, id) {
-  if (!hasSupabaseParts()) return true;
-  const { error } = await supabaseClient.from(table).delete().eq("id", id);
-  if (error) {
-    handlePartsRemoteError(error, table);
+async function deleteSupabaseRow(table, id, options = {}) {
+  const queueOnFailure = options.queueOnFailure !== false;
+  if (!hasSupabaseParts()) {
+    if (queueOnFailure) queueFailedPartsDelete(table, id);
     return false;
   }
+  if (queueOnFailure) setPartsSaveState("saving");
+  let error = null;
+  try {
+    ({ error } = await supabaseClient.from(table).delete().eq("id", id));
+  } catch (caught) {
+    error = caught;
+  }
+  if (error) {
+    handlePartsRemoteError(error, table);
+    if (queueOnFailure) queueFailedPartsDelete(table, id);
+    return false;
+  }
+  removeQueuedPartsDelete(table, id);
+  const pending = getPartsRetryQueueSize() > 0;
+  saveLocalPartsDatabase("shared", { pendingSync: pending, preserveSaveState: true });
+  if (queueOnFailure) setPartsSaveState(pending ? "failed" : "shared");
   return true;
 }
 
@@ -1076,6 +1407,7 @@ function isMissingPartsRemoteTableError(error) {
 }
 
 function renderPartsDatabase() {
+  deduplicatePartsDatabase();
   renderPartsTabs();
   renderPartsFilters();
   renderPartsSortOptions();
@@ -1144,9 +1476,9 @@ function renderPartsSortOptions() {
 function renderPartsSummary() {
   setText("partsTotalCount", getUniqueCurrentPartsCount());
   setText("partsAliasCount", getUniqueOldPartNumbersCount());
-  setText("partsUsageCount", partsState.usage.length);
-  setText("partsReviewCount", partsState.reviews.filter(row => !["accepted", "ignored"].includes(row.status)).length);
-  setText("partsHistoryCount", partsState.history.length);
+  setText("partsUsageCount", getUniqueDrawingUsageCount());
+  setText("partsReviewCount", getUniqueOpenReviewCount());
+  setText("partsHistoryCount", getUniqueImportHistoryCount());
   renderPartsHeaderSummary();
 }
 
@@ -1155,7 +1487,7 @@ function renderPartsHeaderSummary() {
   const storageLabel = hasSupabaseParts() ? "shared" : "local";
 
   setText("partsHeaderRecordCount", `${totalRecords} ${storageLabel} part record${totalRecords === 1 ? "" : "s"} saved`);
-  setText("partsHeaderUsageText", `Current parts: ${getUniqueCurrentPartsCount()} - Old part numbers: ${getUniqueOldPartNumbersCount()} - Drawing usage: ${partsState.usage.length}`);
+  setText("partsHeaderUsageText", `Current parts: ${getUniqueCurrentPartsCount()} - Old part numbers: ${getUniqueOldPartNumbersCount()} - Drawing usage: ${getUniqueDrawingUsageCount()}`);
   updatePartsSharedStorageUsage();
 }
 
@@ -1165,6 +1497,109 @@ function getUniqueCurrentPartsCount() {
 
 function getUniqueOldPartNumbersCount() {
   return new Set(partsState.aliases.map(row => getPartNumberKey(row.old_part_number)).filter(Boolean)).size;
+}
+
+function getUniqueDrawingUsageCount() {
+  return new Set(partsState.usage.map(getUsageLocationKey).filter(Boolean)).size;
+}
+
+function getUniqueOpenReviewCount() {
+  return new Set(
+    partsState.reviews
+      .filter(row => !["accepted", "ignored"].includes(row.status))
+      .map(getReviewDuplicateKey)
+      .filter(Boolean)
+  ).size;
+}
+
+function getUniqueImportHistoryCount() {
+  return new Set(partsState.history.map(row => row.id).filter(Boolean)).size;
+}
+
+function getReviewDuplicateKey(row) {
+  const found = getPartNumberKey(row.extracted_part_number);
+  if (!found) return row.id || "";
+  return [
+    found,
+    getPartNumberKey(row.suggested_current_part_number),
+    normalizeSearch(row.source_file),
+    String(row.page || "")
+  ].join("|");
+}
+
+function deduplicatePartsDatabase() {
+  const removedIds = { master: [], aliases: [], usage: [], reviews: [], history: [] };
+  const changedRows = { master: [], aliases: [], usage: [], reviews: [], history: [] };
+  const definitions = {
+    master: row => getPartNumberKey(row.current_part_number),
+    aliases: row => getPartNumberKey(row.old_part_number),
+    usage: row => getUsageLocationKey(row),
+    reviews: row => getReviewDuplicateKey(row),
+    history: row => row.id || ""
+  };
+
+  Object.entries(definitions).forEach(([tab, getKey]) => {
+    const merged = new Map();
+    const unkeyed = [];
+    partsState[tab].forEach(row => {
+      const key = getKey(row);
+      if (!key) {
+        unkeyed.push(row);
+        return;
+      }
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, row);
+        return;
+      }
+      const combined = mergeDuplicatePartRows(existing, row, tab);
+      Object.assign(existing, combined);
+      if (row.id && row.id !== existing.id) removedIds[tab].push(row.id);
+      if (!changedRows[tab].includes(existing)) changedRows[tab].push(existing);
+    });
+    partsState[tab] = [...merged.values(), ...unkeyed];
+  });
+
+  return {
+    removedIds,
+    changedRows,
+    removedCount: Object.values(removedIds).reduce((sum, ids) => sum + ids.length, 0),
+    changedCount: Object.values(changedRows).reduce((sum, rows) => sum + rows.length, 0)
+  };
+}
+
+function mergeDuplicatePartRows(existing, incoming, tab) {
+  const table = PARTS_TABLES[tab];
+  const merged = mergeSupabaseRow(existing, incoming, table);
+  merged.id = existing.id;
+  if (tab === "aliases") {
+    merged.current_part_number = incoming.current_part_number || existing.current_part_number || "";
+    merged.part_id = incoming.part_id || existing.part_id || null;
+  }
+  if (tab === "reviews") {
+    merged.extracted_description = mergePartDescriptions(existing.extracted_description, incoming.extracted_description);
+    merged.suggested_description = mergePartDescriptions(existing.suggested_description, incoming.suggested_description);
+    merged.source_file = mergeFileNameLabels(existing.source_file, incoming.source_file);
+    const statusPriority = { accepted: 3, ignored: 2, needs_review: 1 };
+    merged.status = (statusPriority[incoming.status] || 0) > (statusPriority[existing.status] || 0)
+      ? incoming.status
+      : existing.status;
+  }
+  return merged;
+}
+
+async function persistPartsDuplicateCleanup(cleanup) {
+  if (!hasSupabaseParts() || !cleanup) return false;
+  let synced = true;
+  for (const tab of Object.keys(cleanup.removedIds)) {
+    for (const id of cleanup.removedIds[tab]) {
+      if (!await deleteSupabaseRow(PARTS_TABLES[tab], id)) synced = false;
+    }
+    if (cleanup.changedRows[tab].length) {
+      if (!await upsertSupabaseRows(PARTS_TABLES[tab], cleanup.changedRows[tab])) synced = false;
+    }
+  }
+  return synced;
 }
 
 async function updatePartsSharedStorageUsage() {
@@ -2658,6 +3093,8 @@ function getUsageLocationKey(row) {
 async function persistPartsChanges(changed) {
   if (!hasSupabaseParts()) {
     addPartsImportLog("Shared save skipped because the Parts Library is not connected to a logged-in Supabase session.");
+    queueFailedPartsChanges(changed);
+    setPartsSaveState("local");
     return false;
   }
 
@@ -2672,6 +3109,7 @@ async function persistPartsChanges(changed) {
   let synced = true;
   let savedRows = 0;
 
+  setPartsSaveState("saving");
   setPartsStatus(`Saving ${totalRows} record${totalRows === 1 ? "" : "s"} to the shared Parts Library...`);
   addPartsImportLog(`Saving ${totalRows} record${totalRows === 1 ? "" : "s"} to Supabase.`);
 
@@ -2698,8 +3136,14 @@ async function persistPartsChanges(changed) {
   }
 
   if (synced && hasSupabaseParts()) {
+    removeQueuedPartsChanges(changed);
+    const pending = getPartsRetryQueueSize() > 0;
+    saveLocalPartsDatabase("shared", { pendingSync: pending, preserveSaveState: true });
+    setPartsSaveState(pending ? "failed" : "shared");
     setPartsStatus(`Saved ${savedRows} record${savedRows === 1 ? "" : "s"} to the shared Parts Library.`);
     addPartsImportLog("Saved to shared Parts Library.");
+  } else {
+    queueFailedPartsChanges(changed);
   }
   return synced;
 }
@@ -3232,7 +3676,7 @@ function getPartsReviewActionCounts() {
   return {
     current: getUniqueCurrentPartsCount(),
     old: getUniqueOldPartNumbersCount(),
-    reviews: partsState.reviews.filter(row => !["accepted", "ignored"].includes(row.status)).length
+    reviews: getUniqueOpenReviewCount()
   };
 }
 
@@ -3391,6 +3835,7 @@ function isMultilineEditField(key) {
 function closePartsEditModal() {
   document.getElementById("partsEditModal")?.classList.add("hidden");
   partsState.editTarget = null;
+  initializePartsSaveIndicator();
 }
 
 async function savePartsEditModal() {
