@@ -1043,12 +1043,15 @@ function renderPartsSortOptions() {
   const select = document.getElementById("partsSortSelect");
   if (!select) return;
   const config = getPartsTableConfig(partsState.activeTab);
-  const options = config.columns
+  const columnOptions = config.columns
     .filter(col => !col.badge && !col.check)
     .flatMap(col => [
       { value: `${col.key}:asc`, label: `${col.label} A-Z` },
       { value: `${col.key}:desc`, label: `${col.label} Z-A` }
     ]);
+  const options = partsState.activeTab === "reviews"
+    ? [{ value: "review_confidence:desc", label: "Highest Match Confidence First" }, ...columnOptions]
+    : columnOptions;
   const current = `${partsState.sort.key}:${partsState.sort.direction}`;
 
   select.innerHTML = options
@@ -1187,6 +1190,7 @@ function renderActivePartsListHeading() {
   const count = getVisiblePartsCount(partsState.activeTab, rows);
   setText("partsActiveListTitle", config.title);
   setText("partsActiveListSummary", `${count} ${config.emptyLabel} shown. Use the filters above to narrow this list.`);
+  document.getElementById("partsReviewExplanation")?.classList.toggle("hidden", partsState.activeTab !== "reviews");
 }
 
 function getVisiblePartsCount(tab, rows) {
@@ -1318,9 +1322,13 @@ function renderPartsTableRow(row, config, isSelected) {
 
 function formatPartsCell(row, col) {
   const value = row[col.key];
-  if (col.badge) return `<span class="parts-badge ${getBadgeClass(value)}">${escapeHTML(formatValue(value))}</span>`;
+  const hasValue = value !== null && value !== undefined && String(value).trim() !== "";
+  const displayValue = hasValue
+    ? (col.valueLabels?.[value] || formatValue(value))
+    : (col.emptyLabel || "");
+  if (col.badge) return `<span class="parts-badge ${getBadgeClass(value)}">${escapeHTML(displayValue)}</span>`;
   if (col.check) return value ? `<span class="parts-badge needs-review">Needs Review</span>` : "";
-  return `<span class="parts-cell-lines">${escapeHTML(formatValue(value))}</span>`;
+  return `<span class="parts-cell-lines${hasValue ? "" : " parts-cell-empty"}">${escapeHTML(displayValue)}</span>`;
 }
 
 function getSelectedPartsSet(tab = partsState.activeTab) {
@@ -1422,43 +1430,45 @@ function getPartsTableConfig(tab) {
       title: "Items to Check",
       emptyLabel: "items to check",
       columns: [
-        { key: "extracted_part_number", label: "Extracted Part Number" },
-        { key: "extracted_description", label: "Extracted Description" },
-        { key: "suggested_current_part_number", label: "Suggested Current Part Number" },
-        { key: "suggested_description", label: "Suggested Description" },
-        { key: "match_type", label: "Match Type", badge: true },
-        { key: "confidence", label: "Confidence" },
-        { key: "source_file", label: "File Name(s)" },
-        { key: "page", label: "Page" },
-        { key: "status", label: "Status", badge: true }
+        { key: "extracted_part_number", label: "Found Part Number" },
+        { key: "extracted_description", label: "Found Description" },
+        { key: "source_file", label: "Source File" },
+        { key: "page", label: "Source Page", emptyLabel: "Not provided by source" },
+        { key: "suggested_current_part_number", label: "Suggested Current Number", emptyLabel: "No suggested match" },
+        { key: "suggested_description", label: "Suggested Current Description", emptyLabel: "No suggested description" },
+        { key: "confidence", label: "Match Confidence" },
+        {
+          key: "match_type",
+          label: "Review Type",
+          badge: true,
+          valueLabels: {
+            new_part: "Proposed New Part",
+            suggested: "Suggested Match",
+            conflict: "Conflicting Match",
+            exact: "Exact Match"
+          }
+        }
       ],
       actions: row => {
         const isResolved = ["accepted", "ignored"].includes(row.status);
         if (isResolved) return actionButtons(row);
 
         const id = escapeAttr(row.id);
-        const primaryAction = row.suggested_current_part_number
-          ? `<button class="parts-action-button review-primary-action" data-action="accept-review" data-id="${id}">Approve Match</button>`
-          : `<button class="parts-action-button review-primary-action" data-action="new-review" data-id="${id}">Add New Part</button>`;
-        const addNewAction = row.suggested_current_part_number
-          ? `<button class="review-menu-action" data-action="new-review" data-id="${id}"><strong>Add as New Part</strong><span>Keep the extracted part number</span></button>`
-          : "";
+        const extractedNumber = escapeHTML(row.extracted_part_number || "extracted number");
+        const suggestedNumber = escapeHTML(row.suggested_current_part_number || "suggested part");
+        const addNewAction = `<button class="secondary parts-action-button review-list-action" data-action="new-review" data-id="${id}"><strong>Create New Part</strong><span>Add ${extractedNumber} to Current Parts</span></button>`;
         const aliasAction = row.suggested_current_part_number
-          ? `<button class="review-menu-action" data-action="alias-review" data-id="${id}"><strong>Save as Old Number</strong><span>Link it to the suggested part</span></button>`
-          : "";
+          ? `<button class="secondary parts-action-button review-list-action" data-action="alias-review" data-id="${id}"><strong>Save Suggested Number</strong><span>Use ${suggestedNumber}; keep ${extractedNumber} as its old number</span></button>`
+          : `<button class="secondary parts-action-button review-list-action review-action-disabled" type="button" disabled><strong>Save Suggested Number</strong><span>Add a suggestion in Edit first</span></button>`;
 
         return [`
           <div class="review-action-group">
-            ${primaryAction}
-            <details class="review-more-actions">
-              <summary>More actions</summary>
-              <div class="review-action-menu">
-                ${addNewAction}
-                ${aliasAction}
-                <button class="review-menu-action" data-action="edit:reviews" data-id="${id}"><strong>Edit Details</strong><span>Correct the numbers or descriptions</span></button>
-                <button class="review-menu-action review-dismiss-action" data-action="ignore-review" data-id="${id}"><strong>Dismiss Item</strong><span>Mark it as not needed</span></button>
-              </div>
-            </details>
+            <div class="review-action-menu">
+              ${addNewAction}
+              ${aliasAction}
+              <button class="secondary parts-action-button review-list-action" data-action="edit:reviews" data-id="${id}"><strong>Edit</strong><span>Correct found or suggested details</span></button>
+              <button class="delete-btn parts-action-button review-list-action review-dismiss-action" data-action="ignore-review" data-id="${id}"><strong>Dismiss</strong><span>Do not add or map this item</span></button>
+            </div>
           </div>
         `];
       }
@@ -1488,6 +1498,7 @@ function getFilteredRows(tab) {
   const source = document.getElementById("partsSourceFilter")?.value || "";
 
   return (partsState[tab] || []).filter(row => {
+    if (tab === "reviews" && ["accepted", "ignored"].includes(row.status)) return false;
     const haystack = normalizeSearch(Object.values(row).join(" "));
     if (query && !haystack.includes(query)) return false;
     if (source && !rowMatchesFileName(row, source)) return false;
@@ -1521,7 +1532,7 @@ function getDefaultPartsSort(tab) {
     master: "current_part_number",
     aliases: "old_part_number",
     usage: "pdf_file_name",
-    reviews: "status",
+    reviews: "review_confidence",
     history: "created_at"
   };
   return { key: keys[tab] || "current_part_number", direction: tab === "history" ? "desc" : "asc" };
@@ -1529,11 +1540,40 @@ function getDefaultPartsSort(tab) {
 
 function sortRows(rows, sort) {
   return [...rows].sort((a, b) => {
+    if (sort.key === "review_confidence") {
+      const confidenceResult = getReviewConfidenceScore(b) - getReviewConfidenceScore(a);
+      if (confidenceResult !== 0) return confidenceResult;
+      const priorityResult = getReviewSortPriority(a) - getReviewSortPriority(b);
+      if (priorityResult !== 0) return priorityResult;
+      const numberResult = String(a.extracted_part_number || "").localeCompare(
+        String(b.extracted_part_number || ""),
+        undefined,
+        { numeric: true, sensitivity: "base" }
+      );
+      if (numberResult !== 0) return numberResult;
+      return String(a.source_file || "").localeCompare(String(b.source_file || ""), undefined, {
+        numeric: true,
+        sensitivity: "base"
+      });
+    }
     const av = a[sort.key] ?? "";
     const bv = b[sort.key] ?? "";
     const result = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
     return sort.direction === "asc" ? result : -result;
   });
+}
+
+function getReviewSortPriority(row) {
+  if (row?.suggested_current_part_number || row?.match_type === "suggested") return 0;
+  if (row?.match_type === "conflict") return 1;
+  return 2;
+}
+
+function getReviewConfidenceScore(row) {
+  const value = row?.confidence;
+  if (typeof value === "number") return value <= 1 ? value * 100 : value;
+  const parsed = Number.parseFloat(String(value ?? "").replace("%", ""));
+  return Number.isFinite(parsed) ? parsed : -1;
 }
 
 function getSortMarker(key) {
@@ -2750,20 +2790,25 @@ function getDeletePlanParts(plan) {
 async function handleReviewAction(action, id) {
   const review = partsState.reviews.find(row => row.id === id);
   if (!review) return;
+  let approvedPart = null;
+  let changedUsage = [];
   if (action === "ignore-review") {
     review.status = "ignored";
     review.updated_at = nowISO();
     await persistPartsChanges({ master: [], aliases: [], usage: [], reviews: [review], history: [] });
   } else if (action === "accept-review" || action === "new-review") {
     const partNumber = action === "accept-review" ? review.suggested_current_part_number : review.extracted_part_number;
-    if (!findMasterPartByNumber(partNumber)) {
+    approvedPart = findMasterPartByNumber(partNumber);
+    if (!approvedPart) {
       const part = createPartFromReview(review, partNumber);
       partsState.master.unshift(part);
       await persistPartsChanges({ master: [part], aliases: [], usage: [], reviews: [], history: [] });
+      approvedPart = part;
     }
+    changedUsage = linkReviewUsageToPart(review, approvedPart);
     review.status = "accepted";
     review.updated_at = nowISO();
-    await persistPartsChanges({ master: [], aliases: [], usage: [], reviews: [review], history: [] });
+    await persistPartsChanges({ master: [], aliases: [], usage: changedUsage, reviews: [review], history: [] });
   } else if (action === "alias-review") {
     const part = findMasterPartByNumber(review.suggested_current_part_number);
     if (!part) {
@@ -2783,12 +2828,33 @@ async function handleReviewAction(action, id) {
       updated_at: nowISO()
     };
     partsState.aliases.unshift(alias);
+    changedUsage = linkReviewUsageToPart(review, part);
     review.status = "accepted";
     review.updated_at = nowISO();
-    await persistPartsChanges({ master: [], aliases: [alias], usage: [], reviews: [review], history: [] });
+    await persistPartsChanges({ master: [], aliases: [alias], usage: changedUsage, reviews: [review], history: [] });
   }
   saveLocalPartsDatabase();
   renderPartsDatabase();
+}
+
+function linkReviewUsageToPart(review, part) {
+  if (!review || !part) return [];
+  const extractedKey = getPartNumberKey(review.extracted_part_number);
+  const sourceKey = normalizeSearch(review.source_file);
+  const reviewPage = String(review.page ?? "").trim();
+
+  return partsState.usage.filter(row => {
+    const sameExtractedNumber = getPartNumberKey(row.extracted_part_number) === extractedKey;
+    const sameSource = normalizeSearch(row.pdf_file_name) === sourceKey;
+    const samePage = String(row.pdf_page_number ?? "").trim() === reviewPage;
+    if (!sameExtractedNumber || !sameSource || !samePage) return false;
+
+    row.part_id = part.id;
+    row.current_part_number = part.current_part_number;
+    row.description = part.description || row.description;
+    row.updated_at = nowISO();
+    return true;
+  });
 }
 
 function createPartFromReview(review, partNumber) {
@@ -2952,6 +3018,10 @@ async function exportPartsDatabase() {
 }
 
 function filterForExport(tab) {
+  if (tab === "reviews") {
+    const unresolved = (partsState.reviews || []).filter(row => !["accepted", "ignored"].includes(row.status));
+    if (tab !== partsState.activeTab) return unresolved;
+  }
   return tab === partsState.activeTab ? getFilteredRows(tab) : partsState[tab];
 }
 
@@ -2968,6 +3038,12 @@ function getSortedExportRows(tab) {
   const keys = PARTS_EXPORT_SORT_KEYS[tab] || [];
 
   return [...rows].sort((a, b) => {
+    if (tab === "reviews") {
+      const confidenceResult = getReviewConfidenceScore(b) - getReviewConfidenceScore(a);
+      if (confidenceResult !== 0) return confidenceResult;
+      const priorityResult = getReviewSortPriority(a) - getReviewSortPriority(b);
+      if (priorityResult !== 0) return priorityResult;
+    }
     for (const key of keys) {
       const av = String(a?.[key] ?? "").trim();
       const bv = String(b?.[key] ?? "").trim();

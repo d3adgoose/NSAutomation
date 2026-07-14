@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Parts Library</title>
 
-  <link rel="stylesheet" href="style.css?v=20260714-review-actions" />
+  <link rel="stylesheet" href="style.css?v=20260714-review-guidance" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -95,6 +95,7 @@
             <li><strong>Select rows:</strong> use the checkboxes beside each row, or use Select All above the table when you want the full visible list.</li>
             <li><strong>Find records:</strong> search by part number, description, drawing, or file name, then sort the visible list with the Sort dropdown.</li>
             <li><strong>Track usage:</strong> Current Parts stores the part list, Old Part Numbers stores prior numbers, and Drawing Usage shows where parts were found.</li>
+            <li><strong>Review Items to Check:</strong> Found values are read from the imported file. Suggested Current values are the closest existing Current Part the library found. Higher confidence means a stronger suggested match. Create a new part when the found number is truly new, or save the suggested number when the found number should become an old-number reference to that current part.</li>
             <li><strong>Same number, different wording:</strong> the library keeps one part row, adds each new file name on its own line, and saves each description on its own line so either wording can be searched.</li>
             <li><strong>Export:</strong> download the library to Excel when you need a backup or want to review the list outside the website.</li>
           </ol>
@@ -151,6 +152,10 @@
         <div>
           <h2>Part List</h2>
           <p id="partsActiveListSummary" class="card-intro">Search, filter, edit, and export the records saved in the library.</p>
+          <div id="partsReviewExplanation" class="parts-review-explanation hidden">
+            <strong>How suggestions work:</strong>
+            <span><b>Found</b> is what was read from the imported file. <b>Suggested Current</b> is the closest existing part found in Current Parts. Match Confidence shows how closely the number and description appear to match.</span>
+          </div>
         </div>
         <div class="button-row parts-db-actions">
           <button id="partsAddManualButton">Add Part</button>
@@ -277,6 +282,6 @@
   <script src="supabaseClient.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="partsLibrary.js?v=20260714-review-actions"></script>
+  <script src="partsLibrary.js?v=20260714-action-subheaders"></script>
 </body>
 </html>
