@@ -96,6 +96,7 @@
             <li><strong>Find records:</strong> search by part number, description, drawing, or file name, then sort the visible list with the Sort dropdown.</li>
             <li><strong>Track usage:</strong> Current Parts stores the part list, Old Part Numbers stores prior numbers, and Drawing Usage shows where parts were found.</li>
             <li><strong>Review Items to Check:</strong> Found values are read from the imported file. Suggested Current values are the closest existing Current Part the library found. Higher confidence means a stronger suggested match. Create a new part when the found number is truly new, or save the suggested number when the found number should become an old-number reference to that current part.</li>
+            <li><strong>Seven-digit numbers:</strong> numeric part numbers containing exactly seven digits are always treated as old part numbers. They must be linked to a suggested/current part number and cannot be created in Current Parts.</li>
             <li><strong>Same number, different wording:</strong> the library keeps one part row, adds each new file name on its own line, and saves each description on its own line so either wording can be searched.</li>
             <li><strong>Export:</strong> download the library to Excel when you need a backup or want to review the list outside the website.</li>
           </ol>
@@ -161,6 +162,8 @@
           <button id="partsAddManualButton">Add Part</button>
           <button id="partsSyncLocalButton" type="button">Save Library</button>
           <button id="partsExportButton">Export Library</button>
+          <button class="secondary" id="partsUndoButton" type="button" disabled>Undo</button>
+          <button class="secondary" id="partsRedoButton" type="button" disabled>Redo</button>
           <button class="secondary" id="partsClearFiltersButton">Clear Filters</button>
         </div>
       </div>
@@ -260,6 +263,15 @@
   <div id="partsEditModal" class="modal hidden">
     <div class="modal-content app-prompt-modal-content">
       <h2 id="partsEditTitle">Edit Part</h2>
+      <label class="parts-edit-destination">
+        <span>Save Record In</span>
+        <select id="partsEditDestination">
+          <option value="master">Current Parts (8 digits)</option>
+          <option value="aliases">Old Part Numbers (7 digits)</option>
+          <option value="usage">Drawing Usage</option>
+          <option value="reviews">Items to Check</option>
+        </select>
+      </label>
       <div id="partsEditFields" class="parts-edit-fields"></div>
       <div class="button-row">
         <button id="partsEditSaveButton">Save</button>
@@ -282,6 +294,6 @@
   <script src="supabaseClient.js"></script>
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="partsLibrary.js?v=20260714-action-subheaders"></script>
+  <script src="partsLibrary.js?v=20260714-auto-resolve-repeats"></script>
 </body>
 </html>

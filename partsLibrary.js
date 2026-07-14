@@ -15,6 +15,9 @@ let partsLoginRequired = true;
 let partsStorageUsageCheckedAt = 0;
 let partsStorageUsageChecking = false;
 let partsMessageResolver = null;
+const partsUndoStack = [];
+const partsRedoStack = [];
+const PARTS_HISTORY_LIMIT = 20;
 
 let partsState = {
   master: [],
@@ -42,7 +45,77 @@ async function initPartsDatabase() {
   registerPartsGhostAutocompleteSource();
   await checkPartsLogin();
   await loadPartsDatabase();
+  const reopenedReviews = reconcilePreviouslyAcceptedReviews();
+  const autoResolved = autoResolveReviewsFromSavedNumbers();
   renderPartsDatabase();
+  const reconciledReviews = [...new Map(
+    [...reopenedReviews, ...autoResolved.reviews].map(row => [row.id, row])
+  ).values()];
+  if (reconciledReviews.length || autoResolved.usage.length) {
+    saveLocalPartsDatabase();
+    await persistPartsChanges({ master: [], aliases: [], usage: autoResolved.usage, reviews: reconciledReviews, history: [] });
+    const messages = [];
+    if (reopenedReviews.length) messages.push(`${reopenedReviews.length} incomplete prior review${reopenedReviews.length === 1 ? " was" : "s were"} returned to Items to Check`);
+    if (autoResolved.reviews.length) messages.push(`${autoResolved.reviews.length} repeated review${autoResolved.reviews.length === 1 ? " was" : "s were"} resolved from saved part-number decisions`);
+    setPartsStatus(`${messages.join("; ")}.`);
+    renderPartsDatabase();
+  }
+}
+
+function reconcilePreviouslyAcceptedReviews() {
+  const reopened = [];
+  const updatedAt = nowISO();
+
+  partsState.reviews.forEach(review => {
+    if (review.status !== "accepted") return;
+    const extractedKey = getPartNumberKey(review.extracted_part_number);
+    const suggestedKey = getPartNumberKey(review.suggested_current_part_number);
+    const hasExtractedCurrentPart = partsState.master.some(part =>
+      getPartNumberKey(part.current_part_number) === extractedKey
+    );
+    const hasSavedOldNumber = partsState.aliases.some(alias =>
+      getPartNumberKey(alias.old_part_number) === extractedKey &&
+      (!suggestedKey || getPartNumberKey(alias.current_part_number) === suggestedKey)
+    );
+    const isSameNumberSuggestion = extractedKey && suggestedKey && extractedKey === suggestedKey &&
+      partsState.master.some(part => getPartNumberKey(part.current_part_number) === suggestedKey);
+
+    const hasAllowedExtractedCurrentPart = hasExtractedCurrentPart && !isOldPartNumberCandidate(review.extracted_part_number);
+    if (hasAllowedExtractedCurrentPart || hasSavedOldNumber || isSameNumberSuggestion) return;
+    review.status = "needs_review";
+    review.updated_at = updatedAt;
+    reopened.push(review);
+  });
+
+  return reopened;
+}
+
+function autoResolveReviewsFromSavedNumbers() {
+  const resolvedReviews = [];
+  const changedUsage = new Map();
+  const updatedAt = nowISO();
+
+  partsState.reviews.forEach(review => {
+    if (["accepted", "ignored"].includes(review.status)) return;
+    const extractedKey = getPartNumberKey(review.extracted_part_number);
+    if (!extractedKey) return;
+
+    let part = partsState.master.find(row => getPartNumberKey(row.current_part_number) === extractedKey) || null;
+    if (!part) {
+      const alias = partsState.aliases.find(row =>
+        getPartNumberKey(row.old_part_number) === extractedKey
+      );
+      if (alias?.current_part_number) part = findMasterPartByNumber(alias.current_part_number);
+    }
+    if (!part) return;
+
+    review.status = "accepted";
+    review.updated_at = updatedAt;
+    resolvedReviews.push(review);
+    linkReviewUsageToPart(review, part).forEach(row => changedUsage.set(row.id, row));
+  });
+
+  return { reviews: resolvedReviews, usage: [...changedUsage.values()] };
 }
 
 function bindPartsDatabaseEvents() {
@@ -62,6 +135,8 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsExportButton")?.addEventListener("click", () => {
     if (ensurePartsUnlocked()) exportPartsDatabase();
   });
+  document.getElementById("partsUndoButton")?.addEventListener("click", undoPartsAction);
+  document.getElementById("partsRedoButton")?.addEventListener("click", redoPartsAction);
   document.getElementById("partsAddManualButton")?.addEventListener("click", () => {
     if (ensurePartsUnlocked()) openPartsEditModal("master");
   });
@@ -83,6 +158,7 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsSelectAllButton")?.addEventListener("click", togglePreviewSelection);
   document.getElementById("partsEditCloseButton")?.addEventListener("click", closePartsEditModal);
   document.getElementById("partsEditSaveButton")?.addEventListener("click", savePartsEditModal);
+  document.getElementById("partsEditDestination")?.addEventListener("change", event => changePartsEditDestination(event.target.value));
   document.getElementById("partsSelectVisibleButton")?.addEventListener("click", toggleVisiblePartsSelection);
   document.getElementById("partsDeleteSelectedButton")?.addEventListener("click", deleteSelectedPartsRecords);
   document.getElementById("partsMessageCancelButton")?.addEventListener("click", () => closePartsMessage(false));
@@ -1005,6 +1081,7 @@ function renderPartsDatabase() {
   renderActivePartsTable();
   renderActivePartsListHeading();
   updatePartsBulkActions();
+  updatePartsUndoRedoControls();
 }
 
 function renderPartsTabs() {
@@ -1456,7 +1533,10 @@ function getPartsTableConfig(tab) {
         const id = escapeAttr(row.id);
         const extractedNumber = escapeHTML(row.extracted_part_number || "extracted number");
         const suggestedNumber = escapeHTML(row.suggested_current_part_number || "suggested part");
-        const addNewAction = `<button class="secondary parts-action-button review-list-action" data-action="new-review" data-id="${id}"><strong>Create New Part</strong><span>Add ${extractedNumber} to Current Parts</span></button>`;
+        const isSevenDigitOldNumber = isOldPartNumberCandidate(row.extracted_part_number);
+        const addNewAction = isSevenDigitOldNumber
+          ? `<button class="secondary parts-action-button review-list-action review-action-disabled" type="button" disabled><strong>Old Number Only</strong><span>Seven-digit numbers cannot be Current Parts</span></button>`
+          : `<button class="secondary parts-action-button review-list-action" data-action="new-review" data-id="${id}"><strong>Create New Part</strong><span>Add ${extractedNumber} to Current Parts</span></button>`;
         const aliasAction = row.suggested_current_part_number
           ? `<button class="secondary parts-action-button review-list-action" data-action="alias-review" data-id="${id}"><strong>Save Suggested Number</strong><span>Use ${suggestedNumber}; keep ${extractedNumber} as its old number</span></button>`
           : `<button class="secondary parts-action-button review-list-action review-action-disabled" type="button" disabled><strong>Save Suggested Number</strong><span>Add a suggestion in Edit first</span></button>`;
@@ -1945,7 +2025,14 @@ function findPartMatch(partNumber, description) {
   const oldMatch = partsState.aliases.find(alias => getPartNumberKey(alias.old_part_number) === compactPart && compactPart);
   if (oldMatch) {
     const part = findMasterPartByNumber(oldMatch.current_part_number);
-    return buildMatch("old_number", part || oldMatch, 1, `Old number matches current part ${oldMatch.current_part_number}.`);
+    if (part) return buildMatch("old_number", part, 1, `Old number matches current part ${oldMatch.current_part_number}.`);
+    return {
+      type: "old_number_unlinked",
+      confidence: 1,
+      reason: `Known old part number ${oldMatch.old_part_number}; a current replacement has not been assigned yet.`,
+      currentPartNumber: "",
+      description: oldMatch.description || ""
+    };
   }
 
   const normalizedMatch = partsState.master.find(part => getPartNumberKey(part.current_part_number) === compactPart && compactPart);
@@ -1954,7 +2041,34 @@ function findPartMatch(partNumber, description) {
   const descriptionMatch = partsState.master.find(part => getDescriptionKeys(part.description).includes(normalizedDescription) && normalizedDescription);
   if (descriptionMatch) return buildMatch("description_match", descriptionMatch, 1, `Description already exists under current part ${descriptionMatch.current_part_number}.`);
 
+  const oldDescriptionMatch = partsState.aliases.find(alias =>
+    getDescriptionKeys(alias.description).includes(normalizedDescription) && normalizedDescription
+  );
+  if (oldDescriptionMatch) {
+    const linkedPart = findMasterPartByNumber(oldDescriptionMatch.current_part_number);
+    if (linkedPart) return buildMatch("old_description_match", linkedPart, 1, `Description matches old part number ${oldDescriptionMatch.old_part_number}, linked to current part ${linkedPart.current_part_number}.`);
+    return {
+      type: "old_description_unlinked",
+      confidence: 1,
+      reason: `Description matches known old part number ${oldDescriptionMatch.old_part_number}; its current replacement is not assigned.`,
+      currentPartNumber: "",
+      description: oldDescriptionMatch.description || ""
+    };
+  }
+
   const fuzzy = findFuzzyDescriptionMatch(normalizedDescription);
+  const fuzzyOld = findFuzzyOldDescriptionMatch(normalizedDescription);
+  if (fuzzyOld && (!fuzzy || fuzzyOld.score > fuzzy.score)) {
+    const linkedPart = findMasterPartByNumber(fuzzyOld.alias.current_part_number);
+    if (linkedPart) return buildMatch("suggested", linkedPart, fuzzyOld.score, `Description looks similar to old part ${fuzzyOld.alias.old_part_number}, linked to current part ${linkedPart.current_part_number}.`);
+    return {
+      type: "old_description_unlinked",
+      confidence: fuzzyOld.score,
+      reason: `Description looks similar to known old part ${fuzzyOld.alias.old_part_number}; its current replacement is not assigned.`,
+      currentPartNumber: "",
+      description: fuzzyOld.alias.description || ""
+    };
+  }
   if (fuzzy) return buildMatch("suggested", fuzzy.part, fuzzy.score, `Description looks similar to current part ${fuzzy.part.current_part_number}: "${fuzzy.part.description || "blank"}".`);
 
   return { type: "new_part", confidence: 0, reason: "No existing match found", currentPartNumber: "", description: "" };
@@ -1982,10 +2096,23 @@ function findFuzzyDescriptionMatch(normalizedDescription) {
   return best;
 }
 
+function findFuzzyOldDescriptionMatch(normalizedDescription) {
+  if (!normalizedDescription) return null;
+  let best = null;
+  partsState.aliases.forEach(alias => {
+    getDescriptionKeys(alias.description).forEach(candidate => {
+      const score = diceCoefficient(normalizedDescription, candidate);
+      if (score >= DESCRIPTION_MATCH_THRESHOLD && (!best || score > best.score)) best = { alias, score };
+    });
+  });
+  return best;
+}
+
 function getPreviewStatus(match, source) {
   if (match.type === "conflict") return "conflict";
   if (match.type === "same_number_different_description") return "active";
   if (match.type === "suggested") return "needs_review";
+  if (["old_number_unlinked", "old_description_unlinked"].includes(match.type)) return "needs_review";
   if (match.type === "new_part" && source.old_part_number && !source.current_part_number) return "needs_review";
   return match.type === "new_part" ? "new" : "active";
 }
@@ -2331,6 +2458,36 @@ function applyPreviewRow(row, importId, changed) {
     }
   }
 
+  if (source.old_part_number && !part) {
+    const oldKey = getPartNumberKey(source.old_part_number);
+    let alias = partsState.aliases.find(item => getPartNumberKey(item.old_part_number) === oldKey);
+    if (alias) {
+      const nextSource = mergeFileNameLabels(alias.source, row.file_name || source.source || partsState.previewFileName || partsState.previewType);
+      const nextDescription = mergePartDescriptions(alias.description, row.description);
+      if (nextSource !== alias.source || nextDescription !== alias.description) {
+        alias.source = nextSource;
+        alias.description = nextDescription;
+        alias.updated_at = now;
+        changed.aliases.push(alias);
+      }
+    } else {
+      alias = {
+        id: makeId("alias"),
+        part_id: null,
+        old_part_number: source.old_part_number,
+        current_part_number: "",
+        description: row.description,
+        match_type: "unlinked_old_number",
+        source: row.file_name || source.source || partsState.previewFileName || partsState.previewType,
+        notes: "Current replacement not assigned yet.",
+        created_at: now,
+        updated_at: now
+      };
+      partsState.aliases.unshift(alias);
+      changed.aliases.push(alias);
+    }
+  }
+
   if (partsState.previewType === "drawing_pdf") {
     const usageKey = getUsageLocationKey({
       current_part_number: part?.current_part_number || row.suggested_current_part_number || "",
@@ -2535,7 +2692,9 @@ async function deletePartsRecord(tab, id) {
     }
   );
   if (!confirmed) return;
+  const historyEntry = capturePartsDeleteHistory(deletePlan, "Delete record");
   await applyPartsDeletePlan(deletePlan);
+  recordPartsDeleteHistory(historyEntry);
   setPartsStatus(getDeletePlanStatus(deletePlan));
   renderPartsDatabase();
 }
@@ -2559,7 +2718,9 @@ async function deleteSelectedPartsRecords() {
   );
   if (!confirmed) return;
 
+  const historyEntry = capturePartsDeleteHistory(deletePlan, `Delete ${ids.length} selected records`);
   await applyPartsDeletePlan(deletePlan);
+  recordPartsDeleteHistory(historyEntry);
   setPartsStatus(getDeletePlanStatus(deletePlan));
   renderPartsDatabase();
 }
@@ -2582,6 +2743,92 @@ function buildPartsDeletePlan(tab, ids) {
 
   ids.forEach(id => addRecordToDeletePlan(plan, tab, id));
   return plan;
+}
+
+function clonePartsHistoryRow(row) {
+  return row ? JSON.parse(JSON.stringify(row)) : row;
+}
+
+function capturePartsDeleteHistory(plan, label) {
+  const deletedRows = {};
+  const previousRows = {};
+
+  Object.entries(plan.deleteIds).forEach(([tab, ids]) => {
+    deletedRows[tab] = [...ids]
+      .map(id => partsState[tab]?.find(row => row.id === id))
+      .filter(Boolean)
+      .map(clonePartsHistoryRow);
+  });
+
+  Object.entries(plan.updateRows).forEach(([tab, rows]) => {
+    previousRows[tab] = [...rows.keys()]
+      .map(id => partsState[tab]?.find(row => row.id === id))
+      .filter(Boolean)
+      .map(clonePartsHistoryRow);
+  });
+
+  return { label, plan, deletedRows, previousRows };
+}
+
+function recordPartsDeleteHistory(entry) {
+  partsUndoStack.push(entry);
+  if (partsUndoStack.length > PARTS_HISTORY_LIMIT) partsUndoStack.shift();
+  partsRedoStack.length = 0;
+  updatePartsUndoRedoControls();
+}
+
+function updatePartsUndoRedoControls() {
+  const undoButton = document.getElementById("partsUndoButton");
+  const redoButton = document.getElementById("partsRedoButton");
+  if (undoButton) {
+    undoButton.disabled = partsUndoStack.length === 0;
+    undoButton.textContent = partsUndoStack.length ? `Undo ${partsUndoStack.at(-1).label}` : "Undo";
+  }
+  if (redoButton) {
+    redoButton.disabled = partsRedoStack.length === 0;
+    redoButton.textContent = partsRedoStack.length ? `Redo ${partsRedoStack.at(-1).label}` : "Redo";
+  }
+}
+
+async function undoPartsAction() {
+  if (!ensurePartsUnlocked() || !partsUndoStack.length) return;
+  const entry = partsUndoStack.pop();
+  const restored = { master: [], aliases: [], usage: [], reviews: [], history: [] };
+
+  Object.entries(entry.deletedRows).forEach(([tab, rows]) => {
+    rows.forEach(savedRow => {
+      const row = clonePartsHistoryRow(savedRow);
+      const index = partsState[tab].findIndex(item => item.id === row.id);
+      if (index >= 0) partsState[tab][index] = row;
+      else partsState[tab].push(row);
+      restored[tab].push(row);
+    });
+  });
+
+  Object.entries(entry.previousRows).forEach(([tab, rows]) => {
+    rows.forEach(savedRow => {
+      const row = clonePartsHistoryRow(savedRow);
+      const index = partsState[tab].findIndex(item => item.id === row.id);
+      if (index >= 0) partsState[tab][index] = row;
+      else partsState[tab].push(row);
+      if (!restored[tab].some(item => item.id === row.id)) restored[tab].push(row);
+    });
+  });
+
+  saveLocalPartsDatabase();
+  await persistPartsChanges(restored);
+  partsRedoStack.push(entry);
+  setPartsStatus(`${entry.label} was undone. Related records were restored.`);
+  renderPartsDatabase();
+}
+
+async function redoPartsAction() {
+  if (!ensurePartsUnlocked() || !partsRedoStack.length) return;
+  const entry = partsRedoStack.pop();
+  await applyPartsDeletePlan(entry.plan);
+  partsUndoStack.push(entry);
+  setPartsStatus(`${entry.label} was redone.`);
+  renderPartsDatabase();
 }
 
 function addRecordToDeletePlan(plan, tab, id) {
@@ -2790,51 +3037,161 @@ function getDeletePlanParts(plan) {
 async function handleReviewAction(action, id) {
   const review = partsState.reviews.find(row => row.id === id);
   if (!review) return;
-  let approvedPart = null;
+  if (action === "new-review" && isOldPartNumberCandidate(review.extracted_part_number)) {
+    setPartsStatus("Seven-digit numbers are old part numbers. Add or choose a suggested current number, then use Save Suggested Number.");
+    openPartsEditModal("reviews", review.id);
+    return;
+  }
+  const countsBefore = getPartsReviewActionCounts();
+  const relatedReviews = getRelatedReviewRows(review, action);
   let changedUsage = [];
+  let savePromise = null;
+  let reusedExistingPart = false;
   if (action === "ignore-review") {
     review.status = "ignored";
     review.updated_at = nowISO();
-    await persistPartsChanges({ master: [], aliases: [], usage: [], reviews: [review], history: [] });
+    savePromise = persistPartsChanges({ master: [], aliases: [], usage: [], reviews: [review], history: [] });
   } else if (action === "accept-review" || action === "new-review") {
     const partNumber = action === "accept-review" ? review.suggested_current_part_number : review.extracted_part_number;
-    approvedPart = findMasterPartByNumber(partNumber);
+    let approvedPart = findMasterPartByNumber(partNumber);
+    reusedExistingPart = !!approvedPart;
+    const changedMaster = [];
     if (!approvedPart) {
       const part = createPartFromReview(review, partNumber);
       partsState.master.unshift(part);
-      await persistPartsChanges({ master: [part], aliases: [], usage: [], reviews: [], history: [] });
       approvedPart = part;
+      changedMaster.push(part);
     }
-    changedUsage = linkReviewUsageToPart(review, approvedPart);
-    review.status = "accepted";
-    review.updated_at = nowISO();
-    await persistPartsChanges({ master: [], aliases: [], usage: changedUsage, reviews: [review], history: [] });
+    changedUsage = linkReviewGroupUsageToPart(relatedReviews, approvedPart);
+    markReviewGroupResolved(relatedReviews, "accepted");
+    savePromise = persistPartsChanges({ master: changedMaster, aliases: [], usage: changedUsage, reviews: relatedReviews, history: [] });
   } else if (action === "alias-review") {
     const part = findMasterPartByNumber(review.suggested_current_part_number);
     if (!part) {
       setPartsStatus("Choose or create the suggested part before adding an old part number.");
       return;
     }
-    const alias = {
-      id: makeId("alias"),
-      part_id: part.id,
-      old_part_number: review.extracted_part_number,
-      current_part_number: part.current_part_number,
-      description: review.extracted_description,
-      match_type: "approved_alias",
-      source: review.source_file,
-      notes: review.reason,
-      created_at: nowISO(),
-      updated_at: nowISO()
-    };
-    partsState.aliases.unshift(alias);
-    changedUsage = linkReviewUsageToPart(review, part);
-    review.status = "accepted";
-    review.updated_at = nowISO();
-    await persistPartsChanges({ master: [], aliases: [alias], usage: changedUsage, reviews: [review], history: [] });
+    const oldKey = getPartNumberKey(review.extracted_part_number);
+    const currentKey = getPartNumberKey(part.current_part_number);
+    let alias = partsState.aliases.find(row =>
+      getPartNumberKey(row.old_part_number) === oldKey &&
+      getPartNumberKey(row.current_part_number) === currentKey
+    );
+    if (alias) {
+      alias.source = mergeFileNameLabels(alias.source, relatedReviews.map(row => row.source_file).join("\n"));
+      alias.updated_at = nowISO();
+    } else {
+      alias = {
+        id: makeId("alias"),
+        part_id: part.id,
+        old_part_number: review.extracted_part_number,
+        current_part_number: part.current_part_number,
+        description: review.extracted_description,
+        match_type: "approved_alias",
+        source: relatedReviews.map(row => row.source_file).filter(Boolean).join("\n"),
+        notes: review.reason,
+        created_at: nowISO(),
+        updated_at: nowISO()
+      };
+      partsState.aliases.unshift(alias);
+    }
+    const incorrectCurrentPartIndex = partsState.master.findIndex(row =>
+      isOldPartNumberCandidate(row.current_part_number) &&
+      getPartNumberKey(row.current_part_number) === oldKey
+    );
+    const incorrectCurrentPart = incorrectCurrentPartIndex >= 0
+      ? partsState.master.splice(incorrectCurrentPartIndex, 1)[0]
+      : null;
+    changedUsage = linkReviewGroupUsageToPart(relatedReviews, part);
+    markReviewGroupResolved(relatedReviews, "accepted");
+    savePromise = (async () => {
+      const saved = await persistPartsChanges({ master: [], aliases: [alias], usage: changedUsage, reviews: relatedReviews, history: [] });
+      if (incorrectCurrentPart && hasSupabaseParts()) {
+        await deleteSupabaseRow(PARTS_TABLES.master, incorrectCurrentPart.id);
+      }
+      return saved;
+    })();
   }
+
+  // Refresh the local counters and lists before waiting for the shared save.
   saveLocalPartsDatabase();
+  renderPartsSummary();
   renderPartsDatabase();
+
+  if (savePromise) {
+    try {
+      await savePromise;
+    } finally {
+      // Re-read the live arrays after shared saving and force every summary display to refresh.
+      renderPartsSummary();
+      renderPartsDatabase();
+    }
+  }
+  const additionallyResolved = autoResolveReviewsFromSavedNumbers();
+  if (additionallyResolved.reviews.length || additionallyResolved.usage.length) {
+    saveLocalPartsDatabase();
+    await persistPartsChanges({
+      master: [],
+      aliases: [],
+      usage: additionallyResolved.usage,
+      reviews: additionallyResolved.reviews,
+      history: []
+    });
+    renderPartsDatabase();
+  }
+  const countsAfter = getPartsReviewActionCounts();
+  const countSummary = formatPartsReviewCountChange(countsBefore, countsAfter);
+  if (relatedReviews.length > 1 && action !== "ignore-review") {
+    setPartsStatus(`Resolved ${relatedReviews.length} matching review rows together. ${countSummary}`);
+  } else if (action === "new-review") {
+    const result = reusedExistingPart
+      ? "That part number already existed, so it was reused without creating a duplicate."
+      : "A new Current Part was created.";
+    setPartsStatus(`${result} ${countSummary}`);
+  } else if (action === "alias-review") {
+    setPartsStatus(`The suggested Current Part was reused and the found number was saved as its old number. ${countSummary}`);
+  }
+}
+
+function getPartsReviewActionCounts() {
+  return {
+    current: getUniqueCurrentPartsCount(),
+    old: getUniqueOldPartNumbersCount(),
+    reviews: partsState.reviews.filter(row => !["accepted", "ignored"].includes(row.status)).length
+  };
+}
+
+function formatPartsReviewCountChange(before, after) {
+  return `Current Parts ${before.current} to ${after.current}; Old Part Numbers ${before.old} to ${after.old}; Items to Check ${before.reviews} to ${after.reviews}.`;
+}
+
+function getRelatedReviewRows(review, action) {
+  if (!review || action === "ignore-review") return review ? [review] : [];
+  const extractedKey = getPartNumberKey(review.extracted_part_number);
+  const suggestedKey = getPartNumberKey(review.suggested_current_part_number);
+
+  return partsState.reviews.filter(row => {
+    if (["accepted", "ignored"].includes(row.status)) return false;
+    if (getPartNumberKey(row.extracted_part_number) !== extractedKey) return false;
+    if (action === "new-review") return true;
+    return getPartNumberKey(row.suggested_current_part_number) === suggestedKey;
+  });
+}
+
+function markReviewGroupResolved(reviews, status) {
+  const updatedAt = nowISO();
+  reviews.forEach(row => {
+    row.status = status;
+    row.updated_at = updatedAt;
+  });
+}
+
+function linkReviewGroupUsageToPart(reviews, part) {
+  const changedById = new Map();
+  reviews.forEach(review => {
+    linkReviewUsageToPart(review, part).forEach(row => changedById.set(row.id, row));
+  });
+  return [...changedById.values()];
 }
 
 function linkReviewUsageToPart(review, part) {
@@ -2881,8 +3238,15 @@ function createPartFromReview(review, partNumber) {
 
 function openPartsEditModal(tab, id = "") {
   const row = id ? (partsState[tab] || []).find(item => item.id === id) : null;
-  partsState.editTarget = { tab, id };
+  partsState.editTarget = { tab, id, originalRow: row ? clonePartsHistoryRow(row) : null };
   setText("partsEditTitle", row ? "Edit Record" : "Add Part");
+  const destination = document.getElementById("partsEditDestination");
+  if (destination) destination.value = tab;
+  renderPartsEditFields(tab, row || {});
+  document.getElementById("partsEditModal")?.classList.remove("hidden");
+}
+
+function renderPartsEditFields(tab, values = {}) {
   const fields = getEditableFields(tab);
   const container = document.getElementById("partsEditFields");
   if (!container) return;
@@ -2890,11 +3254,59 @@ function openPartsEditModal(tab, id = "") {
     <label>
       <span>${escapeHTML(field.label)}</span>
       ${isMultilineEditField(field.key)
-        ? `<textarea data-edit-field="${field.key}" rows="3">${escapeHTML(row?.[field.key] ?? field.defaultValue ?? "")}</textarea>`
-        : `<input data-edit-field="${field.key}" value="${escapeAttr(row?.[field.key] ?? field.defaultValue ?? "")}" />`}
+        ? `<textarea data-edit-field="${field.key}" rows="3">${escapeHTML(values?.[field.key] ?? field.defaultValue ?? "")}</textarea>`
+        : `<input data-edit-field="${field.key}" value="${escapeAttr(values?.[field.key] ?? field.defaultValue ?? "")}" />`}
     </label>
   `).join("");
-  document.getElementById("partsEditModal")?.classList.remove("hidden");
+}
+
+function getCurrentPartsEditValues() {
+  return Object.fromEntries(Array.from(document.querySelectorAll("[data-edit-field]")).map(input => [
+    input.dataset.editField,
+    input.value
+  ]));
+}
+
+function changePartsEditDestination(nextTab) {
+  const target = partsState.editTarget;
+  if (!target) return;
+  const currentValues = getCurrentPartsEditValues();
+  renderPartsEditFields(nextTab, mapPartsEditValues(target.tab, nextTab, { ...(target.originalRow || {}), ...currentValues }));
+}
+
+function mapPartsEditValues(sourceTab, targetTab, row) {
+  if (sourceTab === targetTab) return row;
+  const description = row.description || row.extracted_description || row.suggested_description || "";
+  const source = row.source || row.source_file || row.pdf_file_name || "Manual";
+  const foundNumber = row.current_part_number || row.old_part_number || row.extracted_part_number || "";
+  if (targetTab === "master") return { current_part_number: foundNumber, description, source, record_type: "Part" };
+  if (targetTab === "aliases") return {
+    old_part_number: row.old_part_number || row.extracted_part_number || foundNumber,
+    current_part_number: row.suggested_current_part_number || (sourceTab === "aliases" ? row.current_part_number : ""),
+    description,
+    match_type: "manual",
+    source,
+    notes: row.notes || row.reason || ""
+  };
+  if (targetTab === "usage") return {
+    current_part_number: row.suggested_current_part_number || row.current_part_number || "",
+    description,
+    drawing_number: row.drawing_number || "",
+    item_number: row.item_number || "",
+    quantity: row.quantity || "",
+    pdf_file_name: source,
+    pdf_page_number: row.pdf_page_number || row.page || ""
+  };
+  return {
+    extracted_part_number: row.extracted_part_number || row.old_part_number || foundNumber,
+    extracted_description: description,
+    suggested_current_part_number: row.suggested_current_part_number || (sourceTab === "aliases" ? row.current_part_number : ""),
+    suggested_description: row.suggested_description || "",
+    match_type: row.match_type || "manual_review",
+    source_file: source,
+    page: row.page || row.pdf_page_number || "",
+    status: "needs_review"
+  };
 }
 
 function isMultilineEditField(key) {
@@ -2915,8 +3327,41 @@ async function savePartsEditModal() {
     normalizeEditedPartsValue(input.dataset.editField, input.value)
   ]));
   const now = nowISO();
-  const tab = target.tab;
-  let row = target.id ? partsState[tab].find(item => item.id === target.id) : null;
+  const sourceTab = target.tab;
+  const tab = document.getElementById("partsEditDestination")?.value || sourceTab;
+  const isMove = !!target.id && tab !== sourceTab;
+  let row = !isMove && target.id ? partsState[tab].find(item => item.id === target.id) : null;
+
+  if (tab === "master" && !isCurrentPartNumberCandidate(values.current_part_number)) {
+    await showPartsError(
+      "Current Parts requires an eight-digit numeric part number. Choose Old Part Numbers for seven digits or Items to Check when the role is unclear.",
+      "Current Part Number Required"
+    );
+    return;
+  }
+  if (tab === "aliases" && !isOldPartNumberCandidate(values.old_part_number)) {
+    await showPartsError(
+      "Old Part Numbers requires a seven-digit old number. The current part number may be left blank until the replacement is known.",
+      "Seven-Digit Old Number Required"
+    );
+    return;
+  }
+  if (tab === "aliases" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number)) {
+    await showPartsError("When provided, the linked current part number must contain eight digits.", "Current Part Number Format");
+    return;
+  }
+  if (tab === "usage" && values.current_part_number && !isCurrentPartNumberCandidate(values.current_part_number)) {
+    await showPartsError("Drawing Usage current part numbers must contain eight digits.", "Current Part Number Required");
+    return;
+  }
+
+  if (isMove && tab === "master") row = findMasterPartByNumber(values.current_part_number);
+  if (isMove && tab === "aliases") {
+    row = partsState.aliases.find(item =>
+      getPartNumberKey(item.old_part_number) === getPartNumberKey(values.old_part_number) &&
+      getPartNumberKey(item.current_part_number) === getPartNumberKey(values.current_part_number)
+    );
+  }
 
   if (!row) {
     row = { id: makeId(tab), created_at: now };
@@ -2932,10 +3377,39 @@ async function savePartsEditModal() {
     row.needs_review = row.needs_review === true || row.needs_review === "true";
   }
 
+  if (tab === "aliases") {
+    const currentPart = row.current_part_number ? findMasterPartByNumber(row.current_part_number) : null;
+    if (row.current_part_number && !currentPart) {
+      await showPartsError("The linked eight-digit current part must exist in Current Parts first.", "Current Part Not Found");
+      partsState[tab] = partsState[tab].filter(item => item.id !== row.id);
+      return;
+    }
+    row.part_id = currentPart?.id || null;
+  }
+
   saveLocalPartsDatabase();
   const synced = await upsertSupabaseRows(PARTS_TABLES[tab], [row]);
-  saveLocalPartsDatabase("shared", { pendingSync: !synced });
-  if (!synced) {
+  let deleteSynced = true;
+  if (isMove) {
+    let movedUsage = [];
+    if (sourceTab === "master") {
+      const destinationPart = tab === "aliases"
+        ? findMasterPartByNumber(values.current_part_number)
+        : (tab === "master" ? row : null);
+      movedUsage = partsState.usage.filter(item => item.part_id === target.id).map(item => {
+        item.part_id = destinationPart?.id || null;
+        item.current_part_number = destinationPart?.current_part_number || "";
+        item.updated_at = nowISO();
+        return item;
+      });
+      if (movedUsage.length) await upsertSupabaseRows(PARTS_TABLES.usage, movedUsage);
+    }
+    partsState[sourceTab] = partsState[sourceTab].filter(item => item.id !== target.id);
+    deleteSynced = await deleteSupabaseRow(PARTS_TABLES[sourceTab], target.id);
+    saveLocalPartsDatabase();
+  }
+  saveLocalPartsDatabase("shared", { pendingSync: !synced || !deleteSynced });
+  if (!synced || !deleteSynced) {
     await showPartsError(
       "The edit was saved in this browser, but it did not save to Supabase. Other users will not see it yet.",
       "Shared Save Failed"
@@ -2943,6 +3417,8 @@ async function savePartsEditModal() {
     return;
   }
   closePartsEditModal();
+  partsState.activeTab = tab;
+  partsState.sort = getDefaultPartsSort(tab);
   renderPartsDatabase();
 }
 
@@ -2959,7 +3435,7 @@ function normalizeEditedPartsValue(key, value) {
 function getEditableFields(tab) {
   if (tab === "aliases") return [
     { key: "old_part_number", label: "Old Part Number" },
-    { key: "current_part_number", label: "Current Part Number" },
+    { key: "current_part_number", label: "Current Part Number (Optional)" },
     { key: "description", label: "Description" },
     { key: "match_type", label: "Match Type", defaultValue: "manual" },
     { key: "source", label: "File Name(s)", defaultValue: "Manual" },
@@ -2987,8 +3463,7 @@ function getEditableFields(tab) {
   return [
     { key: "current_part_number", label: "Current Part Number" },
     { key: "description", label: "Description" },
-    { key: "source", label: "File Name(s)", defaultValue: "Manual" },
-    { key: "record_type", label: "Record Type", defaultValue: "Part" }
+    { key: "source", label: "File Name(s)", defaultValue: "Manual" }
   ];
 }
 

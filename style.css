@@ -3617,6 +3617,7 @@ summary {
 
 .parts-db-toolbar label,
 .parts-edit-fields label,
+.parts-edit-destination,
 .parts-column-mapping label {
   display: grid;
   gap: 6px;
@@ -3627,6 +3628,7 @@ summary {
 .parts-db-toolbar select,
 .parts-edit-fields input,
 .parts-edit-fields textarea,
+.parts-edit-destination select,
 .parts-column-mapping select,
 .parts-data-table input {
   min-width: 0;
