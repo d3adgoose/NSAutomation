@@ -147,6 +147,7 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsClearFiltersButton")?.addEventListener("click", clearPartsFilters);
   document.getElementById("partsHealthCheckButton")?.addEventListener("click", openPartsHealthReport);
   document.getElementById("partsHealthCloseButton")?.addEventListener("click", closePartsHealthReport);
+  bindPartsHealthPanelDrag();
   document.getElementById("partsRetrySaveButton")?.addEventListener("click", () => retryPendingPartsChanges());
   document.getElementById("partsExportButton")?.addEventListener("click", () => {
     if (ensurePartsUnlocked()) exportPartsDatabase();
@@ -184,6 +185,45 @@ function bindPartsDatabaseEvents() {
   document.getElementById("partsEditFields")?.addEventListener("input", markPartsUnsaved);
   document.getElementById("partsEditDestination")?.addEventListener("change", markPartsUnsaved);
   window.addEventListener("online", () => retryPendingPartsChanges({ silent: true }));
+}
+
+function bindPartsHealthPanelDrag() {
+  const panel = document.querySelector(".parts-health-modal-content");
+  const handle = panel?.querySelector(".parts-modal-heading");
+  if (!panel || !handle || handle.dataset.dragBound === "true") return;
+  handle.dataset.dragBound = "true";
+  let drag = null;
+
+  handle.addEventListener("pointerdown", event => {
+    if (window.innerWidth <= 900 || event.button !== 0 || event.target.closest("button")) return;
+    const rect = panel.getBoundingClientRect();
+    drag = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+    panel.style.position = "fixed";
+    panel.style.left = `${rect.left}px`;
+    panel.style.top = `${rect.top}px`;
+    panel.style.right = "auto";
+    panel.style.margin = "0";
+    panel.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+
+  handle.addEventListener("pointermove", event => {
+    if (!drag) return;
+    const maxLeft = Math.max(8, window.innerWidth - panel.offsetWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - panel.offsetHeight - 8);
+    panel.style.left = `${Math.min(maxLeft, Math.max(8, event.clientX - drag.offsetX))}px`;
+    panel.style.top = `${Math.min(maxTop, Math.max(8, event.clientY - drag.offsetY))}px`;
+  });
+
+  const stopDrag = event => {
+    if (!drag) return;
+    drag = null;
+    panel.classList.remove("dragging");
+    try { handle.releasePointerCapture?.(event.pointerId); } catch {}
+  };
+  handle.addEventListener("pointerup", stopDrag);
+  handle.addEventListener("pointercancel", stopDrag);
 }
 
 function registerPartsGhostAutocompleteSource() {

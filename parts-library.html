@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Parts Library</title>
 
-  <link rel="stylesheet" href="style.css?v=20260714-number-exceptions" />
+  <link rel="stylesheet" href="style.css?v=20260714-clean-resize-handle" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -304,9 +304,11 @@
   <div id="partsHealthModal" class="modal hidden">
     <div class="modal-content parts-health-modal-content">
       <div class="parts-modal-heading">
+        <span class="parts-health-corner-grip" aria-label="Drag panel to move" title="Drag to move">⠿</span>
         <div>
           <h2>Library Health Check</h2>
           <p id="partsHealthSummary" class="card-intro"></p>
+          <p class="parts-health-panel-hint">Keep this panel open while you search, switch lists, or edit records behind it.</p>
         </div>
         <button class="secondary" id="partsHealthCloseButton" type="button">Close</button>
       </div>
@@ -318,6 +320,6 @@
   <script src="navigation.js"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
   <script src="partCategories.js?v=20231013"></script>
-  <script src="partsLibrary.js?v=20260714-health-exception-modal"></script>
+  <script src="partsLibrary.js?v=20260714-draggable-health-panel"></script>
 </body>
 </html>
