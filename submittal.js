@@ -3662,7 +3662,7 @@ async function renderPDFPagePreviews(item) {
     wrapper.appendChild(canvas);
     previewList.appendChild(wrapper);
 
-    wrapper.addEventListener("click", () => {
+    wrapper.addEventListener("click", event => {
       document.querySelectorAll(".pdf-page-preview").forEach(el => {
         el.classList.remove("selected");
       });
@@ -3670,16 +3670,24 @@ async function renderPDFPagePreviews(item) {
       wrapper.classList.add("selected");
       document.getElementById("subsectionPageNumber").value = pageNumber;
 
-      // The same page preview is used for TOC placement and PDF actions.
-      // Keep the single blue TOC focus, while independently toggling the red
-      // multi-page selection consumed by Extract/Delete Selected.
-      const actionSelected = !selectedManagedPages.has(pageNumber);
-      if (actionSelected) {
-        selectedManagedPages.add(pageNumber);
+      // A normal click establishes one unambiguous page for TOC placement and
+      // Extract/Delete. Ctrl/Cmd-click is the optional multi-page gesture.
+      if (event.ctrlKey || event.metaKey) {
+        if (selectedManagedPages.has(pageNumber)) {
+          selectedManagedPages.delete(pageNumber);
+        } else {
+          selectedManagedPages.add(pageNumber);
+        }
       } else {
-        selectedManagedPages.delete(pageNumber);
+        selectedManagedPages = new Set([pageNumber]);
       }
-      wrapper.classList.toggle("page-action-selected", actionSelected);
+
+      document.querySelectorAll(".pdf-page-preview").forEach(el => {
+        el.classList.toggle(
+          "page-action-selected",
+          selectedManagedPages.has(Number(el.dataset.pageNumber))
+        );
+      });
       updateSubsectionPageSelectionStatus(pdf.numPages);
     });
 
