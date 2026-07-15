@@ -7,6 +7,9 @@ const PARTS_TABLES = {
   history: "parts_import_history"
 };
 const PARTS_DOCUMENTS_BUCKET = "document-library";
+const PARTS_PDF_JS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PARTS_PDF_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const PARTS_XLSX_URL = "https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js";
 const PARTS_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 const DESCRIPTION_MATCH_THRESHOLD = 0.9;
 let partsRemoteStorageAvailable = true;
@@ -21,6 +24,7 @@ const PARTS_HISTORY_LIMIT = 20;
 const PARTS_RETRY_QUEUE_KEY = "ns_parts_retry_queue_v1";
 const PARTS_HEALTH_EXCEPTIONS_KEY = "ns_parts_health_exceptions_v1";
 let partsRetryInProgress = false;
+const partsExternalScriptPromises = new Map();
 
 let partsState = {
   master: [],
@@ -47,6 +51,18 @@ async function initPartsDatabase() {
   bindPartsDatabaseEvents();
   initializePartsSaveIndicator();
   registerPartsGhostAutocompleteSource();
+
+  // Paint the last shared copy immediately while authentication and the fresh
+  // network copy load in the background. This is especially noticeable on
+  // GitHub Pages, where every visit otherwise started with an empty library.
+  const cached = loadLocalPartsDatabase();
+  if (getPartsDataCompletenessScore(cached)) {
+    applyPartsData(cached);
+    normalizePartsFileNameLabels();
+    renderPartsDatabase();
+    setPartsStatus("Showing the saved Parts Library while checking for updates...");
+  }
+
   await checkPartsLogin();
   await loadPartsDatabase();
   applyPendingPartsChangesToState();
@@ -327,10 +343,6 @@ async function checkPartsLogin() {
 
   const { data: sessionData } = await supabaseClient.auth.getSession();
   partsCurrentUser = sessionData.session?.user || null;
-  if (!partsCurrentUser) {
-    const { data } = await supabaseClient.auth.getUser();
-    partsCurrentUser = data.user || null;
-  }
   updatePartsLoginUI();
 
   if (!partsCurrentUser && partsLoginRequired) {
@@ -356,7 +368,38 @@ function updatePartsLoginUI() {
   if (logoutButton) logoutButton.classList.toggle("hidden", !loggedIn);
   if (main) main.classList.toggle("parts-login-locked", partsLoginRequired && !loggedIn);
   updatePartsLocalButton();
-  updatePartsSharedStorageUsage();
+}
+
+function loadPartsExternalScript(url, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+  if (partsExternalScriptPromises.has(url)) return partsExternalScriptPromises.get(url);
+
+  const promise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = url;
+    script.async = true;
+    script.onload = () => window[globalName]
+      ? resolve(window[globalName])
+      : reject(new Error(`${globalName} did not become available.`));
+    script.onerror = () => reject(new Error(`Could not download ${globalName}.`));
+    document.head.appendChild(script);
+  }).catch(error => {
+    partsExternalScriptPromises.delete(url);
+    throw error;
+  });
+
+  partsExternalScriptPromises.set(url, promise);
+  return promise;
+}
+
+async function ensurePartsPdfLibrary() {
+  const library = await loadPartsExternalScript(PARTS_PDF_JS_URL, "pdfjsLib");
+  library.GlobalWorkerOptions.workerSrc = PARTS_PDF_WORKER_URL;
+  return library;
+}
+
+function ensurePartsExcelLibrary() {
+  return loadPartsExternalScript(PARTS_XLSX_URL, "XLSX");
 }
 
 function setPartsLoginStatus(message) {
@@ -560,8 +603,8 @@ async function loadPartsDatabase() {
 
   try {
     setPartsStatus("Loading the full shared Parts Library...");
-    const master = await fetchSupabaseRows(PARTS_TABLES.master);
-    const [aliases, usage, reviews, history] = await Promise.all([
+    const [master, aliases, usage, reviews, history] = await Promise.all([
+      fetchSupabaseRows(PARTS_TABLES.master),
       fetchSupabaseRows(PARTS_TABLES.aliases),
       fetchSupabaseRows(PARTS_TABLES.usage),
       fetchSupabaseRows(PARTS_TABLES.reviews),
@@ -1662,7 +1705,6 @@ function isMissingPartsRemoteTableError(error) {
 }
 
 function renderPartsDatabase() {
-  deduplicatePartsDatabase();
   renderPartsTabs();
   renderPartsFilters();
   renderPartsSortOptions();
@@ -2414,8 +2456,11 @@ function getSortMarker(key) {
 }
 
 async function startDrawingPDFImport(files) {
-  if (typeof pdfjsLib === "undefined") {
-    showPartsError("PDF import library is not loaded.");
+  try {
+    setPartsStatus("Loading PDF import tools...");
+    await ensurePartsPdfLibrary();
+  } catch (error) {
+    showPartsError("PDF import tools could not be loaded. Check your connection and try again.");
     return;
   }
 
@@ -2619,8 +2664,11 @@ function extractReferencedDrawing(value) {
 }
 
 async function startExcelImport(files) {
-  if (typeof XLSX === "undefined") {
-    showPartsError("Excel import library is not loaded.");
+  try {
+    setPartsStatus("Loading Excel import tools...");
+    await ensurePartsExcelLibrary();
+  } catch (error) {
+    showPartsError("Excel import tools could not be loaded. Check your connection and try again.");
     return;
   }
 
@@ -4375,8 +4423,11 @@ function getEditableFields(tab) {
 }
 
 async function exportPartsDatabase() {
-  if (typeof XLSX === "undefined") {
-    showPartsError("Excel export library is not loaded.");
+  try {
+    setPartsStatus("Loading Excel export tools...");
+    await ensurePartsExcelLibrary();
+  } catch (error) {
+    showPartsError("Excel export tools could not be loaded. Check your connection and try again.");
     return;
   }
   const workbook = XLSX.utils.book_new();

@@ -318,6 +318,10 @@
 
   function positionOverlay(input, state) {
     const rect = input.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+      state.overlay.classList.remove("is-visible");
+      return;
+    }
     state.overlay.style.left = rect.left + "px";
     state.overlay.style.top = rect.top + "px";
     state.overlay.style.width = rect.width + "px";
@@ -461,6 +465,14 @@
     window.addEventListener("resize", () => {
       if (document.activeElement === input) scheduleUpdate(input, state);
     });
+
+    // Scroll events do not bubble, so capture them to follow both the page and
+    // any scrolling panel that contains the input.
+    window.addEventListener("scroll", () => {
+      if (document.activeElement === input && state.suggestion) {
+        positionOverlay(input, state);
+      }
+    }, { capture: true, passive: true });
 
     scheduleUpdate(input, state);
     return input;

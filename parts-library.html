@@ -6,15 +6,9 @@
   <title>Parts Library</title>
 
   <link rel="stylesheet" href="style.css?v=20260714-clean-resize-handle" />
-  <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
+  <link rel="stylesheet" href="ghostAutocomplete.css?v=20260715-scroll-sync" />
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 
 <body>
@@ -316,10 +310,10 @@
     </div>
   </div>
 
-  <script src="supabaseClient.js"></script>
-  <script src="navigation.js"></script>
-  <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="partCategories.js?v=20231013"></script>
-  <script src="partsLibrary.js?v=20260714-old-number-exceptions"></script>
+  <script defer src="supabaseClient.js"></script>
+  <script defer src="navigation.js"></script>
+  <script defer src="ghostAutocomplete.js?v=20260715-scroll-sync"></script>
+  <script defer src="partCategories.js?v=20231013"></script>
+  <script defer src="partsLibrary.js?v=20260715-lazy-import-tools"></script>
 </body>
 </html>
