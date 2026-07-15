@@ -1,4 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
+  enableAppWideSpellcheck(document);
+  observeDynamicSpellcheckFields();
+
   const btn = document.getElementById("hamburgerBtn");
   const menu = document.getElementById("sideMenu");
 
@@ -38,3 +41,29 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+function enableAppWideSpellcheck(root = document) {
+  const fields = [];
+  if (root.matches?.('input[type="text"], input[type="search"], input:not([type]), textarea, [contenteditable="true"]')) {
+    fields.push(root);
+  }
+  root.querySelectorAll?.('input[type="text"], input[type="search"], input:not([type]), textarea, [contenteditable="true"]')
+    .forEach(field => fields.push(field));
+
+  fields.forEach(field => {
+    field.spellcheck = true;
+    field.setAttribute("spellcheck", "true");
+    if (!field.hasAttribute("lang")) field.setAttribute("lang", "en-US");
+  });
+}
+
+function observeDynamicSpellcheckFields() {
+  const observer = new MutationObserver(mutations => {
+    mutations.forEach(mutation => {
+      mutation.addedNodes.forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE) enableAppWideSpellcheck(node);
+      });
+    });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
