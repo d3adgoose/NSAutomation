@@ -3669,6 +3669,18 @@ async function renderPDFPagePreviews(item) {
 
       wrapper.classList.add("selected");
       document.getElementById("subsectionPageNumber").value = pageNumber;
+
+      // The same page preview is used for TOC placement and PDF actions.
+      // Keep the single blue TOC focus, while independently toggling the red
+      // multi-page selection consumed by Extract/Delete Selected.
+      const actionSelected = !selectedManagedPages.has(pageNumber);
+      if (actionSelected) {
+        selectedManagedPages.add(pageNumber);
+      } else {
+        selectedManagedPages.delete(pageNumber);
+      }
+      wrapper.classList.toggle("page-action-selected", actionSelected);
+      updateSubsectionPageSelectionStatus(pdf.numPages);
     });
 
     await page.render({
