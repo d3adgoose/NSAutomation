@@ -3558,6 +3558,7 @@ async function openSubsectionModal(id) {
       cleanInvalidTOCParents(item);
       updatePDFParentTOCLevelControls();
       renderCurrentSubsectionList();
+      applySmartTOCLevelDefault(item);
       updateTOCParentDropdown();
     };
   }
@@ -3584,6 +3585,7 @@ async function openSubsectionModal(id) {
 
   renderCurrentSubsectionList();
   updatePDFParentTOCLevelControls();
+  applySmartTOCLevelDefault(item);
   updateTOCParentDropdown();
 
   modal.classList.remove("hidden");
@@ -4082,6 +4084,22 @@ function clearTOCEntryForm() {
   document.querySelectorAll(".pdf-page-preview").forEach(el => {
     el.classList.remove("selected");
   });
+
+  applySmartTOCLevelDefault();
+}
+
+function applySmartTOCLevelDefault(item = getActiveSubsectionItem()) {
+  const levelSelect = document.getElementById("tocEntryLevel");
+  if (!item || !levelSelect || editingTOCEntryId) return;
+
+  const hideParent = document.getElementById("hideParentTOC");
+  const pdfNameHidden = hideParent ? hideParent.checked : !!item.hideParentTOC;
+  const hasEntries = (item.tocEntries || []).length > 0;
+
+  // The visible PDF name already occupies Level 0. When it is hidden, the
+  // first named entry replaces it at Level 0 and following entries nest below.
+  levelSelect.value = String(pdfNameHidden && !hasEntries ? 0 : 1);
+  updateTOCParentDropdown();
 }
 
 async function saveTOCEntry() {
