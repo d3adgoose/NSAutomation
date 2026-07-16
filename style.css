@@ -2903,6 +2903,14 @@ details summary:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.packet-download-retry {
+  margin-top: 10px;
+}
+
+.packet-download-retry.hidden {
+  display: none;
+}
+
 .packet-preview-progress .warranty-status {
   flex: 1 1 auto;
 }

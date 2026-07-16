@@ -252,6 +252,16 @@ if (pdfUpload) {
   pdfUpload.addEventListener("change", handlePDFUpload);
 }
 
+function getPacketPDFJSOptions(data) {
+  return {
+    data,
+    cMapUrl: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/",
+    cMapPacked: true,
+    standardFontDataUrl: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/",
+    verbosity: pdfjsLib.VerbosityLevel?.ERRORS ?? 0
+  };
+}
+
 
 document.addEventListener("DOMContentLoaded", async () => {
   const dropZone = document.getElementById("dropZone");
@@ -866,7 +876,9 @@ async function renderPageManagerPreviews(item) {
 
   try {
     const sourceBytes = await getSourcePDFBytes(item.file);
-    const pdf = await pdfjsLib.getDocument({ data: sourceBytes.slice(0) }).promise;
+    const pdf = await pdfjsLib.getDocument(
+      getPacketPDFJSOptions(sourceBytes.slice(0))
+    ).promise;
 
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
@@ -1347,6 +1359,7 @@ function getPacketBuildLabel() {
 let packetBuildStartedAt = 0;
 let packetBuildTimer = null;
 let packetLastBuildMessage = "";
+let lastPacketDownloadData = null;
 
 function formatPacketBuildElapsed(milliseconds) {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -1401,6 +1414,56 @@ function stopPacketBuildTimer() {
   clearInterval(packetBuildTimer);
   packetBuildTimer = null;
   packetBuildStartedAt = 0;
+}
+
+function setPacketDownloadRetryAvailable(isAvailable) {
+  document.getElementById("retryPacketDownloadButton")?.classList.toggle("hidden", !isAvailable);
+}
+
+function requestPacketDownload(pdfBytes, outputName) {
+  lastPacketDownloadData = { pdfBytes, outputName };
+  setPacketDownloadRetryAvailable(true);
+
+  if (navigator.userActivation && !navigator.userActivation.isActive) {
+    updatePacketBuildStatus(
+      "Download warning: browser click permission was no longer active. Use Retry download if the file does not appear."
+    );
+  }
+
+  try {
+    downloadFile(pdfBytes, outputName, "application/pdf");
+    updatePacketBuildStatus(
+      `Download requested: ${outputName}. If it does not appear, use Retry download.`
+    );
+  } catch (error) {
+    const message = `Download failed to start: ${error?.message || "Browser download error."}`;
+    console.error(message, error);
+    updatePacketBuildStatus(message);
+    throw new Error(message);
+  }
+}
+
+function retryLastPacketDownload() {
+  if (!lastPacketDownloadData) {
+    updatePacketBuildStatus("No completed PDF is available to retry.");
+    return;
+  }
+
+  try {
+    downloadFile(
+      lastPacketDownloadData.pdfBytes,
+      lastPacketDownloadData.outputName,
+      "application/pdf"
+    );
+    updatePacketBuildStatus(
+      `Download requested again: ${lastPacketDownloadData.outputName}. Check the browser downloads list.`
+    );
+  } catch (error) {
+    const message = `Retry failed: ${error?.message || "Browser download error."}`;
+    console.error(message, error);
+    updatePacketBuildStatus(message);
+    showMessageModal("Download Failed", `${message} Check browser download permissions for this site.`);
+  }
 }
 
 function updatePacketBuildStatus(message = "") {
@@ -2311,7 +2374,9 @@ async function renderFinalBuildPdfPreview(bytes) {
   if (!container) return;
   container.innerHTML = "";
 
-  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  const pdf = await pdfjsLib.getDocument(
+    getPacketPDFJSOptions(bytes.slice(0))
+  ).promise;
   setFinalBuildPreviewStatus("Rendering preview pages...");
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -2384,6 +2449,11 @@ async function finishPacketBuildFromPreview(previewData) {
   const buildLabel = previewData.buildLabel || getPacketBuildLabel();
   const { pdfBytes, outputName, included } = previewData;
 
+  // Trigger the download while the Build PDF click still has browser permission.
+  // Waiting for IndexedDB or cloud work first can cause browsers to block it.
+  updatePacketBuildStatus("Starting final PDF download...");
+  requestPacketDownload(pdfBytes, outputName);
+
   updatePacketBuildStatus("Saving local history copy...");
   try {
     await savePacketHistoryEntry({
@@ -2398,9 +2468,6 @@ async function finishPacketBuildFromPreview(previewData) {
     );
   }
 
-  updatePacketBuildStatus("Downloading final PDF...");
-  downloadFile(pdfBytes, outputName, "application/pdf");
-  console.log("Download function ran.");
   warrantyPromptHandled = false;
 
   if (
@@ -2416,7 +2483,9 @@ async function finishPacketBuildFromPreview(previewData) {
 
   finalBuildPreviewCache = null;
   resetPacketBuilder();
-  updatePacketBuildStatus(`${buildLabel} downloaded. Ready for the next build.`);
+  updatePacketBuildStatus(
+    `${buildLabel} download requested. Ready for the next build. Use Retry download if the file did not appear.`
+  );
 }
 
 async function confirmFinalBuildPreview() {
@@ -3724,9 +3793,9 @@ async function renderPDFPagePreviews(item) {
 
   const bytes = await getSourcePDFBytes(item.file);
 
-  const pdf = await pdfjsLib.getDocument({
-    data: bytes.slice(0)
-  }).promise;
+  const pdf = await pdfjsLib.getDocument(
+    getPacketPDFJSOptions(bytes.slice(0))
+  ).promise;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
