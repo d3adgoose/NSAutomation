@@ -840,6 +840,13 @@ async function extractPDFTextByPage(file) {
     data: bytes.slice(0)
   }).promise;
 
+  if (pdf.numPages >= 300 || file.size >= 100 * 1024 * 1024) {
+    updateConverterStatus(
+      `Large PDF notice: ${pdf.numPages} pages and ${(file.size / (1024 * 1024)).toFixed(1)} MB. The scan may take longer and use more browser memory.`
+    );
+    await waitForConverterPaint();
+  }
+
   const pages = new Array(pdf.numPages);
   const failedPages = [];
 
@@ -1366,6 +1373,14 @@ async function previewPartNumberChangesScan() {
   if (!converterExcelFiles.length && !converterExcelFile) {
     showConverterMessage("Excel Required", "Upload an Excel file first.");
     return;
+  }
+
+  const sourceSize = scanPdfFile.size + converterExcelFiles.reduce((sum, file) => sum + file.size, 0);
+  if (sourceSize >= 100 * 1024 * 1024) {
+    updateConverterStatus(
+      `Large-file notice: ${(sourceSize / (1024 * 1024)).toFixed(1)} MB of PDF and spreadsheet files selected.`
+    );
+    await waitForConverterPaint();
   }
 
   updateConverterStatus("Step 1 of 5: Reading conversion spreadsheets...");

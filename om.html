@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>O&M Automation</title>
-  <link rel="stylesheet" href="style.css?v=20260716-submittal-history" />
+  <link rel="stylesheet" href="style.css?v=20260716-storage-meter" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
@@ -231,6 +231,7 @@
         </div>
         <div class="button-row history-header-actions">
           <button id="submittalHistoryToggle" class="secondary" onclick="toggleOMSubmittalHistory()">Submittal History</button>
+          <button class="secondary" onclick="clearCurrentPacketHistory()">Clear History</button>
           <button class="secondary" onclick="renderPacketHistory()">Refresh</button>
         </div>
       </div>
@@ -239,6 +240,14 @@
       <p id="packetHistoryStatus" class="warranty-status" aria-live="polite">
         Loading local history...
       </p>
+      <div id="packetStorageUsage" class="storage-usage-card" aria-live="polite">
+        <div class="storage-usage-label">
+          <strong>Browser Storage</strong>
+          <span>Checking...</span>
+        </div>
+        <div class="storage-usage-bar" aria-hidden="true"><span></span></div>
+        <p>Local drafts and history</p>
+      </div>
     </section>
   </main>
   <div id="warrantyPromptModal" class="modal hidden">
@@ -505,7 +514,7 @@
   <script src="pdfStorage.js"></script>
   <script src="database.js"></script>
   <script src="tocDetection.js"></script>
-  <script src="submittal.js?v=20260716-download-tracking"></script>
+  <script src="submittal.js?v=20260716-storage-meter"></script>
   <script src="om.js"></script>
   <script src="navigation.js?v=20260716-continue-work"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>

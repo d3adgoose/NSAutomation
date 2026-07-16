@@ -1928,11 +1928,9 @@ async function updatePartsSharedStorageUsage() {
     const percentUsed = PARTS_STORAGE_LIMIT_BYTES > 0
       ? Math.min(100, (usedBytes / PARTS_STORAGE_LIMIT_BYTES) * 100)
       : 0;
-    const remainingBytes = Math.max(0, PARTS_STORAGE_LIMIT_BYTES - usedBytes);
-
-    if (label) label.textContent = `${formatPartsStorageBytes(remainingBytes)} left of ${formatPartsStorageBytes(PARTS_STORAGE_LIMIT_BYTES)}`;
+    if (label) label.textContent = `${formatPartsStorageBytes(usedBytes)} of ${formatPartsStorageBytes(PARTS_STORAGE_LIMIT_BYTES)} used`;
     if (bar) bar.style.width = `${percentUsed.toFixed(1)}%`;
-    if (detail) detail.textContent = `${formatPartsStorageBytes(usedBytes)} used - ${recordCount} part record${recordCount === 1 ? "" : "s"} saved`;
+    if (detail) detail.textContent = `${recordCount} part record${recordCount === 1 ? "" : "s"} saved - ${percentUsed.toFixed(1)}% used`;
 
     usageCard.classList.toggle("warning", percentUsed >= 75 && percentUsed < 90);
     usageCard.classList.toggle("danger", percentUsed >= 90);

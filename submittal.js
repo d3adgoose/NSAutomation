@@ -363,6 +363,7 @@ async function handleDroppedFiles(fileList) {
 
   if (addedFileCount > 0 || replacedFileCount > 0) {
     warrantyPromptHandled = false;
+    packetLargeBuildConfirmed = false;
   }
 
   sortLibraryBySection();
@@ -1492,6 +1493,7 @@ const PACKET_DRAFT_AUTOSAVE_DELAY = 900;
 let packetDraftAutosaveTimer = null;
 let packetDraftReady = false;
 let packetDraftSavePromise = Promise.resolve();
+let packetLargeBuildConfirmed = false;
 
 function getPacketDraftId() {
   return `draft-${getPacketHistoryType()}`;
@@ -1550,7 +1552,14 @@ async function savePacketDraft({ manual = false } = {}) {
     setPacketDraftStatus(`${manual ? "Progress saved" : "Autosaved"} at ${time}.`, "is-saved");
   } catch (error) {
     console.warn("Could not save packet draft:", error);
-    setPacketDraftStatus("Progress could not be saved. Try Save Progress again.", "is-error");
+    const storageFull = error?.name === "QuotaExceededError" || /quota|storage|space/i.test(error?.message || "");
+    setPacketDraftStatus(
+      storageFull
+        ? "Browser storage is full. Clear local history, then try Save Progress again."
+        : "Progress could not be saved. Try Save Progress again.",
+      "is-error"
+    );
+    updatePacketStorageStatus();
   }
 }
 
@@ -1616,6 +1625,45 @@ function getPacketHistoryStatusElement() {
 function updatePacketHistoryStatus(message = "") {
   const status = getPacketHistoryStatusElement();
   if (status) status.textContent = message;
+}
+
+function formatPacketStorageBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+async function updatePacketStorageStatus() {
+  const usageCard = document.getElementById("packetStorageUsage");
+  if (!usageCard) return;
+  const label = usageCard.querySelector(".storage-usage-label span");
+  const bar = usageCard.querySelector(".storage-usage-bar span");
+  const detail = usageCard.querySelector("p");
+  usageCard.classList.remove("warning", "danger");
+
+  if (!navigator.storage?.estimate) {
+    if (label) label.textContent = "Usage unavailable";
+    if (bar) bar.style.width = "0%";
+    if (detail) detail.textContent = "This browser does not report local storage capacity.";
+    return;
+  }
+  try {
+    const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+    const percent = quota ? Math.min(100, (usage / quota) * 100) : 0;
+    if (label) label.textContent = quota
+      ? `${formatPacketStorageBytes(usage)} of ${formatPacketStorageBytes(quota)} used`
+      : `${formatPacketStorageBytes(usage)} used`;
+    if (bar) bar.style.width = `${percent.toFixed(1)}%`;
+    if (detail) detail.textContent = quota
+      ? `Local drafts and history - ${percent.toFixed(1)}% used${percent >= 80 ? " - storage is running low" : ""}`
+      : "Local drafts and history";
+    usageCard.classList.toggle("warning", percent >= 75 && percent < 90);
+    usageCard.classList.toggle("danger", percent >= 90);
+  } catch (error) {
+    if (label) label.textContent = "Usage unavailable";
+    if (bar) bar.style.width = "0%";
+    if (detail) detail.textContent = "Could not calculate local drafts and history storage.";
+  }
 }
 
 function openPacketHistoryDB() {
@@ -2007,6 +2055,7 @@ async function renderPacketHistory() {
 
   list.innerHTML = "";
   updatePacketHistoryStatus("Loading local history...");
+  updatePacketStorageStatus();
 
   try {
     const historyType = typeof isOMPacket === "function" && isOMPacket() && window.omPacketHistoryViewType
@@ -2065,6 +2114,43 @@ async function renderPacketHistory() {
     console.error("Could not render packet history:", error);
     updatePacketHistoryStatus(error.message || "Could not load local history.");
   }
+}
+
+async function clearCurrentPacketHistory() {
+  const historyType = typeof isOMPacket === "function" && isOMPacket() && window.omPacketHistoryViewType
+    ? window.omPacketHistoryViewType
+    : getPacketHistoryType();
+  const label = historyType === "om" ? "O&M" : "Submittal";
+  if (!(await showConfirmModal("Clear Local History", `Remove all saved ${label} history from this browser? Your current draft will be kept.`, "Clear History"))) return;
+  await runPacketHistoryTransaction("readwrite", store => {
+    const request = store.getAll();
+    request.onsuccess = () => (request.result || [])
+      .filter(item => item.type === historyType)
+      .forEach(item => store.delete(item.id));
+  });
+  await renderPacketHistory();
+  updatePacketHistoryStatus(`${label} history cleared.`);
+}
+
+async function getPacketBuildPreflight(included) {
+  let totalPages = 0;
+  let totalBytes = 0;
+  for (const item of included) {
+    totalBytes += Number(item.file?.size || 0);
+    if (Number.isFinite(Number(item.pageCount)) && Number(item.pageCount) > 0) {
+      totalPages += Number(item.pageCount);
+      continue;
+    }
+    try {
+      const bytes = await getSourcePDFBytes(item.file);
+      const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      item.pageCount = pdf.getPageCount();
+      totalPages += item.pageCount;
+    } catch (error) {
+      console.warn("Could not count pages for build preflight:", item.fileName, error);
+    }
+  }
+  return { totalPages, totalBytes, fileCount: included.length };
 }
 
 function toggleOMSubmittalHistory() {
@@ -2537,10 +2623,34 @@ async function buildPacket() {
     return;
   }
 
+  const includedForPreflight = pdfLibrary.filter(item => item.include);
+  let buildPreflight = null;
+  if (!packetLargeBuildConfirmed && includedForPreflight.length) {
+    updatePacketBuildStatus("Checking build size before starting...");
+    buildPreflight = await getPacketBuildPreflight(includedForPreflight);
+    const isLargeBuild = buildPreflight.totalPages >= 300 || buildPreflight.totalBytes >= 100 * 1024 * 1024 || buildPreflight.fileCount >= 30;
+    if (isLargeBuild) {
+      const proceed = await showConfirmModal(
+        "Large PDF Build",
+        `This build contains ${buildPreflight.fileCount} PDF(s), approximately ${buildPreflight.totalPages} page(s), and ${formatPacketStorageBytes(buildPreflight.totalBytes)} of source files. It may take longer and use substantial browser memory. Continue?`,
+        "Continue Build"
+      );
+      if (!proceed) {
+        updatePacketBuildStatus("Large build canceled before processing.");
+        return;
+      }
+    }
+    packetLargeBuildConfirmed = true;
+  }
+
   finalBuildPreviewAccepted = false;
   finalBuildPreviewCache = null;
   pendingBuild = false;
-  startPacketBuildTimer(`Building ${buildLabel} preview...`);
+  startPacketBuildTimer(
+    buildPreflight
+      ? `Building ${buildLabel} preview: ${buildPreflight.fileCount} PDF(s), approximately ${buildPreflight.totalPages} page(s), ${formatPacketStorageBytes(buildPreflight.totalBytes)}...`
+      : `Building ${buildLabel} preview...`
+  );
 
   try {
   buildContext = "creating a new PDF";
@@ -2783,6 +2893,7 @@ function resetPacketBuilder() {
   finalBuildPreviewAccepted = false;
   finalBuildPreviewCache = null;
   warrantyPromptHandled = false;
+  packetLargeBuildConfirmed = false;
   customSectionLabels = {};
 
   const pdfUpload = document.getElementById("pdfUpload");
