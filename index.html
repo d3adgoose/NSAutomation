@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Home</title>
 
-  <link rel="stylesheet" href="style.css?v=20260713-parts-library">
+  <link rel="stylesheet" href="style.css?v=20260716-continue-work">
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 </head>
 <body>
@@ -27,16 +27,7 @@
 
 <header>
   <h1>N/S Corporation Engineering Tool</h1>
-  <p>Choose a tool below or open ESR for project lookup.</p>
-  <div class="header-actions">
-    <a
-      class="login-btn header-link-btn"
-      href="https://www.getesr.com/?sort=project_number_asc"
-      target="_blank"
-      rel="noopener">
-      Open ESR
-    </a>
-  </div>
+  <p>Choose a tool below to begin.</p>
 </header>
 
 <main>
@@ -75,10 +66,31 @@
         <h3>O&M Manuals</h3>
         <p>Import completed submittals, reuse detected sections, add manuals, and build final O&M packets.</p>
       </a>
+
+      <a
+        class="home-feature"
+        href="https://www.getesr.com/?sort=project_number_asc"
+        target="_blank"
+        rel="noopener"
+      >
+        <h3>ESR Projects</h3>
+        <p>Open the engineering workload to find projects, review status, and manage ESR information.</p>
+      </a>
     </div>
   </section>
+
+  <section id="continueWorkSection" class="card continue-work-card hidden">
+    <div class="continue-work-heading">
+      <div>
+        <h2>Continue where you left off</h2>
+        <p>Return to your most recently used tool and your last position on that page.</p>
+      </div>
+      <button class="secondary" type="button" onclick="clearRecentToolHistory()">Clear</button>
+    </div>
+    <div id="continueWorkList" class="continue-work-list"></div>
+  </section>
 </main>
-<script src="navigation.js?v=20260715-app-spellcheck"></script>
+<script src="navigation.js?v=20260716-latest-work"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
 
 </body>
