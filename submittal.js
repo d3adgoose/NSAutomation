@@ -1344,11 +1344,75 @@ function getPacketBuildLabel() {
     : "Submittal packet";
 }
 
+let packetBuildStartedAt = 0;
+let packetBuildTimer = null;
+let packetLastBuildMessage = "";
+
+function formatPacketBuildElapsed(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+function updatePacketBuildElapsed() {
+  if (!packetBuildStartedAt) return;
+  const elapsedText = formatPacketBuildElapsed(performance.now() - packetBuildStartedAt);
+  const mainElapsed = document.getElementById("packetBuildElapsed");
+  const previewElapsed = document.getElementById("packetPreviewElapsed");
+  if (mainElapsed) mainElapsed.textContent = elapsedText;
+  if (previewElapsed) previewElapsed.textContent = `Elapsed ${elapsedText}`;
+}
+
+function recordPacketBuildMessage(message) {
+  if (!message || message === packetLastBuildMessage) return;
+  packetLastBuildMessage = message;
+  const elapsedText = packetBuildStartedAt
+    ? formatPacketBuildElapsed(performance.now() - packetBuildStartedAt)
+    : "ready";
+  ["packetBuildHistory", "packetPreviewBuildHistory"].forEach(id => {
+    const history = document.getElementById(id);
+    if (!history) return;
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    const text = document.createElement("span");
+    time.textContent = elapsedText;
+    text.textContent = message;
+    item.append(time, text);
+    history.appendChild(item);
+    while (history.children.length > 40) history.firstElementChild?.remove();
+  });
+}
+
+function startPacketBuildTimer(message) {
+  packetBuildStartedAt = performance.now();
+  packetLastBuildMessage = "";
+  document.getElementById("packetBuildHistory")?.replaceChildren();
+  document.getElementById("packetPreviewBuildHistory")?.replaceChildren();
+  document.getElementById("packetBuildProgress")?.classList.remove("hidden");
+  clearInterval(packetBuildTimer);
+  updatePacketBuildElapsed();
+  packetBuildTimer = setInterval(updatePacketBuildElapsed, 250);
+  updatePacketBuildStatus(message);
+}
+
+function stopPacketBuildTimer() {
+  if (!packetBuildStartedAt) return;
+  updatePacketBuildElapsed();
+  clearInterval(packetBuildTimer);
+  packetBuildTimer = null;
+  packetBuildStartedAt = 0;
+}
+
 function updatePacketBuildStatus(message = "") {
   const status = document.getElementById("packetBuildStatus");
   if (!status) return;
 
   status.textContent = message || "";
+  document.getElementById("packetBuildProgress")?.classList.toggle(
+    "hidden",
+    !message && !packetBuildStartedAt
+  );
+  recordPacketBuildMessage(message);
 }
 
 function getBuildErrorMessage(buildLabel, error, context = "") {
@@ -2211,9 +2275,10 @@ function adjustNormalTOCPageNumbersForInsertedPages(
   });
 }
 
-function setFinalBuildPreviewStatus(message) {
+function setFinalBuildPreviewStatus(message, recordMessage = true) {
   const status = document.getElementById("finalBuildPreviewStatus");
   if (status) status.textContent = message || "";
+  if (recordMessage) recordPacketBuildMessage(message);
 }
 
 function clearFinalBuildPreviewPages() {
@@ -2230,7 +2295,10 @@ async function renderFinalBuildPdfPreview(bytes) {
   setFinalBuildPreviewStatus("Rendering preview pages...");
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    setFinalBuildPreviewStatus(`Rendering page ${pageNumber} of ${pdf.numPages}...`);
+    setFinalBuildPreviewStatus(
+      `Rendering page ${pageNumber} of ${pdf.numPages}...`,
+      pageNumber === 1 || pageNumber % 10 === 0 || pageNumber === pdf.numPages
+    );
     const page = await pdf.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1 });
 
@@ -2383,7 +2451,7 @@ async function buildPacket() {
   finalBuildPreviewAccepted = false;
   finalBuildPreviewCache = null;
   pendingBuild = false;
-  updatePacketBuildStatus(`Building ${buildLabel} preview...`);
+  startPacketBuildTimer(`Building ${buildLabel} preview...`);
 
   try {
   buildContext = "creating a new PDF";
@@ -2614,6 +2682,8 @@ async function buildPacket() {
     const message = getBuildErrorMessage(buildLabel, error, buildContext);
     updatePacketBuildStatus(message);
     await showMessageModal("Build Paused", message);
+  } finally {
+    stopPacketBuildTimer();
   }
 }
 

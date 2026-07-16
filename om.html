@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>O&M Automation</title>
-  <link rel="stylesheet" href="style.css?v=20260714-packet-autosave" />
+  <link rel="stylesheet" href="style.css?v=20260716-packet-timing" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
@@ -208,7 +208,16 @@
 
       <p id="draftSaveStatus" class="draft-save-status" aria-live="polite">Autosave is on.</p>
 
-      <p id="packetBuildStatus" class="warranty-status" aria-live="polite"></p>
+      <div id="packetBuildProgress" class="packet-build-progress hidden" aria-live="polite">
+        <div class="packet-build-current">
+          <span id="packetBuildStatus"></span>
+          <strong id="packetBuildElapsed" class="packet-build-elapsed">0:00</strong>
+        </div>
+        <details class="packet-build-messages">
+          <summary>Show progress messages</summary>
+          <ol id="packetBuildHistory"></ol>
+        </details>
+      </div>
     </section>
 
     <section class="card">
@@ -459,7 +468,14 @@
   <div id="finalBuildPreviewModal" class="modal hidden">
     <div class="modal-content final-build-preview-modal-content">
       <h2>Preview Build</h2>
-      <p id="finalBuildPreviewStatus" class="warranty-status" aria-live="polite">Loading preview...</p>
+      <div class="packet-preview-progress">
+        <p id="finalBuildPreviewStatus" class="warranty-status" aria-live="polite">Loading preview...</p>
+        <strong id="packetPreviewElapsed" class="packet-build-elapsed"></strong>
+      </div>
+      <details class="packet-build-messages">
+        <summary>Show progress messages</summary>
+        <ol id="packetPreviewBuildHistory"></ol>
+      </details>
       <div id="finalBuildPreviewPages" class="final-build-preview-pages"></div>
       <div class="button-row preview-modal-actions">
         <button onclick="confirmFinalBuildPreview()">Build PDF</button>
@@ -485,7 +501,7 @@
   <script src="pdfStorage.js"></script>
   <script src="database.js"></script>
   <script src="tocDetection.js"></script>
-  <script src="submittal.js?v=20260715-writing-spellcheck"></script>
+  <script src="submittal.js?v=20260716-packet-timing"></script>
   <script src="om.js"></script>
   <script src="navigation.js?v=20260715-app-spellcheck"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>

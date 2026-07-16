@@ -2761,6 +2761,72 @@ details summary:hover {
   display: none;
 }
 
+.packet-build-progress {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #bfd0e0;
+  border-left: 4px solid #2875b8;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.packet-build-progress.hidden {
+  display: none;
+}
+
+.packet-build-current,
+.packet-preview-progress {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.packet-build-current > span {
+  color: #263f55;
+  font-weight: 600;
+}
+
+.packet-build-elapsed {
+  flex: 0 0 auto;
+  min-width: 58px;
+  color: #075f72;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.packet-build-messages {
+  margin-top: 8px;
+  color: #526579;
+  font-size: 12px;
+}
+
+.packet-build-messages summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.packet-build-messages ol {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding-left: 24px;
+  overflow: auto;
+}
+
+.packet-build-messages time {
+  display: inline-block;
+  width: 46px;
+  color: #075f72;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.packet-preview-progress .warranty-status {
+  flex: 1 1 auto;
+}
+
 .converter-progress-current,
 .converter-modal-progress {
   display: flex;
