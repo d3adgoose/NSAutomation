@@ -6,7 +6,7 @@
 
   <title>Converter Automation</title>
 
-  <link rel="stylesheet" href="style.css?v=20260713-parts-library" />
+  <link rel="stylesheet" href="style.css?v=20260716-fast-preview" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
@@ -117,13 +117,28 @@
         <button class="delete-btn" onclick="clearConverterFiles()">Clear</button>
       </div>
 
-      <p id="converterStatus" class="warranty-status"></p>
+      <div id="converterProgress" class="converter-progress hidden" aria-live="polite">
+        <div class="converter-progress-current">
+          <span id="converterStatus"></span>
+          <strong id="converterElapsedTime" class="converter-elapsed-time">0:00</strong>
+        </div>
+        <details id="converterMessageDetails" class="converter-message-details">
+          <summary>Show progress messages</summary>
+          <ol id="converterMessageHistory"></ol>
+        </details>
+      </div>
     </section>
 
     <section class="card">
       <div class="converter-section-heading">
         <h2>Detected Changes <span id="detectedChangeCount">(0)</span></h2>
-        <button onclick="previewPartNumberChanges()">Preview Changes</button>
+        <div class="converter-preview-actions">
+          <label class="converter-ocr-option" title="Search image-only drawing pages. This is much slower than normal PDF text scanning.">
+            <input id="converterDeepOcr" type="checkbox" />
+            Deep drawing OCR <span>(slower)</span>
+          </label>
+          <button onclick="previewPartNumberChanges()">Preview Changes</button>
+        </div>
       </div>
 
       <table>
@@ -149,7 +164,14 @@
     <div class="modal-content converter-preview-modal-content">
       <h2>PDF Before / After Preview</h2>
 
-      <p id="converterPreviewModalStatus" class="warranty-status"></p>
+      <div class="converter-modal-progress">
+        <p id="converterPreviewModalStatus" class="warranty-status"></p>
+        <strong id="converterModalElapsedTime" class="converter-elapsed-time"></strong>
+      </div>
+      <details class="converter-message-details converter-modal-message-details">
+        <summary>Show processing messages</summary>
+        <ol id="converterModalMessageHistory"></ol>
+      </details>
 
       <div class="converter-preview-layout">
         <div class="converter-preview-main">
@@ -180,6 +202,6 @@
 
   <script src="navigation.js?v=20260715-app-spellcheck"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="converter.js"></script>
+  <script src="converter.js?v=20260716-fast-preview"></script>
 </body>
 </html>

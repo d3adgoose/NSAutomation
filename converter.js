@@ -26,6 +26,10 @@ let converterMasterPartLookup = null;
 let converterMasterPartLookupKey = "";
 let converterMasterPartCorrectionCount = 0;
 let converterMasterPartPageMatchCount = 0;
+let converterTextScanFailedPages = [];
+let converterTaskStartedAt = 0;
+let converterTaskTimer = null;
+let converterLastStatusMessage = "";
 
 const { PDFDocument, StandardFonts, degrees, rgb } = PDFLib;
 
@@ -246,9 +250,65 @@ function updateConverterStatus(message = "") {
   const status = document.getElementById("converterStatus");
   if (!status) return;
   status.textContent = message || "";
+  const progress = document.getElementById("converterProgress");
+  progress?.classList.toggle("hidden", !message && !converterTaskStartedAt);
+
+  if (message && message !== converterLastStatusMessage) {
+    converterLastStatusMessage = message;
+    const histories = [
+      document.getElementById("converterMessageHistory"),
+      document.getElementById("converterModalMessageHistory")
+    ].filter(Boolean);
+    histories.forEach(history => {
+      const item = document.createElement("li");
+      const elapsed = converterTaskStartedAt
+        ? formatConverterElapsed(performance.now() - converterTaskStartedAt)
+        : "ready";
+      item.innerHTML = `<time>${elapsed}</time><span>${escapeConverterHTML(message)}</span>`;
+      history.appendChild(item);
+      while (history.children.length > 30) history.firstElementChild?.remove();
+    });
+  }
 }
 
-function runConverterTask(task, failureMessage) {
+function formatConverterElapsed(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function updateConverterElapsedTime() {
+  if (!converterTaskStartedAt) return;
+  const text = formatConverterElapsed(performance.now() - converterTaskStartedAt);
+  const elapsed = document.getElementById("converterElapsedTime");
+  const modalElapsed = document.getElementById("converterModalElapsedTime");
+  if (elapsed) elapsed.textContent = text;
+  if (modalElapsed) modalElapsed.textContent = `Elapsed ${text}`;
+}
+
+function startConverterTaskTimer(label) {
+  converterTaskStartedAt = performance.now();
+  converterLastStatusMessage = "";
+  document.getElementById("converterMessageHistory")?.replaceChildren();
+  document.getElementById("converterModalMessageHistory")?.replaceChildren();
+  document.getElementById("converterProgress")?.classList.remove("hidden");
+  clearInterval(converterTaskTimer);
+  updateConverterElapsedTime();
+  converterTaskTimer = setInterval(updateConverterElapsedTime, 250);
+  updateConverterStatus(label);
+}
+
+function stopConverterTaskTimer() {
+  if (!converterTaskStartedAt) return;
+  updateConverterElapsedTime();
+  clearInterval(converterTaskTimer);
+  converterTaskTimer = null;
+  converterTaskStartedAt = 0;
+}
+
+function runConverterTask(task, failureMessage, taskLabel = "") {
+  if (taskLabel) startConverterTaskTimer(taskLabel);
   return Promise.resolve()
     .then(task)
     .catch(error => {
@@ -256,6 +316,9 @@ function runConverterTask(task, failureMessage) {
       updateConverterStatus(
         `${failureMessage} ${error?.message || "Please try again."}`
       );
+    })
+    .finally(() => {
+      if (taskLabel) stopConverterTaskTimer();
     });
 }
 
@@ -278,11 +341,17 @@ async function readExcelConverterMap() {
   converterMasterPartCorrectionCount = 0;
   converterMasterPartPageMatchCount = 0;
 
-  for (const file of converterExcelFiles) {
+  let excelFilesRead = 0;
+  const loadedWorkbooks = await Promise.all(converterExcelFiles.map(async file => {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
-    workbookRecords.push({ file, workbook });
-  }
+    excelFilesRead++;
+    updateConverterStatus(
+      `Step 1 of 5: Reading Excel files (${excelFilesRead} of ${converterExcelFiles.length})...`
+    );
+    return { file, workbook };
+  }));
+  workbookRecords.push(...loadedWorkbooks);
 
   const masterLookup = getConverterMasterPartLookup(workbookRecords);
 
@@ -763,26 +832,72 @@ async function extractPDFTextByPage(file) {
     data: bytes.slice(0)
   }).promise;
 
-  const pages = [];
+  const pages = new Array(pdf.numPages);
+  const failedPages = [];
 
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
-    const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
+  let nextPageNumber = 1;
+  let completedPages = 0;
+  const scanPage = async pageNumber => {
+    try {
+      pages[pageNumber - 1] = await withTimeout((async () => {
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const textItems = [];
+        const textParts = [];
+        for (let itemIndex = 0; itemIndex < textContent.items.length; itemIndex++) {
+          const item = textContent.items[itemIndex];
+          textItems.push({
+            text: item.str,
+            str: item.str,
+            transform: item.transform,
+            width: item.width,
+            height: item.height,
+            fontName: item.fontName
+          });
+          textParts.push(item.str);
+          if (itemIndex > 0 && itemIndex % 1000 === 0) {
+            await waitForConverterIdle();
+          }
+        }
+        page.cleanup?.();
+        return {
+          pageNumber,
+          text: textParts.join(" "),
+          textItems
+        };
+      })(), 15000, `PDF page ${pageNumber} text scan`);
+    } catch (error) {
+      console.warn(`Could not scan PDF page ${pageNumber}:`, error);
+      failedPages.push(pageNumber);
+      pages[pageNumber - 1] = {
+        pageNumber,
+        text: "",
+        textItems: [],
+        scanError: error?.message || "Page scan failed"
+      };
+    }
+    completedPages++;
+    const warning = failedPages.length
+      ? ` Skipped page(s) ${failedPages.join(", ")} after a scan error or timeout.`
+      : "";
+    if (completedPages === 1 || completedPages % 25 === 0 || completedPages === pdf.numPages) {
+      updateConverterStatus(`Step 2 of 5: Scanning PDF pages (${completedPages} of ${pdf.numPages})...${warning}`);
+    }
+  };
 
-    const textItems = textContent.items.map(item => ({
-      text: item.str,
-      transform: item.transform,
-      width: item.width,
-      height: item.height
-    }));
+  // Two workers reduce scan time without flooding the UI thread on large drawings.
+  const workerCount = Math.min(2, pdf.numPages);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextPageNumber <= pdf.numPages) {
+      const pageNumber = nextPageNumber++;
+      await waitForConverterPaint();
+      await scanPage(pageNumber);
+      await waitForConverterIdle();
+    }
+  });
+  await Promise.all(workers);
 
-    pages.push({
-      pageNumber,
-      text: textItems.map(item => item.text).join(" "),
-      textItems
-    });
-  }
-
+  converterTextScanFailedPages = [...new Set(failedPages)].sort((a, b) => a - b);
   return pages;
 }
 
@@ -800,9 +915,7 @@ async function extractDrawingPageOCRText(file, textPages) {
     .slice(0, 8);
   if (!drawingCandidates.length) return [];
 
-  updateConverterStatus(
-    `Scanning up to ${drawingCandidates.length} drawing-like page(s) with OCR...`
-  );
+  updateConverterStatus(`Step 3 of 5: Preparing OCR for ${drawingCandidates.length} drawing-like page(s)...`);
 
   const bytes = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({
@@ -810,11 +923,11 @@ async function extractDrawingPageOCRText(file, textPages) {
   }).promise;
   const results = [];
 
-  for (const candidate of drawingCandidates) {
+  for (const [candidateIndex, candidate] of drawingCandidates.entries()) {
     try {
       await waitForConverterIdle();
       updateConverterStatus(
-        `OCR scanning drawing page ${candidate.pageNumber}...`
+        `Step 3 of 5: OCR scanning drawing page ${candidate.pageNumber} (${candidateIndex + 1} of ${drawingCandidates.length})...`
       );
 
       const canvas = await renderPDFPageToCanvas(
@@ -861,16 +974,29 @@ async function renderPDFPageToCanvas(pdf, pageNumber, scale) {
   return canvas;
 }
 
-function withTimeout(promise, timeoutMs) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(
-        () => reject(new Error(`Timed out after ${timeoutMs}ms`)),
-        timeoutMs
-      );
-    })
-  ]);
+function withTimeout(promise, timeoutMs, label = "Operation") {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)} seconds.`)),
+      timeoutMs
+    );
+    Promise.resolve(promise).then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+function waitForConverterPaint() {
+  return new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
 }
 
 async function ensureTesseractLoaded() {
@@ -929,10 +1055,11 @@ function normalizeOCRText(text) {
     .trim();
 }
 
-function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
+async function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
   const map = [...baseMap];
   const existingKeys = new Set(map.map(item => `${item.oldPart}=>${item.itemCode}`));
   const pendingByOldPart = new Map();
+  let descriptionComparisons = 0;
   converterMasterPartPageMatchCount = 0;
 
   if (!converterMasterPartLookup?.entries?.length || !Array.isArray(pages)) {
@@ -940,26 +1067,34 @@ function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
     return converterMap;
   }
 
-  pages.forEach(page => {
+  for (const [pageIndex, page] of pages.entries()) {
+    if (pageIndex % 5 === 0) {
+      updateConverterStatus(`Step 2 of 5: Matching descriptions (${pageIndex + 1} of ${pages.length} pages)...`);
+      await waitForConverterIdle();
+    }
     const lines = getConverterTextItemLines(page.textItems || []);
 
-    lines.forEach(line => {
+    for (const line of lines) {
       const normalizedLine = normalizePartDescription(line.text);
-      if (!normalizedLine) return;
+      if (!normalizedLine) continue;
 
-      converterMasterPartLookup.entries.forEach(entry => {
-        if (!isMasterDescriptionMatchForPdfLine(line.text, entry)) return;
+      for (const entry of converterMasterPartLookup.entries) {
+        descriptionComparisons++;
+        if (descriptionComparisons % 2000 === 0) {
+          await waitForConverterIdle();
+        }
+        if (!isMasterDescriptionMatchForPdfLine(line.text, entry)) continue;
 
         const candidates = getConverterPartNumberCandidates(line.text)
           .filter(part => normalizePartNumber(part) !== normalizePartNumber(entry.partNumber));
         const uniqueCandidates = Array.from(new Set(candidates));
-        if (uniqueCandidates.length !== 1) return;
+        if (uniqueCandidates.length !== 1) continue;
 
         const oldPart = uniqueCandidates[0];
         const existing = pendingByOldPart.get(oldPart);
         if (existing && existing.itemCode !== entry.partNumber) {
           pendingByOldPart.set(oldPart, null);
-          return;
+          continue;
         }
 
         pendingByOldPart.set(oldPart, {
@@ -977,9 +1112,9 @@ function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
             note: "Corrected Part Number using Master List"
           }
         });
-      });
-    });
-  });
+      }
+    }
+  }
 
   pendingByOldPart.forEach(item => {
     if (!item) return;
@@ -1096,6 +1231,24 @@ function getConverterPageText(match) {
   return pages.length ? pages.join(", ") : "Not detected";
 }
 
+function getConverterMappingReview(match, replacementValue) {
+  const normalizedReplacement = normalizePartNumber(replacementValue);
+  const masterEntry = converterMasterPartLookup?.entries?.find(entry =>
+    normalizePartNumber(entry.partNumber) === normalizedReplacement
+  );
+  const excelDescription = String(match.description || "").trim();
+  const replacementDescription = String(
+    masterEntry?.description || match.masterPartCorrection?.description || excelDescription
+  ).trim();
+
+  return {
+    excelDescription,
+    replacementDescription,
+    source: [match.sourceFile, match.sourceSheet].filter(Boolean).join(" › "),
+    correctedByMaster: Boolean(match.masterPartCorrection)
+  };
+}
+
 function renderConverterAfterEditPanel() {
   const panel = document.getElementById("converterAfterEditPanel");
   if (!panel) return;
@@ -1105,18 +1258,40 @@ function renderConverterAfterEditPanel() {
     return;
   }
   panel.innerHTML = `
-    <div class="converter-after-edit-header">Manual New Part # Edits</div>
+    <div class="converter-after-edit-header">Review Excel Mappings</div>
+    <p class="converter-mapping-help">Confirm the old number, replacement number, and description against the source Excel row before building.</p>
     <div class="converter-after-edit-list">
       ${foundMatches.map(match => {
         const value = getManualConverterValue(match.oldPart) || match.itemCode;
+        const review = getConverterMappingReview(match, value);
         return `
-          <label class="converter-after-edit-row">
-            <span>${escapeConverterHTML(match.oldPart)}</span>
-            <input
-              value="${escapeConverterHTML(value)}"
-              onchange="updateConverterManualPart('${escapeConverterHTML(match.oldPart)}', this.value)"
-            />
-          </label>
+          <div class="converter-mapping-review-card">
+            <div class="converter-mapping-number-grid">
+              <div class="converter-mapping-number converter-mapping-old-number">
+                <span class="converter-mapping-label">Old part number</span>
+                <strong>${escapeConverterHTML(match.oldPart)}</strong>
+              </div>
+              <span class="converter-mapping-arrow" aria-hidden="true">→</span>
+              <label class="converter-mapping-number converter-mapping-new-number">
+                <span class="converter-mapping-label">Change to</span>
+                <input value="${escapeConverterHTML(value)}" onchange="updateConverterManualPart('${escapeConverterHTML(match.oldPart)}', this.value)" />
+              </label>
+            </div>
+            <div class="converter-mapping-description">
+              <span class="converter-mapping-label">Excel description</span>
+              <span>${escapeConverterHTML(review.excelDescription || "No description was provided in the mapping row.")}</span>
+            </div>
+            ${review.replacementDescription && review.replacementDescription !== review.excelDescription ? `
+              <div class="converter-mapping-description converter-master-description">
+                <span class="converter-mapping-label">Replacement description from Master List</span>
+                <span>${escapeConverterHTML(review.replacementDescription)}</span>
+              </div>
+            ` : ""}
+            <div class="converter-mapping-source">
+              ${review.source ? `Source: ${escapeConverterHTML(review.source)}` : "Source workbook row"}
+              ${review.correctedByMaster ? `<span class="converter-master-note"> · Replacement verified/corrected by Master List</span>` : ""}
+            </div>
+          </div>
         `;
       }).join("")}
     </div>
@@ -1126,7 +1301,8 @@ function renderConverterAfterEditPanel() {
 function previewPartNumberChanges() {
   return runConverterTask(
     previewPartNumberChangesImpl,
-    "Preview changes failed."
+    "Preview changes failed.",
+    "Starting PDF scan and change preview..."
   );
 }
 
@@ -1148,6 +1324,7 @@ async function previewPartNumberChangesImpl() {
 async function previewPartNumberChangesScan() {
   const scanPdfFile = converterPdfFile;
   const scanPdfVersion = converterPdfVersion;
+  converterTextScanFailedPages = [];
 
   if (!scanPdfFile) {
     showConverterMessage("PDF Required", "Upload a PDF first.");
@@ -1159,7 +1336,7 @@ async function previewPartNumberChangesScan() {
     return;
   }
 
-  updateConverterStatus("Reading Excel and scanning PDF...");
+  updateConverterStatus("Step 1 of 5: Reading conversion spreadsheets...");
 
   const map = await readExcelConverterMap();
   if (!isCurrentConverterPdf(scanPdfFile, scanPdfVersion)) return;
@@ -1167,7 +1344,8 @@ async function previewPartNumberChangesScan() {
   const pages = await extractPDFTextByPage(scanPdfFile);
   if (!isCurrentConverterPdf(scanPdfFile, scanPdfVersion)) return;
 
-  const effectiveMap = augmentConverterMapWithMasterDescriptionMatches(map, pages);
+  updateConverterStatus("Step 2 of 5: Matching spreadsheet parts to scanned text...");
+  const effectiveMap = await augmentConverterMapWithMasterDescriptionMatches(map, pages);
 
   if (!effectiveMap.length) {
     converterBuildCache = null;
@@ -1182,17 +1360,24 @@ async function previewPartNumberChangesScan() {
   converterBuildCache = null;
   converterLastScannedPages = pages;
   converterLastOcrPages = [];
-  converterMatches = buildConverterMatches(getEffectiveConverterMap(effectiveMap), pages);
+  converterMatches = await buildConverterMatchesAsync(getEffectiveConverterMap(effectiveMap), pages);
   renderConverterPreview();
 
   let ocrPages = [];
+  const useDeepDrawingOcr = document.getElementById("converterDeepOcr")?.checked === true;
 
-  try {
-    ocrPages = await extractDrawingPageOCRText(scanPdfFile, pages);
-  } catch (error) {
-    console.warn("Drawing-page OCR scan failed:", error);
+  if (useDeepDrawingOcr) {
+    try {
+      ocrPages = await extractDrawingPageOCRText(scanPdfFile, pages);
+    } catch (error) {
+      console.warn("Drawing-page OCR scan failed:", error);
+      updateConverterStatus(
+        "PDF text preview is ready. Drawing-page OCR stopped before it finished."
+      );
+    }
+  } else {
     updateConverterStatus(
-      "PDF text preview is ready. Drawing-page OCR stopped before it finished."
+      "Step 3 of 5: Deep drawing OCR skipped for faster preview. Enable it only for image-only drawing pages."
     );
   }
 
@@ -1200,7 +1385,7 @@ async function previewPartNumberChangesScan() {
 
   if (ocrPages.length) {
     converterLastOcrPages = ocrPages;
-    converterMatches = buildConverterMatches(getEffectiveConverterMap(converterMap), pages, ocrPages);
+    converterMatches = await buildConverterMatchesAsync(getEffectiveConverterMap(converterMap), pages, ocrPages);
     renderConverterPreview();
   }
 
@@ -1219,16 +1404,19 @@ async function previewPartNumberChangesScan() {
   const masterMatchText = converterMasterPartPageMatchCount
     ? ` ${converterMasterPartPageMatchCount} PDF part number(s) matched by Master List description.`
     : "";
-  updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}${correctionText}${masterMatchText}`);
+  const scanWarningText = converterTextScanFailedPages.length
+    ? ` Warning: page(s) ${converterTextScanFailedPages.join(", ")} could not be text-scanned and were skipped.`
+    : "";
+  updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}${correctionText}${masterMatchText}${scanWarningText}`);
 
   if (getDetectedChangeRows().some(row => !row.locationText.includes("drawing OCR"))) {
-    updateConverterStatus("Confirming visible replacements...");
+    updateConverterStatus("Step 4 of 5: Confirming visible replacements...");
     await buildConvertedPDFBytes(false);
     renderConverterPreview();
     updateConverterStatus(
       converterReplacementDetails.length
-        ? `Preview complete. Confirmed ${converterReplacementDetails.length} visible replacement(s).`
-        : "Preview complete. No visible replacement areas were confirmed."
+        ? `Preview complete. Confirmed ${converterReplacementDetails.length} visible replacement(s).${scanWarningText}`
+        : `Preview complete. No visible replacement areas were confirmed.${scanWarningText}`
     );
   }
 }
@@ -1247,7 +1435,22 @@ function warmConverterBuildCache() {
 }
 
 function buildConverterMatches(map, pages, ocrPages = []) {
-  return map.map(item => {
+  return map.map(item => buildConverterMatch(item, pages, ocrPages));
+}
+
+async function buildConverterMatchesAsync(map, pages, ocrPages = []) {
+  const matches = [];
+  for (let index = 0; index < map.length; index++) {
+    if (index % 25 === 0) {
+      updateConverterStatus(`Step 2 of 5: Matching part numbers (${index + 1} of ${map.length})...`);
+      await waitForConverterIdle();
+    }
+    matches.push(buildConverterMatch(map[index], pages, ocrPages));
+  }
+  return matches;
+}
+
+function buildConverterMatch(item, pages, ocrPages = []) {
     const foundPageCounts = pages
       .map(page => ({
         pageNumber: page.pageNumber,
@@ -1273,7 +1476,6 @@ function buildConverterMatches(map, pages, ocrPages = []) {
       ocrFoundPages,
       ocrFoundPageCounts
     };
-  });
 }
 
 function getConverterPageRows() {
@@ -1705,7 +1907,8 @@ function getConverterFoundText(match) {
 function generateConvertedPDF() {
   return runConverterTask(
     generateConvertedPDFImpl,
-    "Converted PDF could not be generated."
+    "Converted PDF could not be generated.",
+    "Starting converted PDF build..."
   );
 }
 
@@ -1736,7 +1939,7 @@ async function buildConvertedPDFBytes(showFinalStatus = false) {
     return null;
   }
 
-  updateConverterStatus("Generating converted PDF...");
+  updateConverterStatus("Step 4 of 5: Generating converted PDF...");
 
   const baseMap = converterMap.length
     ? converterMap
@@ -1831,7 +2034,7 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
     const pages = await extractPDFTextByPage(buildPdfFile);
     if (!isCurrentConverterPdf(buildPdfFile, buildPdfVersion)) return null;
     map = getEffectiveConverterMap(
-      augmentConverterMapWithMasterDescriptionMatches(baseMap, pages)
+      await augmentConverterMapWithMasterDescriptionMatches(baseMap, pages)
     );
   }
 
@@ -1848,10 +2051,26 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
     map.map(item => [item.oldPart, 0])
   );
 
-  for (let pageIndex = 0; pageIndex < pdfDoc.getPageCount(); pageIndex++) {
+  const pageIndexesToCheck = getConverterBuildPageIndexes(pdfDoc.getPageCount(), map);
+  updateConverterStatus(
+    `Step 4 of 5: Checking ${pageIndexesToCheck.length} candidate page(s) instead of all ${pdfDoc.getPageCount()} pages...`
+  );
+
+  for (const [candidateIndex, pageIndex] of pageIndexesToCheck.entries()) {
+    if (candidateIndex > 0 && candidateIndex % 10 === 0) {
+      updateConverterStatus(
+        `Step 4 of 5: Checking candidate pages (${candidateIndex + 1} of ${pageIndexesToCheck.length})...`
+      );
+      await waitForConverterIdle();
+    }
     const pdfLibPage = pdfDoc.getPage(pageIndex);
     const page = await pdfForText.getPage(pageIndex + 1);
-    const textContent = await page.getTextContent();
+    const cachedTextItems = converterLastScannedPages[pageIndex]?.pageNumber === pageIndex + 1
+      ? converterLastScannedPages[pageIndex].textItems
+      : null;
+    const textContent = cachedTextItems?.length
+      ? { items: cachedTextItems }
+      : await page.getTextContent();
     const pageSize = pdfLibPage.getSize();
 
     const pageReplacements = getPageTextReplacements(textContent.items, map);
@@ -1943,10 +2162,16 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
 
   converterChangedPages = Array.from(changedPages).sort((a, b) => a - b);
   converterReplacementDetails = replacementDetails;
+  updateConverterStatus("Step 5 of 5: Verifying converted part numbers...");
   const overlayVerification = await verifyConvertedPDF(
     convertedBytes,
     map,
     expectedReplacementCounts
+  );
+  updateConverterStatus(
+    converterChangedPages.length
+      ? `Step 5 of 5: Securing ${converterChangedPages.length} changed page(s)...`
+      : "Step 5 of 5: Completing verification..."
   );
   convertedBytes = await flattenChangedPDFPages(
     convertedBytes,
@@ -1980,6 +2205,17 @@ async function buildConvertedPDFBytesImpl(showFinalStatus = false) {
   };
 
   return converterBuildCache;
+}
+
+function getConverterBuildPageIndexes(pageCount, map) {
+  const allPageIndexes = Array.from({ length: pageCount }, (_, index) => index);
+  if (converterLastScannedPages.length !== pageCount) return allPageIndexes;
+
+  return allPageIndexes.filter(pageIndex => {
+    const scannedPage = converterLastScannedPages[pageIndex];
+    if (!scannedPage || scannedPage.scanError) return true;
+    return getPageTextReplacements(scannedPage.textItems || [], map).length > 0;
+  });
 }
 
 function getPageTextReplacements(textItems, map) {
@@ -2668,7 +2904,8 @@ function openConverterPdfPreview(pageNumber = null, oldPart = "") {
 
   return runConverterTask(
     openConverterPdfPreviewImpl,
-    "PDF preview could not be created."
+    "PDF preview could not be created.",
+    "Starting before and after PDF preview..."
   );
 }
 

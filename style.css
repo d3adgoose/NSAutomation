@@ -2716,8 +2716,204 @@ details summary:hover {
 
 .converter-after-edit-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 8px;
+}
+
+.converter-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.converter-ocr-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #40576c;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.converter-ocr-option input {
+  width: auto;
+  margin: 0;
+}
+
+.converter-ocr-option span {
+  color: #8a2d20;
+  font-weight: 600;
+}
+
+.converter-progress {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #bfd0e0;
+  border-left: 4px solid #2875b8;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.converter-progress.hidden {
+  display: none;
+}
+
+.converter-progress-current,
+.converter-modal-progress {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.converter-progress-current > span {
+  color: #263f55;
+  font-weight: 600;
+}
+
+.converter-elapsed-time {
+  flex: 0 0 auto;
+  min-width: 58px;
+  color: #075f72;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.converter-message-details {
+  margin-top: 8px;
+  color: #526579;
+  font-size: 12px;
+}
+
+.converter-message-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.converter-message-details ol {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding-left: 24px;
+  overflow: auto;
+}
+
+.converter-message-details li {
+  padding-left: 4px;
+}
+
+.converter-message-details time {
+  display: inline-block;
+  width: 46px;
+  color: #075f72;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.converter-modal-progress .warranty-status {
+  flex: 1 1 auto;
+}
+
+.converter-modal-progress .converter-elapsed-time:empty {
+  display: none;
+}
+
+.converter-mapping-help {
+  margin: -2px 0 10px;
+  color: #526579;
+  font-size: 13px;
+}
+
+.converter-mapping-review-card {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #c8d7e5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.converter-mapping-number-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) 42px minmax(180px, 1.1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.converter-mapping-number-grid > div,
+.converter-mapping-number-grid label,
+.converter-mapping-description {
+  display: grid;
+  gap: 4px;
+}
+
+.converter-mapping-label {
+  color: #526579;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.converter-mapping-number {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 7px;
+}
+
+.converter-mapping-old-number {
+  border: 1px solid #f1c5cf;
+  background: #fff7f9;
+}
+
+.converter-mapping-old-number strong {
+  color: #8f1635;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.converter-mapping-new-number {
+  border: 1px solid #9fd4df;
+  background: #f0fbfd;
+}
+
+.converter-mapping-new-number input {
+  width: 100%;
+  min-width: 0;
+  border-color: #62b9ca;
+  color: #075f72;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.converter-mapping-arrow {
+  display: grid;
+  place-items: center;
+  color: #2563eb;
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.converter-mapping-description {
+  padding-top: 8px;
+  border-top: 1px solid #e3eaf1;
+  color: #263746;
+}
+
+.converter-master-description {
+  color: #17476f;
+}
+
+.converter-mapping-source {
+  color: #64748b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .converter-after-edit-row {
@@ -2817,6 +3013,15 @@ details summary:hover {
   .converter-page-change-edit,
   .converter-after-edit-row {
     grid-template-columns: 1fr;
+  }
+
+  .converter-after-edit-list,
+  .converter-mapping-number-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .converter-mapping-arrow {
+    display: none;
   }
 }
 
