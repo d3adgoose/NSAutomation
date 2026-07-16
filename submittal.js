@@ -730,6 +730,26 @@ function updateUploadedPDFTOCLevel(id, newLevel) {
   renderUploadedPdfList();
 }
 
+async function downloadUploadedPacketPDF(id) {
+  const item = pdfLibrary.find(entry => entry.id === id);
+  if (!item?.file) {
+    await showMessageModal("PDF Not Found", "This uploaded PDF is no longer available in the builder.");
+    return;
+  }
+
+  try {
+    const fileName = item.fileName || item.file.name || `${item.displayTitle || "Uploaded PDF"}.pdf`;
+    downloadFile(item.file, fileName, "application/pdf");
+    updateUploadedPdfCount(`Download requested: ${fileName}. ${pdfLibrary.length} PDF(s) remain in the builder.`);
+  } catch (error) {
+    console.error("Could not download uploaded packet PDF:", error);
+    await showMessageModal(
+      "Download Failed",
+      `${error?.message || "Could not download this PDF."} The builder has not been cleared.`
+    );
+  }
+}
+
 function renderUploadedPdfList() {
   const container = document.getElementById("uploadedPdfList");
   if (!container) return;
@@ -793,6 +813,10 @@ function renderUploadedPdfList() {
         </button>
 
         ${subsectionButton}
+
+        <button onclick="downloadUploadedPacketPDF('${item.id}')">
+          Download
+        </button>
 
         <button
           class="remove-pdf-btn"
