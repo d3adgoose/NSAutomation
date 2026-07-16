@@ -545,6 +545,7 @@ function getConverterMasterPartLookup(workbookRecords) {
   }
 
   const entriesByDescription = new Map();
+  const entriesByToken = new Map();
   const entries = [];
 
   workbookRecords
@@ -600,12 +601,19 @@ function getConverterMasterPartLookup(workbookRecords) {
               if (!partMap.has(partNumber)) {
                 partMap.set(partNumber, entry);
               }
+
+              new Set(normalizedDescription.split(" "))
+                .forEach(token => {
+                  if (token.length < 4) return;
+                  if (!entriesByToken.has(token)) entriesByToken.set(token, []);
+                  entriesByToken.get(token).push(entry);
+                });
             });
           });
         });
     });
 
-  converterMasterPartLookup = { entries, entriesByDescription };
+  converterMasterPartLookup = { entries, entriesByDescription, entriesByToken };
   converterMasterPartLookupKey = lookupKey;
   return converterMasterPartLookup;
 }
@@ -905,7 +913,7 @@ async function extractDrawingPageOCRText(file, textPages) {
   const hasOCR = await ensureTesseractLoaded();
   if (!hasOCR) {
     updateConverterStatus(
-      "Drawing-page OCR could not load, so only selectable PDF text was scanned."
+      "Image-only page scanning could not load, so only normal selectable PDF text was scanned."
     );
     return [];
   }
@@ -915,7 +923,7 @@ async function extractDrawingPageOCRText(file, textPages) {
     .slice(0, 8);
   if (!drawingCandidates.length) return [];
 
-  updateConverterStatus(`Step 3 of 5: Preparing OCR for ${drawingCandidates.length} drawing-like page(s)...`);
+  updateConverterStatus(`Step 3 of 5: Preparing to read ${drawingCandidates.length} image-only page(s)...`);
 
   const bytes = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({
@@ -927,7 +935,7 @@ async function extractDrawingPageOCRText(file, textPages) {
     try {
       await waitForConverterIdle();
       updateConverterStatus(
-        `Step 3 of 5: OCR scanning drawing page ${candidate.pageNumber} (${candidateIndex + 1} of ${drawingCandidates.length})...`
+        `Step 3 of 5: Reading image-only page ${candidate.pageNumber} (${candidateIndex + 1} of ${drawingCandidates.length})...`
       );
 
       const canvas = await renderPDFPageToCanvas(
@@ -1068,24 +1076,30 @@ async function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
   }
 
   for (const [pageIndex, page] of pages.entries()) {
-    if (pageIndex % 5 === 0) {
+    if (pageIndex === 0 || pageIndex % 25 === 0 || pageIndex === pages.length - 1) {
       updateConverterStatus(`Step 2 of 5: Matching descriptions (${pageIndex + 1} of ${pages.length} pages)...`);
       await waitForConverterIdle();
     }
     const lines = getConverterTextItemLines(page.textItems || []);
 
     for (const line of lines) {
-      const normalizedLine = normalizePartDescription(line.text);
-      if (!normalizedLine) continue;
+      const partCandidates = Array.from(new Set(getConverterPartNumberCandidates(line.text)));
+      if (partCandidates.length !== 1) continue;
 
-      for (const entry of converterMasterPartLookup.entries) {
+      const possibleEntries = getMasterDescriptionCandidatesForPdfLine(
+        line.text,
+        converterMasterPartLookup
+      );
+      if (!possibleEntries.length) continue;
+
+      for (const entry of possibleEntries) {
         descriptionComparisons++;
         if (descriptionComparisons % 2000 === 0) {
           await waitForConverterIdle();
         }
         if (!isMasterDescriptionMatchForPdfLine(line.text, entry)) continue;
 
-        const candidates = getConverterPartNumberCandidates(line.text)
+        const candidates = partCandidates
           .filter(part => normalizePartNumber(part) !== normalizePartNumber(entry.partNumber));
         const uniqueCandidates = Array.from(new Set(candidates));
         if (uniqueCandidates.length !== 1) continue;
@@ -1127,6 +1141,24 @@ async function augmentConverterMapWithMasterDescriptionMatches(baseMap, pages) {
 
   converterMap = map;
   return converterMap;
+}
+
+function getMasterDescriptionCandidatesForPdfLine(lineText, lookup) {
+  const normalizedLine = normalizePdfLineDescriptionForMasterMatch(lineText);
+  if (!isSpecificMasterDescription(normalizedLine)) return [];
+
+  const exactMatches = lookup.entriesByDescription?.get(normalizedLine);
+  if (exactMatches?.size) return Array.from(exactMatches.values());
+
+  const tokenBuckets = Array.from(new Set(normalizedLine.split(" ")))
+    .filter(token => token.length >= 4)
+    .map(token => lookup.entriesByToken?.get(token))
+    .filter(bucket => bucket?.length)
+    .sort((a, b) => a.length - b.length);
+
+  // The rarest shared descriptive token provides a small fuzzy-match shortlist.
+  // Full similarity and token-coverage checks still validate every candidate.
+  return tokenBuckets[0] || [];
 }
 
 function getConverterTextItemLines(textItems) {
@@ -1218,7 +1250,7 @@ function getConverterChangeDetails(match) {
   (match.ocrFoundPageCounts || [])
     .filter(page => !(match.foundPages || []).includes(page.pageNumber))
     .forEach(page => {
-      details.push(`Page ${page.pageNumber}: drawing OCR review`);
+      details.push(`Page ${page.pageNumber}: image-only page review`);
     });
   return details;
 }
@@ -1370,14 +1402,14 @@ async function previewPartNumberChangesScan() {
     try {
       ocrPages = await extractDrawingPageOCRText(scanPdfFile, pages);
     } catch (error) {
-      console.warn("Drawing-page OCR scan failed:", error);
+      console.warn("Image-only page scan failed:", error);
       updateConverterStatus(
-        "PDF text preview is ready. Drawing-page OCR stopped before it finished."
+        "PDF text preview is ready. Image-only page scanning stopped before it finished."
       );
     }
   } else {
     updateConverterStatus(
-      "Step 3 of 5: Deep drawing OCR skipped for faster preview. Enable it only for image-only drawing pages."
+      "Step 3 of 5: Image-only page scanning is off for a faster preview. Turn it on when part numbers are inside scanned drawings or pictures."
     );
   }
 
@@ -1396,7 +1428,7 @@ async function previewPartNumberChangesScan() {
     item.ocrFoundPages.length
   ).length;
   const ocrText = ocrFoundCount
-    ? ` ${ocrFoundCount} part number(s) also appeared on drawing/OCR page(s).`
+    ? ` ${ocrFoundCount} part number(s) also appeared on image-only page(s).`
     : "";
   const correctionText = converterMasterPartCorrectionCount
     ? ` ${converterMasterPartCorrectionCount} row part number(s) corrected using Master List.`
@@ -1409,7 +1441,7 @@ async function previewPartNumberChangesScan() {
     : "";
   updateConverterStatus(`Preview complete. Found ${foundCount} matching part number(s).${ocrText}${correctionText}${masterMatchText}${scanWarningText}`);
 
-  if (getDetectedChangeRows().some(row => !row.locationText.includes("drawing OCR"))) {
+  if (getDetectedChangeRows().some(row => !row.locationText.includes("image-only page"))) {
     updateConverterStatus("Step 4 of 5: Confirming visible replacements...");
     await buildConvertedPDFBytes(false);
     renderConverterPreview();
@@ -1512,8 +1544,8 @@ function getConverterPageRows() {
           itemCode: getManualConverterValue(match.oldPart) || match.itemCode,
           masterPartCorrection: match.masterPartCorrection || null,
           count: ocrPage.count,
-          source: "Drawing OCR",
-          locationText: "drawing OCR review"
+          source: "Image-only page scan",
+          locationText: "image-only page review"
         });
       }
     });
@@ -1875,7 +1907,7 @@ function getDetectedChangeRows() {
           oldPart: match.oldPart,
           itemCode: match.itemCode,
           masterPartCorrection: match.masterPartCorrection || null,
-          locationText: `Page ${page.pageNumber} - drawing OCR review`
+          locationText: `Page ${page.pageNumber} - image-only page review`
         });
       });
   });
@@ -1897,7 +1929,7 @@ function getConverterFoundText(match) {
 
   if (match.ocrFoundPages?.length) {
     textParts.push(
-      `Drawing OCR: page(s) ${match.ocrFoundPages.join(", ")} - review manually`
+      `Image-only page scan: page(s) ${match.ocrFoundPages.join(", ")} - review manually`
     );
   }
 

@@ -6,7 +6,7 @@
 
   <title>Converter Automation</title>
 
-  <link rel="stylesheet" href="style.css?v=20260716-fast-preview" />
+  <link rel="stylesheet" href="style.css?v=20260716-image-page-label" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
 
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
@@ -51,7 +51,7 @@
             <li>Drop in or choose a PDF such as a submittal, O&M manual, or datasheet.</li>
             <li>Drop in or choose Excel file(s) with <strong>Old Part #</strong> / <strong>Item Code</strong>, or <strong>Old/Obsolete Part Number</strong> / <strong>New Part Number</strong>. You can include the PN Master List in the same upload.</li>
             <li>Click <strong>Preview Changes</strong> to scan the PDF.</li>
-            <li>Drawing-style pages are OCR scanned when normal PDF text is not available.</li>
+            <li>Turn on <strong>Scan image-only pages</strong> when part numbers are inside scanned drawings or pictures instead of selectable PDF text.</li>
             <li>Click <strong>Preview PDF</strong> to visually compare the original and converted PDF.</li>
             <li>Click <strong>Build Converted PDF</strong> to download the updated PDF.</li>
           </ol>
@@ -133,9 +133,9 @@
       <div class="converter-section-heading">
         <h2>Detected Changes <span id="detectedChangeCount">(0)</span></h2>
         <div class="converter-preview-actions">
-          <label class="converter-ocr-option" title="Search image-only drawing pages. This is much slower than normal PDF text scanning.">
+          <label class="converter-ocr-option" title="Use this when part numbers are inside scanned drawings or pictures. It takes longer than normal PDF text scanning.">
             <input id="converterDeepOcr" type="checkbox" />
-            Deep drawing OCR <span>(slower)</span>
+            Scan image-only pages <span>(slower)</span>
           </label>
           <button onclick="previewPartNumberChanges()">Preview Changes</button>
         </div>
@@ -202,6 +202,6 @@
 
   <script src="navigation.js?v=20260715-app-spellcheck"></script>
   <script src="ghostAutocomplete.js?v=20260713-library-data"></script>
-  <script src="converter.js?v=20260716-fast-preview"></script>
+  <script src="converter.js?v=20260716-image-page-label"></script>
 </body>
 </html>
