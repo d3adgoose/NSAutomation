@@ -1600,8 +1600,7 @@ function runPacketHistoryTransaction(mode, callback) {
   );
 }
 
-async function getPacketHistoryItems() {
-  const type = getPacketHistoryType();
+async function getPacketHistoryItems(type = getPacketHistoryType()) {
 
   const items = await runPacketHistoryTransaction("readonly", store =>
     new Promise((resolve, reject) => {
@@ -1947,8 +1946,21 @@ async function renderPacketHistory() {
   updatePacketHistoryStatus("Loading local history...");
 
   try {
-    const items = await getPacketHistoryItems();
-    const label = getPacketHistoryTitle();
+    const historyType = typeof isOMPacket === "function" && isOMPacket() && window.omPacketHistoryViewType
+      ? window.omPacketHistoryViewType
+      : getPacketHistoryType();
+    const items = await getPacketHistoryItems(historyType);
+    const label = historyType === "om" ? "O&M manual" : "submittal";
+    const isSubmittalViewInOM = getPacketHistoryType() === "om" && historyType === "submittal";
+
+    const heading = document.getElementById("packetHistoryHeading");
+    const intro = document.getElementById("packetHistoryIntro");
+    const toggle = document.getElementById("submittalHistoryToggle");
+    if (heading) heading.textContent = isSubmittalViewInOM ? "Submittal History" : "Local History";
+    if (intro) intro.textContent = isSubmittalViewInOM
+      ? "Last 3 submittals built on this device. Edit one to load its packet-builder work into O&M."
+      : "Last 3 O&M manuals built on this device.";
+    if (toggle) toggle.textContent = isSubmittalViewInOM ? "O&M History" : "Submittal History";
 
     if (items.length === 0) {
       updatePacketHistoryStatus(`No local ${label} history yet.`);
@@ -1990,6 +2002,14 @@ async function renderPacketHistory() {
     console.error("Could not render packet history:", error);
     updatePacketHistoryStatus(error.message || "Could not load local history.");
   }
+}
+
+function toggleOMSubmittalHistory() {
+  if (getPacketHistoryType() !== "om") return;
+  window.omPacketHistoryViewType = window.omPacketHistoryViewType === "submittal"
+    ? "om"
+    : "submittal";
+  renderPacketHistory();
 }
 
 async function downloadPacketHistoryEntry(id) {

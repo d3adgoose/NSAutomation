@@ -2795,6 +2795,11 @@ details summary:hover {
   gap: 8px;
 }
 
+.history-header-actions {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
 .converter-preview-actions {
   display: flex;
   align-items: center;
