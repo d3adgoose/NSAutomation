@@ -263,12 +263,29 @@ function getPacketPDFJSOptions(data) {
 }
 
 
+function importSpecificationProjectFields() {
+  if (new URLSearchParams(window.location.search).get("fromSpec") !== "1") return;
+  try {
+    const fields = JSON.parse(localStorage.getItem("ns-specification-packet-transfer-v1") || "null");
+    if (!fields) return;
+    ["projectNumber", "projectName", "washType", "systemName", "revision"].forEach(id => {
+      const field = document.getElementById(id);
+      if (field && fields[id] != null) field.value = fields[id];
+    });
+    setPacketDraftStatus("Specification project information imported. Autosave is on.", "is-saved");
+    schedulePacketDraftAutosave();
+  } catch (error) {
+    console.warn("Could not import specification project information:", error);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const dropZone = document.getElementById("dropZone");
   renderPacketHistory();
   setupBuilderHistoryControls();
   await restorePacketDraft();
   setupPacketDraftAutosave();
+  importSpecificationProjectFields();
   importPendingDatabasePDFsForBuilder();
 
   if (!dropZone) return;

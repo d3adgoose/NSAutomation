@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec Automation</title>
+  <link rel="stylesheet" href="style.css?v=20260722-persistent-sources" />
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+  <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+</head>
+<body>
+  <div class="hamburger-container">
+    <button id="hamburgerBtn" class="hamburger" aria-label="Open navigation" aria-expanded="false">☰</button>
+    <nav id="sideMenu" class="side-menu">
+      <a href="index.html">Home</a>
+      <a href="database.html">Database</a>
+      <a href="parts-library.html">Parts Library</a>
+      <a href="converter.html">Converter</a>
+      <a href="submittal.html">Submittal</a>
+      <a href="om.html">O&amp;M Manuals</a>
+      <a href="specification.html">Spec Automation</a>
+    </nav>
+  </div>
+
+  <header>
+    <h1>Specification Automation</h1>
+    <p>Build a consistent specification from manually reviewed submittal and O&amp;M information.</p>
+  </header>
+
+  <main class="spec-main">
+    <section class="card spec-toolbar-card">
+      <div>
+        <h2 id="specProjectTitle">Untitled Specification Project</h2>
+        <div id="specSaveStatus" class="parts-save-indicator saved-local">
+          <span class="parts-save-dot" aria-hidden="true"></span>
+          <span id="specSaveStatusText">Autosave is on.</span>
+        </div>
+        <div id="specOverallState" class="spec-overall-state is-setup" role="status" aria-live="polite"><strong>Setup needed</strong><span>Complete the project fields and specification fill-ins.</span></div>
+      </div>
+      <div class="button-row">
+        <button type="button" onclick="saveSpecificationProject(true)">Save Project</button>
+        <button type="button" class="secondary" onclick="newSpecificationProject()">New Project</button>
+      </div>
+    </section>
+
+    <details class="card spec-how-to">
+      <summary><strong>How to Use Spec Automation</strong></summary>
+      <div class="instructions-box spec-how-to-content">
+        <div class="spec-guidance-callout">
+          <strong>Part 1 is the N/S standard general-requirements section.</strong>
+          <p>Start with the built-in N/S wording and review every project-specific fill-in before issuing the specification. Save a named template only when you intentionally create an approved reusable variation.</p>
+        </div>
+
+        <h3>Recommended workflow</h3>
+        <ol>
+          <li><strong>Set up the project.</strong> Enter the project information and review the built-in Part 1, Part 2, and Part 3 starters.</li>
+          <li><strong>Add sources.</strong> Attach the O&amp;M manual, submittal, specification, or datasheets. Saved sources can be reanalyzed later without being reattached.</li>
+          <li><strong>Approve equipment.</strong> Confirm the principal equipment for Article 2.2. Child parts remain grouped beneath their parent equipment.</li>
+          <li><strong>Review extracted information.</strong> Confirm what each description applies to, its destination article, hierarchy level, and live preview before accepting it.</li>
+          <li><strong>Complete the template.</strong> Finish the bracketed fill-ins and adjust wording or hierarchy where needed.</li>
+          <li><strong>Review and export.</strong> Resolve remaining warnings, then create the automatically numbered Word or PDF specification.</li>
+        </ol>
+
+        <div class="spec-guidance-callout">
+          <strong>Helpful controls</strong>
+          <p><strong>Reanalyze</strong> refreshes extraction from a saved source. <strong>Reload Starter</strong> refreshes standard wording while preserving approved equipment, accepted source wording, and completed fill-ins. In text editors, use <strong>Tab</strong> or <strong>Shift+Tab</strong> to change hierarchy and <strong>Enter</strong> to continue numbering.</p>
+        </div>
+
+        <div class="spec-guidance-callout is-note">
+          <strong>Approval and fill-ins perform different jobs.</strong>
+          <p>Equipment approval builds the Article 2.2 equipment list. Project and technical fill-ins complete bracketed requirements. Source suggestions add reviewed equipment-specific wording to the selected article.</p>
+        </div>
+
+        <h3>What belongs in each part?</h3>
+        <div class="spec-part-guide-grid">
+          <article>
+            <h4>Part 1 — General</h4>
+            <p>Repeated administrative requirements: scope, related work, quality assurance, submittals, delivery, approved-equal procedure, closeout documents, and standard warranty requirements.</p>
+          </article>
+          <article>
+            <h4>Part 2 — Products</h4>
+            <p>The equipment itself: system type, performance, dimensions, utilities, construction, brushes, pumps, electrical controls, safety devices, water/reclaim systems, components, and options.</p>
+          </article>
+          <article>
+            <h4>Part 3 — Execution</h4>
+            <p>What must happen at the site: preparation, installation, plumbing and electrical connections, startup, commissioning, testing, training, O&amp;M delivery, and final acceptance.</p>
+          </article>
+        </div>
+
+        <h3>Example wording</h3>
+        <p class="spec-example-warning"><strong>N/S setup examples:</strong> Use these examples to identify where information belongs. Replace them with the standard N/S wording and the requirements for the current project.</p>
+
+        <details class="spec-example-details">
+          <summary>Part 1 example — General</summary>
+          <pre>PART 1 - GENERAL
+
+1.1 SUMMARY
+A. Provide a complete automatic vehicle-washing system, including equipment, controls, accessories, startup, testing, and training required for an operational installation.
+
+1.2 SUBMITTALS
+A. Submit product data, equipment layouts, utility requirements, wiring information, and installation instructions.
+B. Clearly identify proposed deviations from the specification.
+
+1.3 QUALITY ASSURANCE
+A. Equipment shall be furnished by a manufacturer regularly engaged in producing vehicle-washing systems of the type specified.
+
+1.4 DELIVERY, STORAGE, AND HANDLING
+A. Protect equipment from damage, moisture, contamination, and improper storage before installation.
+
+1.5 CLOSEOUT SUBMITTALS
+A. Provide operating instructions, maintenance information, final drawings, parts information, and warranty documentation.</pre>
+        </details>
+
+        <details class="spec-example-details">
+          <summary>Part 2 example — Products</summary>
+          <pre>PART 2 - PRODUCTS
+
+2.1 SYSTEM DESCRIPTION
+A. Provide an automatic vehicle-washing system configured for the vehicle sizes and operating conditions indicated for the project.
+
+2.2 PERFORMANCE REQUIREMENTS
+A. System shall accommodate vehicles up to [MAXIMUM HEIGHT] high and [MAXIMUM WIDTH] wide.
+B. Wash cycle shall include the selected wash, rinse, wheel-wash, and optional reclaim functions.
+
+2.3 CONSTRUCTION
+A. Structural components exposed to the wash environment shall be corrosion resistant and suitable for continuous wet operation.
+
+2.4 ELECTRICAL AND CONTROLS
+A. Provide a control system consisting of [CONTROL PANEL / PLC / HMI DESCRIPTION].
+B. Provide automatic and manual operation, status indication, alarms, emergency-stop monitoring, and required safety interlocks.
+
+2.5 UTILITIES
+A. Electrical service: [VOLTAGE], [PHASE], [AMPERAGE].
+B. Water service: [CONNECTION SIZE], [PRESSURE], [FLOW].</pre>
+        </details>
+
+        <details class="spec-example-details">
+          <summary>Part 3 example — Execution</summary>
+          <pre>PART 3 - EXECUTION
+
+3.1 EXAMINATION
+A. Verify that the wash bay, foundations, utilities, drainage, and access conditions are ready for equipment installation.
+
+3.2 INSTALLATION
+A. Install equipment according to approved drawings and manufacturer instructions.
+B. Coordinate field plumbing and electrical connections with the responsible contractors.
+
+3.3 STARTUP AND TESTING
+A. Perform startup, adjustment, and functional testing of the complete system.
+B. Demonstrate required operating sequences and safety devices.
+
+3.4 TRAINING
+A. Train the owner’s personnel in normal operation, shutdown, safety, and routine maintenance.
+
+3.5 CLOSEOUT
+A. Deliver final O&amp;M manuals, drawings, warranties, and service contact information.</pre>
+        </details>
+
+        <div class="spec-guidance-callout is-note">
+          <strong>Do not paste an entire O&amp;M manual into these boxes.</strong>
+          <p>Use only requirements that should become part of the project specification. Leave out serial numbers, troubleshooting histories, spare-parts ordering instructions, prices, and maintenance procedures that apply only after installation.</p>
+        </div>
+      </div>
+    </details>
+
+    <nav class="spec-tabs" aria-label="Specification workflow">
+      <button class="active" data-spec-tab="project">1. Project</button>
+      <button data-spec-tab="sources">2. Sources</button>
+      <button data-spec-tab="suggestions">3. Source Review</button>
+      <button data-spec-tab="review">4. Review &amp; Export</button>
+    </nav>
+
+    <section id="specTab-project" class="card spec-tab-panel">
+      <h2>Project and Specification Sections</h2>
+      <p class="converter-muted">Part 1 starts with the built-in reusable template. Parts 2 and 3 hold project-specific clauses copied from reviewed source documents. All three sections are included in the final PDF.</p>
+      <div class="spec-form-grid">
+        <label>Project number<input data-project-field="projectNumber" placeholder="Example: 24001" /></label>
+        <label>Specification section<input data-project-field="sectionNumber" placeholder="111126" /></label>
+        <label>Project name<input data-project-field="projectName" placeholder="Example: Central Facility" /></label>
+        <label>Customer<input data-project-field="customer" placeholder="Example: City Transit Authority" /></label>
+        <label>Equipment type<select data-project-field="equipmentType"><option value="">Choose equipment type</option><option value="Car Wash">Car Wash</option><option value="Truck Wash">Truck Wash</option><option value="Train Wash">Train Wash</option><option value="Transit Wash">Transit Wash</option></select></label>
+        <label>System name<input data-project-field="systemName" placeholder="Example: ECO5-SS-FLT" /></label>
+        <label>Engineer<input data-project-field="engineer" placeholder="Example: Shawn or Kash" /></label>
+        <label>Revision<input data-project-field="revision" placeholder="Example: 0" /></label>
+        <label>Date<input type="date" data-project-field="date" /></label>
+        <label class="spec-wide-field">Project notes <small>(optional and internal)</small><textarea rows="3" data-project-field="notes" placeholder="Example: Internal reminder about a customer request or item to verify. These notes are not required."></textarea></label>
+        <div class="spec-wide-field spec-part-editor">
+          <div class="spec-part-editor-heading">
+            <div><h3>Part 1 — General</h3><p>The editor mirrors the PDF hierarchy. Project details remain in the fields above and are not repeated in the specification text.</p></div>
+            <div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(1)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(1)">Save as Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(1)">Browse Templates</button></div>
+          </div>
+          <div class="spec-fill-in-guide"><strong>Fill-in status</strong><span data-fill-part="part1" data-fill-placeholders="[EQUIPMENT TYPE]">Equipment type</span><span data-fill-part="part1" data-fill-placeholders="[SYSTEM NAME / MODEL]">System name</span><span data-fill-part="part1" data-fill-placeholders="[WARRANTY PERIOD]">Warranty period</span><span data-fill-part="part1" data-fill-placeholders="[WARRANTY START EVENT]">Warranty start event</span></div>
+          <label>Part 1 specification text<textarea rows="22" wrap="off" data-project-field="part1" spellcheck="true" autocapitalize="sentences" placeholder="Use Reload Part 1 Starter, paste the N/S standard wording, or import a Word file."></textarea></label>
+        </div>
+        <div class="spec-wide-field spec-part-editor">
+          <div class="spec-part-editor-heading">
+            <div><h3>Part 2 — Products</h3><p>Complete the bracketed items in the N/S starter, then add or remove clauses for the selected equipment.</p></div>
+            <div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(2)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(2)">Save as Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(2)">Browse Templates</button></div>
+          </div>
+          <div class="spec-fill-in-guide"><strong>Fill-in status</strong><span data-fill-part="part2" data-fill-placeholders="[EQUIPMENT TYPE]">Equipment type</span><span data-fill-part="part2" data-fill-placeholders="[SYSTEM NAME / MODEL]">System / model</span><span data-fill-part="part2" data-fill-placeholders="[MAIN EQUIPMENT]">Approved equipment list</span><span data-fill-part="part2" data-fill-placeholders="[VEHICLE TYPE]">Vehicle type</span><span data-fill-part="part2" data-fill-placeholders="[MAXIMUM HEIGHT];;[MAXIMUM WIDTH]">Vehicle dimensions</span><span data-fill-part="part2" data-fill-placeholders="[CYCLE TIME OR OPERATING SPEED]">Capacity / speed</span><span data-fill-part="part2" data-fill-placeholders="[WASH FUNCTIONS]">Wash functions</span><span data-fill-part="part2" data-fill-placeholders="[SEQUENCE OF OPERATION]">Sequence of operation</span><span data-fill-part="part2" data-fill-placeholders="[STRUCTURAL MATERIAL]">Construction</span><span data-fill-part="part2" data-fill-placeholders="[VOLTAGE];;[PHASE];;[AMPERAGE]">Electrical</span><span data-fill-part="part2" data-fill-placeholders="[CONTROL PANEL / PLC / HMI DESCRIPTION]">Controls</span><span data-fill-part="part2" data-fill-placeholders="[CONNECTION SIZE];;[PRESSURE];;[FLOW]">Water service</span><span data-fill-part="part2" data-fill-placeholders="[AIR REQUIREMENT OR NOT REQUIRED]">Air service</span><span data-fill-part="part2" data-fill-placeholders="[REQUIREMENTS OR NOT INCLUDED]">Chemical / reclaim</span><span data-fill-part="part2" data-fill-placeholders="[SELECTED OPTIONS AND ACCESSORIES]">Options</span></div>
+          <label>Part 2 specification text<textarea rows="20" wrap="off" data-project-field="part2" spellcheck="true" autocapitalize="sentences" placeholder="Use Reload Part 2 Starter to add the N/S fill-in template."></textarea></label>
+        </div>
+        <div class="spec-wide-field spec-part-editor">
+          <div class="spec-part-editor-heading">
+            <div><h3>Part 3 — Execution</h3><p>Complete the bracketed responsibilities and project requirements, then remove any clauses that do not apply.</p></div>
+            <div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(3)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(3)">Save as Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(3)">Browse Templates</button></div>
+          </div>
+          <div class="spec-fill-in-guide"><strong>Fill-in status</strong><span data-fill-part="part3" data-fill-placeholders="[INSTALLATION RESPONSIBLE PARTY]">Installation</span><span data-fill-part="part3" data-fill-placeholders="[FIELD PLUMBING RESPONSIBLE PARTY]">Field plumbing</span><span data-fill-part="part3" data-fill-placeholders="[FIELD ELECTRICAL RESPONSIBLE PARTY]">Field electrical</span><span data-fill-part="part3" data-fill-placeholders="[COMMISSIONING RESPONSIBLE PARTY];;[STARTUP REQUIREMENT]">Startup</span><span data-fill-part="part3" data-fill-placeholders="[ACCEPTANCE TEST PROCEDURE];;[REQUIRED TROUBLE-FREE CYCLES]">Acceptance testing</span><span data-fill-part="part3" data-fill-placeholders="[TRAINING HOURS]">Training</span><span data-fill-part="part3" data-fill-placeholders="[O&amp;M MANUAL QUANTITY]">O&amp;M manuals</span><span data-fill-part="part3" data-fill-placeholders="[WARRANTY PERIOD];;[WARRANTY START EVENT]">Warranty</span></div>
+          <label>Part 3 specification text<textarea rows="18" wrap="off" data-project-field="part3" spellcheck="true" autocapitalize="sentences" placeholder="Use Reload Part 3 Starter to add the N/S fill-in template."></textarea></label>
+        </div>
+      </div>
+    </section>
+
+    <section id="specTab-sources" class="card spec-tab-panel hidden">
+      <h2>Source Documents</h2>
+      <div class="spec-source-explanation">
+        <strong>How source files are used</strong>
+        <ul>
+          <li><strong>Searchable PDF or Word:</strong> text is read locally and turned into editable Part 2 or Part 3 suggestions.</li>
+          <li><strong>Part 1 Word or Text:</strong> use the importer under Project; that content loads directly into the Part 1 editor.</li>
+          <li><strong>Scanned pages, diagrams, and images:</strong> remain attached for manual review; this version cannot interpret them.</li>
+        </ul>
+      </div>
+      <label id="specDocumentDrop" class="upload-box spec-drop-zone">
+        <strong>Drop source files here or choose files</strong>
+        <span>PDF, Word, or Text</span>
+        <input id="specDocumentInput" type="file" accept=".pdf,.docx,.txt" multiple hidden />
+      </label>
+      <div id="specSourceStatus" class="spec-load-status" role="status" aria-live="polite">Waiting for source files.</div>
+      <div id="specDocumentList" class="spec-document-list"></div>
+    </section>
+
+    <section id="specTab-suggestions" class="card spec-tab-panel hidden">
+      <div class="spec-section-heading">
+        <div><h2>Source Review</h2><p class="converter-muted">Review wording found in searchable PDFs and Word files. Each card identifies what equipment the description appears to cover. Change its destination, edit it, then accept or reject it.</p></div>
+        <div class="button-row spec-review-header-actions"><button type="button" class="secondary" onclick="refreshSpecSourceReview()">Refresh Review</button><button type="button" class="secondary" onclick="acceptAllSpecSuggestions()">Accept All Visible</button><button type="button" class="delete-btn" onclick="rejectAllSpecSuggestions()">Reject All Visible</button></div>
+      </div>
+      <div class="spec-review-toolbar">
+        <label><span>Search</span><input id="specSuggestionSearch" type="search" placeholder="Equipment, wording, source, or article" oninput="renderSpecSourceSuggestions()"></label>
+        <label><span>Show</span><select id="specSuggestionStatus" onchange="renderSpecSourceSuggestions()"><option value="">All review items</option><option value="pending">Awaiting review</option><option value="accepted">Accepted</option></select></label>
+        <label><span>Sort</span><select id="specSuggestionSort" onchange="renderSpecSourceSuggestions()"><option value="destination" selected>Destination article</option><option value="source">Source order</option><option value="equipment">Equipment A-Z</option><option value="status">Review status</option><option value="page">Source page</option></select></label>
+        <button type="button" class="secondary" onclick="clearSpecSuggestionFilters()">Clear Filters</button>
+      </div>
+      <div id="specEquipmentApprovalPanel" class="spec-direct-fill-panel">
+        <div class="spec-section-heading">
+          <div><h3>Equipment List Approval</h3><p class="converter-muted">Approve equipment found in an O&amp;M manual or submittal table of contents before it is added to 2.2 and used for “Description applies to” in 2.5.</p></div>
+          <button type="button" class="secondary" onclick="openManualTocEquipmentEntry()">Add Equipment</button>
+        </div>
+        <div id="specEquipmentApprovalSummary" class="spec-load-status">No equipment records extracted yet.</div>
+        <div id="specEquipmentApprovalList" class="spec-equipment-approval-list"></div>
+      </div>
+      <div class="spec-direct-fill-panel">
+        <div class="spec-section-heading">
+          <div><h3>Extracted Template Values</h3><p class="converter-muted">Review design values found in specifications and submittals. O&amp;M manuals are limited to clearly identified system model and sequence-of-operation information so maintenance instructions are not mistaken for design requirements.</p></div>
+          <button type="button" class="secondary" onclick="applyAllExtractedSpecFillIns()">Apply All Pending Values</button>
+        </div>
+        <div id="specExtractedFillSummary" class="spec-load-status">No template values extracted yet.</div>
+        <div id="specExtractedFillList" class="spec-extracted-fill-list"></div>
+      </div>
+      <div id="specSuggestionSummary" class="spec-load-status">No source suggestions yet.</div>
+      <div id="specSuggestionList" class="spec-suggestion-list"></div>
+    </section>
+
+    <section id="specTab-components" class="card spec-tab-panel hidden">
+      <div class="spec-section-heading">
+        <div><h2>Equipment and Components <small>(Optional)</small></h2><p class="converter-muted">Use this only when you need a separate, source-traceable equipment inventory or schedule. Skip it when your goal is simply to fill Parts 1–3 from extracted values.</p></div>
+        <button type="button" onclick="openSpecComponentEditor()">Add Component</button>
+      </div>
+      <details class="spec-inline-example"><summary>Equipment entry example</summary><div><strong>Part:</strong> PUMP-1001 &nbsp; <strong>Description:</strong> High-pressure wash pump &nbsp; <strong>Manufacturer / Model:</strong> Goulds / e-SH &nbsp; <strong>Quantity:</strong> 1 ea &nbsp; <strong>Source:</strong> Pump Datasheet, page 2</div></details>
+      <div class="spec-filter-row">
+        <input id="specComponentSearch" type="search" placeholder="Search equipment, part, manufacturer, or source" />
+        <select id="specComponentStatusFilter"><option value="">All statuses</option><option>Needs Review</option><option>Database Verified</option><option>Document Extracted</option><option>Rule Calculated</option><option>Manually Entered</option><option>Engineer Approved</option></select>
+        <select id="specComponentSort"><option value="partNumber">Sort by part number</option><option value="description">Sort by description</option><option value="quantity">Sort by quantity</option></select>
+      </div>
+      <div class="spec-table-wrap"><table class="spec-table"><thead><tr><th>Select</th><th>Include</th><th>Part</th><th>Old part</th><th>Description</th><th>Manufacturer / model</th><th>Qty</th><th>Assembly</th><th>Source</th><th>Method</th><th>Status</th><th>Actions</th></tr></thead><tbody id="specComponentBody"></tbody></table></div>
+      <div class="button-row"><button type="button" class="secondary" onclick="mergeSelectedSpecComponents()">Merge Selected</button><button type="button" class="secondary" onclick="recalculateSelectedSpecComponents()">Apply Rules to Selected</button></div>
+    </section>
+
+    <section id="specTab-rules" class="card spec-tab-panel hidden">
+      <div class="spec-section-heading"><div><h2>Reusable Quantity Rules <small>(Optional)</small></h2><p class="converter-muted">Use this only to calculate dependent quantities, such as two mounting brackets per motor. It is not needed to fill or export the specification template.</p></div><button type="button" onclick="openSpecRuleEditor()">Add Rule</button></div>
+      <div class="spec-table-wrap"><table class="spec-table"><thead><tr><th>Active</th><th>ID</th><th>Name</th><th>Parent</th><th>Child</th><th>Multiplier</th><th>Conditions</th><th>Actions</th></tr></thead><tbody id="specRuleBody"></tbody></table></div>
+    </section>
+
+    <section id="specTab-sheet" class="card spec-tab-panel hidden">
+      <div class="spec-section-heading"><div><h2>Equipment Schedule <small>(Optional)</small></h2><p class="converter-muted">Use this only to generate a separate schedule from the optional Equipment inventory. It is not needed for the Part 1–3 template workflow.</p></div><button type="button" onclick="generateSpecificationRows()">Generate / Refresh Rows</button></div>
+      <div id="specSheetRows"></div>
+    </section>
+
+    <section id="specTab-review" class="card spec-tab-panel hidden">
+      <h2>Review and Export</h2>
+      <div id="specReviewSummary" class="spec-review-grid"></div>
+      <p class="converter-muted">Resolve missing values and conflicts before issuing a specification. This tool does not automatically approve engineering requirements.</p>
+      <div id="specExportStatus" class="spec-load-status" role="status" aria-live="polite">Ready to export.</div>
+      <div class="button-row"><button type="button" onclick="exportSpecificationWord()">Export Word</button><button type="button" onclick="exportSpecificationPDF()">Export PDF</button></div>
+    </section>
+
+    <section id="specReviewLocalSaves" class="card hidden">
+      <div class="history-card-header">
+        <div><h2>Local History</h2><p class="card-intro">Last 3 specifications exported on this device.</p></div>
+        <div class="button-row history-header-actions"><button type="button" class="secondary" onclick="clearSpecificationHistory()">Clear History</button><button type="button" class="secondary" onclick="renderSpecificationLocalSaves()">Refresh</button></div>
+      </div>
+      <div id="specLocalSaveSlots" class="packet-history-list"></div>
+      <p id="specHistoryStatus" class="warranty-status" aria-live="polite">Loading local history...</p>
+      <div id="specHistoryStorage" class="storage-usage-card" aria-live="polite"><div class="storage-usage-label"><strong>Browser Storage</strong><span>Checking...</span></div><div class="storage-usage-track"><span style="width:0%"></span></div><small>Local drafts and history</small></div>
+    </section>
+  </main>
+
+  <div id="specModal" class="modal hidden">
+    <div class="modal-content spec-modal-content">
+      <h2 id="specModalTitle">Edit</h2>
+      <div id="specModalBody"></div>
+      <div id="specModalActions" class="button-row"></div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="specification.js?v=20260722-word-article-numbering-reset"></script>
+  <script src="navigation.js?v=20260720-spec-automation"></script>
+</body>
+</html>

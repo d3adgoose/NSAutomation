@@ -48,6 +48,7 @@ const RECENT_TOOL_LABELS = {
   "database.html": "PDF Datasheet Library",
   "parts-library.html": "Drawing & Parts Library",
   "converter.html": "Part Number Converter",
+  "specification.html": "Spec Automation",
   "submittal.html": "Submittal Builder",
   "om.html": "O&M Manual Builder"
 };
