@@ -7,3 +7,6 @@ const supabaseClient = window.supabase
       SUPABASE_ANON_KEY
     )
   : null;
+
+// Expose the shared authenticated session to local, same-origin feature modules.
+window.supabaseClient = supabaseClient;

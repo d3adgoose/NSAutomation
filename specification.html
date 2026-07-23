@@ -4,12 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Spec Automation</title>
-  <link rel="stylesheet" href="style.css?v=20260722-persistent-sources" />
+  <link rel="stylesheet" href="style.css?v=20260723-ai-github-unified-v2" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
 </head>
 <body>
@@ -44,6 +45,7 @@
       <div class="button-row">
         <button type="button" onclick="saveSpecificationProject(true)">Save Project</button>
         <button type="button" class="secondary" onclick="newSpecificationProject()">New Project</button>
+        <button id="specAiHeaderButton" type="button" class="spec-ai-header-button is-checking hidden" onclick="openSpecLocalAiStatusModal()"><span class="spec-ai-header-status-dot" aria-hidden="true"></span><span class="spec-ai-header-status-label">Checking Local AI</span></button>
       </div>
     </section>
 
@@ -55,15 +57,33 @@
           <p>Start with the built-in N/S wording and review every project-specific fill-in before issuing the specification. Save a named template only when you intentionally create an approved reusable variation.</p>
         </div>
 
-        <h3>Recommended workflow</h3>
+        <h3>Recommended four-step workflow</h3>
         <ol>
-          <li><strong>Set up the project.</strong> Enter the project information and review the built-in Part 1, Part 2, and Part 3 starters.</li>
-          <li><strong>Add sources.</strong> Attach the O&amp;M manual, submittal, specification, or datasheets. Saved sources can be reanalyzed later without being reattached.</li>
-          <li><strong>Approve equipment.</strong> Confirm the principal equipment for Article 2.2. Child parts remain grouped beneath their parent equipment.</li>
-          <li><strong>Review extracted information.</strong> Confirm what each description applies to, its destination article, hierarchy level, and live preview before accepting it.</li>
-          <li><strong>Complete the template.</strong> Finish the bracketed fill-ins and adjust wording or hierarchy where needed.</li>
-          <li><strong>Review and export.</strong> Resolve remaining warnings, then create the automatically numbered Word or PDF specification.</li>
+          <li><strong>1. Project.</strong> Enter project information and complete the bracketed fields in Part 1, Part 2, and Part 3. Each Part has an <strong>Improve with AI</strong> button for reviewed writing assistance.</li>
+          <li><strong>2. Sources + Local AI.</strong> Add manuals, drawings, submittals, specifications, datasheets, Word files, or text files. Use <strong>Analyze</strong> for fast text extraction or <strong>Analyze with AI</strong> for drawings, scans, schedules, tables, and difficult pages.</li>
+          <li><strong>3. Source Review.</strong> Verify every equipment item, fill-in, clause, source citation, and suggested destination. Accept only information confirmed against the source.</li>
+          <li><strong>4. Review &amp; Export.</strong> Resolve missing fill-ins and review warnings, confirm the complete Part 1–3 specification, and export the automatically numbered Word or PDF file.</li>
         </ol>
+
+        <div class="spec-guidance-callout is-note">
+          <strong>Using Improve with AI</strong>
+          <p>Describe the writing change in the chat-style request box and select the arrow or press Enter. Shift+Enter adds a new line. Review the GitHub-style red and green comparison, choose Accept or Revert for each change, then select Accept Changes. The three most recent revisions remain in Writing History.</p>
+        </div>
+
+        <div class="spec-guidance-callout">
+          <strong>Fillable fields stay protected</strong>
+          <p>Bracketed fields such as <code>[EQUIPMENT TYPE]</code> and <code>[SYSTEM NAME / MODEL]</code> remain available after AI writing changes. Their removal is locked unless the request explicitly names the placeholder and asks to remove it.</p>
+        </div>
+
+        <div class="spec-guidance-callout is-note">
+          <strong>What Local AI does</strong>
+          <p>Qwen3-VL reads each selected source page for mechanical, electrical, plumbing, controls, equipment, part numbers, ratings, dimensions, utilities, and specification wording. Results are marked for review and never enter the issued specification until a user accepts them.</p>
+        </div>
+
+        <div class="spec-guidance-callout">
+          <strong>If Local AI will not start</strong>
+          <p>Confirm you are signed in with the shared database login. <span id="specAiLoggedInDownloadHelp" class="hidden">If Ollama is not installed on the approved company AI computer, use the <a href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">official Ollama for Windows download</a> and ask the automation administrator to install the approved Qwen3-VL model. </span>If the model is still loading, wait a minute and try the source again.</p>
+        </div>
 
         <div class="spec-guidance-callout">
           <strong>Helpful controls</strong>
@@ -169,7 +189,7 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
 
     <nav class="spec-tabs" aria-label="Specification workflow">
       <button class="active" data-spec-tab="project">1. Project</button>
-      <button data-spec-tab="sources">2. Sources</button>
+      <button data-spec-tab="sources">2. Sources + Local AI</button>
       <button data-spec-tab="suggestions">3. Source Review</button>
       <button data-spec-tab="review">4. Review &amp; Export</button>
     </nav>
@@ -190,24 +210,24 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
         <label class="spec-wide-field">Project notes <small>(optional and internal)</small><textarea rows="3" data-project-field="notes" placeholder="Example: Internal reminder about a customer request or item to verify. These notes are not required."></textarea></label>
         <div class="spec-wide-field spec-part-editor">
           <div class="spec-part-editor-heading">
-            <div><h3>Part 1 — General</h3><p>The editor mirrors the PDF hierarchy. Project details remain in the fields above and are not repeated in the specification text.</p></div>
-            <div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(1)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(1)">Save as Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(1)">Browse Templates</button></div>
+            <div class="spec-part-heading-copy"><span class="spec-part-label">Specification editor</span><h3>Part 1 — General</h3><p>The editor mirrors the PDF hierarchy. Project details remain in the fields above and are not repeated in the specification text.</p></div>
+            <div class="spec-editor-actions"><button type="button" class="spec-ai-write-button" onclick="openSpecificationAiWriter(1)"><span aria-hidden="true">✦</span><span><strong>Improve with AI</strong><small>Review Part 1 writing</small></span></button><div class="spec-template-action-group"><span>Template tools</span><div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(1)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(1)">Save Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(1)">Browse</button></div></div></div>
           </div>
           <div class="spec-fill-in-guide"><strong>Fill-in status</strong><span data-fill-part="part1" data-fill-placeholders="[EQUIPMENT TYPE]">Equipment type</span><span data-fill-part="part1" data-fill-placeholders="[SYSTEM NAME / MODEL]">System name</span><span data-fill-part="part1" data-fill-placeholders="[WARRANTY PERIOD]">Warranty period</span><span data-fill-part="part1" data-fill-placeholders="[WARRANTY START EVENT]">Warranty start event</span></div>
           <label>Part 1 specification text<textarea rows="22" wrap="off" data-project-field="part1" spellcheck="true" autocapitalize="sentences" placeholder="Use Reload Part 1 Starter, paste the N/S standard wording, or import a Word file."></textarea></label>
         </div>
         <div class="spec-wide-field spec-part-editor">
           <div class="spec-part-editor-heading">
-            <div><h3>Part 2 — Products</h3><p>Complete the bracketed items in the N/S starter, then add or remove clauses for the selected equipment.</p></div>
-            <div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(2)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(2)">Save as Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(2)">Browse Templates</button></div>
+            <div class="spec-part-heading-copy"><span class="spec-part-label">Specification editor</span><h3>Part 2 — Products</h3><p>Complete the bracketed items in the N/S starter, then add or remove clauses for the selected equipment.</p></div>
+            <div class="spec-editor-actions"><button type="button" class="spec-ai-write-button" onclick="openSpecificationAiWriter(2)"><span aria-hidden="true">✦</span><span><strong>Improve with AI</strong><small>Review Part 2 writing</small></span></button><div class="spec-template-action-group"><span>Template tools</span><div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(2)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(2)">Save Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(2)">Browse</button></div></div></div>
           </div>
           <div class="spec-fill-in-guide"><strong>Fill-in status</strong><span data-fill-part="part2" data-fill-placeholders="[EQUIPMENT TYPE]">Equipment type</span><span data-fill-part="part2" data-fill-placeholders="[SYSTEM NAME / MODEL]">System / model</span><span data-fill-part="part2" data-fill-placeholders="[MAIN EQUIPMENT]">Approved equipment list</span><span data-fill-part="part2" data-fill-placeholders="[VEHICLE TYPE]">Vehicle type</span><span data-fill-part="part2" data-fill-placeholders="[MAXIMUM HEIGHT];;[MAXIMUM WIDTH]">Vehicle dimensions</span><span data-fill-part="part2" data-fill-placeholders="[CYCLE TIME OR OPERATING SPEED]">Capacity / speed</span><span data-fill-part="part2" data-fill-placeholders="[WASH FUNCTIONS]">Wash functions</span><span data-fill-part="part2" data-fill-placeholders="[SEQUENCE OF OPERATION]">Sequence of operation</span><span data-fill-part="part2" data-fill-placeholders="[STRUCTURAL MATERIAL]">Construction</span><span data-fill-part="part2" data-fill-placeholders="[VOLTAGE];;[PHASE];;[AMPERAGE]">Electrical</span><span data-fill-part="part2" data-fill-placeholders="[CONTROL PANEL / PLC / HMI DESCRIPTION]">Controls</span><span data-fill-part="part2" data-fill-placeholders="[CONNECTION SIZE];;[PRESSURE];;[FLOW]">Water service</span><span data-fill-part="part2" data-fill-placeholders="[AIR REQUIREMENT OR NOT REQUIRED]">Air service</span><span data-fill-part="part2" data-fill-placeholders="[REQUIREMENTS OR NOT INCLUDED]">Chemical / reclaim</span><span data-fill-part="part2" data-fill-placeholders="[SELECTED OPTIONS AND ACCESSORIES]">Options</span></div>
           <label>Part 2 specification text<textarea rows="20" wrap="off" data-project-field="part2" spellcheck="true" autocapitalize="sentences" placeholder="Use Reload Part 2 Starter to add the N/S fill-in template."></textarea></label>
         </div>
         <div class="spec-wide-field spec-part-editor">
           <div class="spec-part-editor-heading">
-            <div><h3>Part 3 — Execution</h3><p>Complete the bracketed responsibilities and project requirements, then remove any clauses that do not apply.</p></div>
-            <div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(3)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(3)">Save as Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(3)">Browse Templates</button></div>
+            <div class="spec-part-heading-copy"><span class="spec-part-label">Specification editor</span><h3>Part 3 — Execution</h3><p>Complete the bracketed responsibilities and project requirements, then remove any clauses that do not apply.</p></div>
+            <div class="spec-editor-actions"><button type="button" class="spec-ai-write-button" onclick="openSpecificationAiWriter(3)"><span aria-hidden="true">✦</span><span><strong>Improve with AI</strong><small>Review Part 3 writing</small></span></button><div class="spec-template-action-group"><span>Template tools</span><div class="spec-template-actions"><button type="button" class="secondary" onclick="loadSpecStarterTemplate(3)">Reload Starter</button><button type="button" class="secondary" onclick="saveSpecificationPartTemplate(3)">Save Template</button><button type="button" class="secondary" onclick="openSpecificationTemplateLibrary(3)">Browse</button></div></div></div>
           </div>
           <div class="spec-fill-in-guide"><strong>Fill-in status</strong><span data-fill-part="part3" data-fill-placeholders="[INSTALLATION RESPONSIBLE PARTY]">Installation</span><span data-fill-part="part3" data-fill-placeholders="[FIELD PLUMBING RESPONSIBLE PARTY]">Field plumbing</span><span data-fill-part="part3" data-fill-placeholders="[FIELD ELECTRICAL RESPONSIBLE PARTY]">Field electrical</span><span data-fill-part="part3" data-fill-placeholders="[COMMISSIONING RESPONSIBLE PARTY];;[STARTUP REQUIREMENT]">Startup</span><span data-fill-part="part3" data-fill-placeholders="[ACCEPTANCE TEST PROCEDURE];;[REQUIRED TROUBLE-FREE CYCLES]">Acceptance testing</span><span data-fill-part="part3" data-fill-placeholders="[TRAINING HOURS]">Training</span><span data-fill-part="part3" data-fill-placeholders="[O&amp;M MANUAL QUANTITY]">O&amp;M manuals</span><span data-fill-part="part3" data-fill-placeholders="[WARRANTY PERIOD];;[WARRANTY START EVENT]">Warranty</span></div>
           <label>Part 3 specification text<textarea rows="18" wrap="off" data-project-field="part3" spellcheck="true" autocapitalize="sentences" placeholder="Use Reload Part 3 Starter to add the N/S fill-in template."></textarea></label>
@@ -217,12 +237,16 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
 
     <section id="specTab-sources" class="card spec-tab-panel hidden">
       <h2>Source Documents</h2>
+      <div id="specLocalAiBanner" class="spec-local-ai-banner hidden">
+        <div><strong>Local AI Drawing and Document Review</strong><p>After adding a source, select <strong>Analyze with Local AI</strong> beside it to read drawings, schedules, tables, equipment, utilities, and technical requirements. Your database login is required and every result remains pending until reviewed.</p></div>
+        <div class="spec-local-ai-banner-actions"><span>Qwen3-VL · Runs locally</span></div>
+      </div>
       <div class="spec-source-explanation">
         <strong>How source files are used</strong>
         <ul>
           <li><strong>Searchable PDF or Word:</strong> text is read locally and turned into editable Part 2 or Part 3 suggestions.</li>
           <li><strong>Part 1 Word or Text:</strong> use the importer under Project; that content loads directly into the Part 1 editor.</li>
-          <li><strong>Scanned pages, diagrams, and images:</strong> remain attached for manual review; this version cannot interpret them.</li>
+          <li><strong>Scanned pages, diagrams, and drawings:</strong> use <strong>Analyze with Local AI</strong> for visual engineering extraction, then verify every result against the source.</li>
         </ul>
       </div>
       <label id="specDocumentDrop" class="upload-box spec-drop-zone">
@@ -230,7 +254,16 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
         <span>PDF, Word, or Text</span>
         <input id="specDocumentInput" type="file" accept=".pdf,.docx,.txt" multiple hidden />
       </label>
-      <div id="specSourceStatus" class="spec-load-status" role="status" aria-live="polite">Waiting for source files.</div>
+      <div id="specAiProgress" class="packet-build-progress spec-ai-progress" aria-live="polite">
+        <div class="packet-build-current">
+          <div id="specSourceStatus" class="spec-load-status" role="status">Waiting for source files.</div>
+          <strong id="specAiElapsed" class="packet-build-elapsed">0:00</strong>
+        </div>
+        <details class="packet-build-messages">
+          <summary>Show Local AI messages</summary>
+          <ol id="specAiMessageHistory"></ol>
+        </details>
+      </div>
       <div id="specDocumentList" class="spec-document-list"></div>
     </section>
 
@@ -318,7 +351,10 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
   </div>
 
   <script src="common.js"></script>
-  <script src="specification.js?v=20260722-word-article-numbering-reset"></script>
+  <script src="supabaseClient.js"></script>
+  <script src="specification-ai.js?v=20260723-ai-fillable-lock"></script>
+  <script src="specification.js?v=20260723-ai-github-unified-v2"></script>
+  <script src="global-auth.js?v=20260722-database-login-style"></script>
   <script src="navigation.js?v=20260720-spec-automation"></script>
 </body>
 </html>

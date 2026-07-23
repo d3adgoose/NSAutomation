@@ -7,10 +7,17 @@ const SPEC_HISTORY_DB_NAME = "ns-specification-history-v1";
 const SPEC_HISTORY_STORE = "exports";
 const SPEC_SOURCE_DB_NAME = "ns-specification-sources-v1";
 const SPEC_SOURCE_STORE = "files";
+const SPEC_LOCAL_AI_EXAMPLES_KEY = "ns-spec-local-ai-examples-v1";
+const SPEC_AI_WRITING_HISTORY_KEY = "ns-spec-ai-writing-history-v1";
 const SPEC_STATUSES = ["Needs Review", "Database Verified", "Document Extracted", "Rule Calculated", "Manually Entered", "Engineer Approved"];
 let specDocumentFiles = new Map();
+let specAiAuthenticatedUser = null;
 let specState = createEmptySpecificationState();
 let specAutosaveTimer = null;
+let specLocalAiStartedAt = 0;
+let specLocalAiTimer = null;
+let specLocalAiLastMessage = "";
+let specLocalAiActiveSource = "";
 const specProjectFieldTimers = new Map();
 const SPEC_AUTOSAVE_DELAY = 900;
 const SPEC_OPTIONAL_EQUIPMENT_WORKFLOW_ENABLED = false;
@@ -315,16 +322,68 @@ function createEmptySpecificationState() {
     version: 2,
     id: crypto.randomUUID(),
     project: { projectNumber: "", sectionNumber: "111126", projectName: "", customer: "", equipmentType: "", vehicleType: "", systemName: "", engineer: "", revision: "0", date: new Date().toISOString().slice(0, 10), notes: "", part1: getPart1StarterTemplate(), part2: getPart2StarterTemplate(), part3: getPart3StarterTemplate() },
-    documents: [], sourceSuggestions: [], fillInSuggestions: [], components: [], rules: [], specificationRows: [], projectFieldBindings: {}, fillInValues: {}, revisionHistory: [], updatedAt: new Date().toISOString()
+    documents: [], sourceSuggestions: [], fillInSuggestions: [], components: [], rules: [], specificationRows: [], projectFieldBindings: {}, fillInValues: {}, revisionHistory: [], aiAudit: [], updatedAt: new Date().toISOString()
   };
+}
+
+function normalizeSpecificationCollections(state) {
+  ["documents", "sourceSuggestions", "fillInSuggestions", "components", "rules", "specificationRows", "revisionHistory", "aiAudit"].forEach(key => {
+    if (!Array.isArray(state[key])) state[key] = [];
+  });
+  if (!state.projectFieldBindings || typeof state.projectFieldBindings !== "object" || Array.isArray(state.projectFieldBindings)) state.projectFieldBindings = {};
+  if (!state.fillInValues || typeof state.fillInValues !== "object" || Array.isArray(state.fillInValues)) state.fillInValues = {};
+  return state;
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   bindSpecificationUI();
   loadSpecificationProject();
   restoreSpecificationSourceFiles();
+  updateSpecAiDownloadGuidanceVisibility();
+  window.addEventListener("ns-auth-session-changed", updateSpecAiDownloadGuidanceVisibility);
+  window.addEventListener("spec-local-ai-message", event => recordSpecLocalAiMessage(event.detail?.message));
   if (new URLSearchParams(location.search).get("sample") === "1") loadSpecificationSampleData();
 });
+
+async function updateSpecAiDownloadGuidanceVisibility() {
+  const help = document.getElementById("specAiLoggedInDownloadHelp");
+  const banner = document.getElementById("specLocalAiBanner");
+  const headerButton = document.getElementById("specAiHeaderButton");
+  if (!window.supabaseClient) { help?.classList.add("hidden"); banner?.classList.add("hidden"); headerButton?.classList.add("hidden"); return; }
+  const { data } = await window.supabaseClient.auth.getSession().catch(() => ({ data: null }));
+  specAiAuthenticatedUser = data?.session?.user || null;
+  help?.classList.toggle("hidden", !specAiAuthenticatedUser);
+  banner?.classList.toggle("hidden", !specAiAuthenticatedUser);
+  headerButton?.classList.toggle("hidden", !specAiAuthenticatedUser);
+  renderSpecDocuments();
+  if (specAiAuthenticatedUser && headerButton) {
+    headerButton.classList.remove("is-ready", "is-error");
+    headerButton.classList.add("is-checking");
+    const label = headerButton.querySelector(".spec-ai-header-status-label");
+    if (label) label.textContent = "Checking Local AI";
+    try {
+      const status = await SpecificationLocalAI.status();
+      setSpecAiHeaderStatus(Boolean(status?.ready));
+    } catch {
+      setSpecAiHeaderStatus(false);
+    }
+  }
+}
+
+function setSpecAiHeaderStatus(ready) {
+  const button = document.getElementById("specAiHeaderButton");
+  if (!button) return;
+  button.classList.remove("is-checking", "is-ready", "is-error");
+  button.classList.add(ready ? "is-ready" : "is-error");
+  const label = button.querySelector(".spec-ai-header-status-label");
+  if (label) label.textContent = ready ? "Local AI Ready" : "Local AI Offline";
+  button.title = ready ? "Local AI is connected. Open status details." : "Local AI is unavailable. Open status details.";
+}
+
+function openSpecLocalAiSources() {
+  showSpecTab("sources");
+  document.getElementById("specLocalAiBanner")?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
 
 function openSpecificationSourceDB() {
   return new Promise((resolve, reject) => {
@@ -473,7 +532,7 @@ function loadSpecificationProject() {
     const stored = JSON.parse(localStorage.getItem(SPEC_STORAGE_KEY) || "null");
     if (stored?.version) {
       const previousVersion = Number(stored.version || 1);
-      specState = { ...createEmptySpecificationState(), ...stored, version: 2, project: { ...createEmptySpecificationState().project, ...(stored.project || {}) } };
+      specState = normalizeSpecificationCollections({ ...createEmptySpecificationState(), ...stored, version: 2, project: { ...createEmptySpecificationState().project, ...(stored.project || {}) } });
       if (previousVersion < 2) {
         if (!String(specState.project.part1 || "").trim()) specState.project.part1 = getPart1StarterTemplate();
         if (!String(specState.project.part2 || "").trim()) specState.project.part2 = getPart2StarterTemplate();
@@ -2071,6 +2130,8 @@ function renderSpecSourceSuggestions() {
   });
   summary.textContent = `${pending} awaiting review · ${accepted} accepted`;
   summary.className = `spec-load-status ${pending ? "is-loading" : "is-complete"}`;
+  const aiSuggestionCount = suggestions.filter(item => item.extractionKind === "Local Qwen3-VL engineering extraction").length;
+  if (aiSuggestionCount) summary.textContent += ` · ${aiSuggestionCount} from AI`;
   list.innerHTML = displayedSuggestions.length ? displayedSuggestions.map(item => {
     const destination = getSpecSuggestionDestination(item);
     const articleOptions = getSpecSuggestionArticleOptions(destination.key).map(option => `<option value="${option.article}" ${option.article === destination.article ? "selected" : ""}>${option.article} - ${escapeSpec(option.title)}</option>`).join("");
@@ -2090,6 +2151,13 @@ function renderSpecSourceSuggestions() {
   Array.from(list.querySelectorAll(".spec-suggestion-card")).forEach((card, index) => {
     const item = displayedSuggestions[index];
     if (!item) return;
+    if (item.extractionKind === "Local Qwen3-VL engineering extraction") {
+      const badge = document.createElement("span");
+      badge.className = "spec-ai-origin-badge";
+      badge.textContent = "AI Extracted";
+      badge.title = "Created by Local AI and requires engineer review";
+      card.querySelector(".spec-suggestion-heading > div")?.prepend(badge);
+    }
     const destination = getSpecSuggestionDestination(item);
     const preview = document.createElement("div");
     preview.className = "spec-inline-placement-preview";
@@ -2244,6 +2312,33 @@ function getExtractedSpecFillPlacementPreview(candidate) {
   const originalText = String(specState.project?.[part] || "");
   const placeholder = String(candidate.placeholder || "");
   const value = String(candidate.value || "").trim();
+  const projectKey = Object.keys(SPEC_PROJECT_PLACEHOLDERS).find(key => SPEC_PROJECT_PLACEHOLDERS[key].includes(placeholder));
+  if (projectKey) {
+    const projectLabel = SPEC_PROJECT_LABELS[projectKey] || "Project Information";
+    return { label: `Project Information - ${projectLabel}`, text: `PROJECT INFORMATION\n${projectLabel}: ${value || placeholder}\n\nThis value updates the ${projectLabel} project field and its matching specification placeholders.` };
+  }
+  const searchText = `${candidate.label || ""} ${placeholder}`.replace(/[\[\]_.]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!originalText.includes(placeholder)) {
+    const equipmentFields = [
+      [/\b(?:ns )?part number|catalog number|item number\b/, "Part number"],
+      [/\bmanufacturer|manufactured by|make\b/, "Manufacturer"],
+      [/\bmodel(?: number)?\b/, "Model"],
+      [/\btotal qty|quantity|qty\b/, "Quantity"],
+      [/\bf\.?l\.?a|full load amp|amperes?|amps?\b/, "Electrical - full-load amperes"],
+      [/\bvoltage|volts?\b/, "Electrical - voltage"],
+      [/\bphase|hertz|frequency\b/, "Electrical - phase / frequency"],
+      [/\bhorsepower|\bhp\b/, "Performance - horsepower"],
+      [/\bflow|gpm|pressure|psi|capacity|rating\b/, "Performance rating"],
+      [/\bdimension|height|width|length|weight\b/, "Dimensions"],
+      [/\bmaterial|stainless|galvanized\b/, "Material"],
+    ];
+    const equipmentField = equipmentFields.find(([pattern]) => pattern.test(searchText))?.[1];
+    if (equipmentField) return { label: `Equipment Schedule - ${equipmentField}`, text: `EQUIPMENT AND COMPONENTS\nSuggested field: ${equipmentField}\nExtracted value: ${value || "Not provided"}\n\nAssociate this value with the correct equipment record before generating the specification sheet. Technical requirements may then be placed in Article 2.5.` };
+    if (/\bcustomer|owner|department|agency\b/.test(searchText)) return { label: "Project Information - Customer", text: `PROJECT INFORMATION\nSuggested field: Customer\nExtracted value: ${value || "Not provided"}\n\nReview before replacing the current project customer.` };
+    if (/\bcity|state|location|address\b/.test(searchText)) return { label: "Project Information - Location", text: `PROJECT INFORMATION\nSuggested field: Project name / location\nExtracted value: ${value || "Not provided"}\n\nNo dedicated location field exists; review and place this manually if needed.` };
+    if (/\bcar wash|truck wash|train wash|transit wash|equipment type\b/.test(searchText)) return { label: "Project Information - Equipment Type", text: `PROJECT INFORMATION\nSuggested field: Equipment Type\nExtracted value: ${value || "Not provided"}` };
+    return { label: "No automatic template destination", text: `MANUAL REVIEW REQUIRED\nExtracted field: ${candidate.label || placeholder || "Unknown field"}\nExtracted value: ${value || "Not provided"}\n\nThis source label does not match a supported specification placeholder. Reject it or place it manually after confirming its purpose.` };
+  }
   let previewText = originalText;
   let locationNeedle = placeholder;
   if (candidate.status === "pending" && placeholder && originalText.includes(placeholder)) {
@@ -2275,6 +2370,8 @@ function renderExtractedSpecFillIns() {
   const applied = candidates.filter(item => item.status === "accepted").length;
   summary.textContent = candidates.length ? `${pending} awaiting review · ${applied} applied to the template` : "No template values extracted yet.";
   summary.className = `spec-load-status ${pending ? "is-loading" : candidates.length ? "is-complete" : ""}`;
+  const aiFillCount = candidates.filter(item => item.detectionMethod === "Local Qwen3-VL extraction").length;
+  if (aiFillCount) summary.textContent += ` · ${aiFillCount} from AI`;
   list.innerHTML = candidates.map(item => {
     const comparison = item.status === "pending" ? getExtractedSpecFillConflict(item) : { conflict: false, currentValue: "" };
     const badge = item.status === "accepted" ? "Applied" : comparison.conflict ? "Conflict" : "Review";
@@ -2285,6 +2382,13 @@ function renderExtractedSpecFillIns() {
   Array.from(list.querySelectorAll(".spec-extracted-fill-card")).forEach((card, index) => {
     const item = candidates[index];
     if (!item) return;
+    if (item.detectionMethod === "Local Qwen3-VL extraction") {
+      const badge = document.createElement("span");
+      badge.className = "spec-ai-origin-badge";
+      badge.textContent = "AI Extracted";
+      badge.title = "Created by Local AI and requires engineer review";
+      card.querySelector(".spec-extracted-fill-heading > div")?.prepend(badge);
+    }
     const placement = getExtractedSpecFillPlacementPreview(item);
     const preview = document.createElement("div");
     preview.className = "spec-inline-placement-preview spec-fill-placement-preview";
@@ -2728,11 +2832,638 @@ function setSpecSourceStatus(message, state = "") {
   if (!status) return;
   status.textContent = message;
   status.className = `spec-load-status${state ? ` ${state}` : ""}`;
+  recordSpecLocalAiMessage(message);
+}
+
+function formatSpecLocalAiElapsed(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor(totalSeconds % 3600 / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+function updateSpecLocalAiElapsed() {
+  if (!specLocalAiStartedAt) return;
+  const elapsed = document.getElementById("specAiElapsed");
+  if (elapsed) elapsed.textContent = formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt);
+}
+
+function recordSpecLocalAiMessage(message) {
+  if (!message || message === specLocalAiLastMessage || !specLocalAiStartedAt) return;
+  specLocalAiLastMessage = message;
+  const history = document.getElementById("specAiMessageHistory");
+  if (!history) return;
+  const item = document.createElement("li");
+  const time = document.createElement("time");
+  const text = document.createElement("span");
+  time.textContent = formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt);
+  text.textContent = message;
+  item.append(time, text);
+  history.appendChild(item);
+  while (history.children.length > 80) history.firstElementChild?.remove();
+  history.scrollTop = history.scrollHeight;
+}
+
+function startSpecLocalAiTimer(message) {
+  specLocalAiStartedAt = performance.now();
+  specLocalAiLastMessage = "";
+  document.getElementById("specAiMessageHistory")?.replaceChildren();
+  const elapsed = document.getElementById("specAiElapsed");
+  if (elapsed) elapsed.textContent = "0:00";
+  clearInterval(specLocalAiTimer);
+  specLocalAiTimer = setInterval(updateSpecLocalAiElapsed, 250);
+  setSpecSourceStatus(message, "is-loading");
+}
+
+function stopSpecLocalAiTimer() {
+  updateSpecLocalAiElapsed();
+  clearInterval(specLocalAiTimer);
+  specLocalAiTimer = null;
+  specLocalAiStartedAt = 0;
+  specLocalAiActiveSource = "";
 }
 
 function renderSpecDocuments() {
   const list = document.getElementById("specDocumentList"); if (!list) return;
-  list.innerHTML = specState.documents.length ? specState.documents.map(doc => `<div class="spec-document-row"><div><strong>${escapeSpec(doc.name)}</strong><span>${formatSpecBytes(doc.size)} · ${doc.storage} · ${escapeSpec(doc.importSummary || "Reference attached")}</span></div><div class="button-row"><button class="secondary" onclick="reanalyzeSpecDocument('${doc.id}')">${specDocumentFiles.has(doc.id) ? "Reanalyze" : "Reattach & Reanalyze"}</button><button class="secondary" onclick="downloadSpecDocument('${doc.id}')">Download</button><button class="delete-btn" onclick="removeSpecDocument('${doc.id}')">Remove</button></div></div>`).join("") : `<p class="converter-muted">No project documents added.</p>`;
+  list.innerHTML = specState.documents.length ? specState.documents.map(doc => `<div class="spec-document-row"><div><strong>${escapeSpec(doc.name)}</strong><span>${formatSpecBytes(doc.size)} · ${doc.storage} · ${escapeSpec(doc.importSummary || "Reference attached")}</span></div><div class="button-row">${specAiAuthenticatedUser ? `<button onclick="analyzeSpecDocumentWithLocalAI('${doc.id}')">Analyze with Local AI</button>` : ""}<button class="secondary" onclick="reanalyzeSpecDocument('${doc.id}')">${specDocumentFiles.has(doc.id) ? "Reanalyze" : "Reattach & Reanalyze"}</button><button class="secondary" onclick="downloadSpecDocument('${doc.id}')">Download</button><button class="delete-btn" onclick="removeSpecDocument('${doc.id}')">Remove</button></div></div>`).join("") : `<p class="converter-muted">No project documents added.</p>`;
+  list.querySelectorAll(".spec-document-row").forEach(row => {
+    row.firstElementChild?.classList.add("spec-document-info");
+    row.lastElementChild?.classList.remove("button-row");
+    row.lastElementChild?.classList.add("spec-document-actions");
+    const aiButton = row.querySelector('[onclick^="analyzeSpecDocumentWithLocalAI"]');
+    const analyzeButton = row.querySelector('[onclick^="reanalyzeSpecDocument"]');
+    if (aiButton) { aiButton.classList.add("spec-ai-source-button"); aiButton.innerHTML = '<span aria-hidden="true">✦</span><span>Analyze with AI</span>'; aiButton.title = "Visual review with Local AI"; }
+    if (analyzeButton) { analyzeButton.textContent = "Analyze"; analyzeButton.title = "Fast built-in text extraction"; }
+  });
+}
+
+async function analyzeSpecDocumentWithLocalAI(id) {
+  const record = specState.documents.find(item => item.id === id);
+  if (!record || !window.SpecificationLocalAI) return showSpecMessage("Local AI Unavailable", "The local AI connector did not load.");
+  let file = specDocumentFiles.get(id) || await getSpecificationSourceFile(id).catch(() => null);
+  if (!file) return showSpecMessage("Source Unavailable", "Reattach this source once so it can be analyzed.");
+  specDocumentFiles.set(id, file);
+  const user = await getSpecAiLoggedInUser().catch(error => { showSpecMessage("Database Login Required", error.message); return null; });
+  if (!user) return;
+  if (!(await showSpecAiSetupNotice(user))) return;
+  try {
+    const status = await SpecificationLocalAI.status();
+    if (!status.ready) return showSpecMessage("Model Not Installed", `Install ${status.model} in Ollama before analyzing this source.`);
+  } catch (error) { return showSpecMessage("Local AI Not Ready", error.message); }
+  const confirmed = await showSpecConfirm("Analyze Confidential Source Locally", `${file.name} will be sent only to the N/S local AI service after your database login is verified. Extracted results will require review.`, "Analyze Locally");
+  if (!confirmed) return;
+  specLocalAiActiveSource = file.name;
+  startSpecLocalAiTimer(`Preparing ${file.name}...`);
+  try {
+    const source = await createSpecAiAnalysisSource(file);
+    const completedPages = new Set((specState.aiAudit || [])
+      .filter(entry => ["Local source analyzed", "Local source skipped"].includes(entry.action) && entry.documentId === id && entry.sourcePage)
+      .map(entry => entry.sourcePage));
+    recordSpecLocalAiMessage(`Opened ${source.total} page(s). ${completedPages.size} page(s) were restored from the previous checkpoint.`);
+    const pendingIndexes = Array.from({ length: source.total }, (_, index) => index).filter(index => !completedPages.has(source.pageLabel(index)));
+    if (!pendingIndexes.length) {
+      setSpecSourceStatus(`Local AI already finished all ${source.total} page(s) in ${file.name}.`, "is-complete");
+      stopSpecLocalAiTimer();
+      return;
+    }
+    let equipmentAdded = 0, fillsAdded = 0, clausesAdded = 0, skipped = 0, timedOut = 0, cursor = 0, queuedUnit = null;
+    const seenText = new Set();
+    while (cursor < pendingIndexes.length || queuedUnit) {
+      const batch = [];
+      let batchMode = "";
+      while ((cursor < pendingIndexes.length || queuedUnit) && batch.length < (batchMode === "text" ? 10 : 1)) {
+        const unit = queuedUnit || await source.getUnit(pendingIndexes[cursor++]);
+        queuedUnit = null;
+        const textKey = String(unit.text || "").toLowerCase().replace(/\s+/g, " ").trim();
+        const skipReason = unit.visuallyBlank ? "blank page"
+          : unit.searchableTextHandled ? "searchable text already handled by built-in extraction"
+          : textKey.length > 160 && seenText.has(textKey) ? "exact duplicate page"
+          : "";
+        if (textKey.length > 160) seenText.add(textKey);
+        if (skipReason) {
+          specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source skipped", provider: "built-in-text-screening", documentId: id, sourcePage: unit.sourcePage, dataSent: false, outcome: skipReason });
+          completedPages.add(unit.sourcePage); skipped += 1;
+          setSpecSourceStatus(`Screening ${unit.sourcePage} | ${completedPages.size} of ${source.total} | ${unit.searchableTextHandled ? "Text already extracted" : "Skipped"}`, "is-loading");
+          if (skipped % 20 === 0) saveSpecificationProject(false);
+        } else {
+          const unitMode = unit.imageBase64 ? "vision" : "text";
+          if (batchMode && unitMode !== batchMode) { queuedUnit = unit; break; }
+          batchMode = unitMode;
+          batch.push(unit);
+        }
+      }
+      if (!batch.length) continue;
+      const pageNumbers = batch.map(unit => Number(String(unit.sourcePage).match(/\d+/)?.[0])).filter(Number.isFinite);
+      const pageRange = pageNumbers.length && pageNumbers.length === batch.length
+        ? `Page${pageNumbers.length === 1 ? "" : "s"} ${pageNumbers[0]}${pageNumbers.length > 1 ? `-${pageNumbers.at(-1)}` : ""}`
+        : batch.map(unit => unit.sourcePage).join(", ");
+      setSpecSourceStatus(`Analyzing ${pageRange} | ${completedPages.size} of ${source.total} complete | ${batchMode === "text" ? "Fast text batch" : "Visual page"}`, "is-loading");
+      let results;
+      const batchStartedAt = performance.now();
+      try {
+        results = await SpecificationLocalAI.analyzeBatch({ units: batch, sourceName: file.name });
+      } catch (batchError) {
+        if (/stopped by user/i.test(batchError.message)) throw batchError;
+        if (/90-second page limit/i.test(batchError.message) && batch.every(unit => unit.imageBase64)) {
+          results = batch.map(() => ({ equipment: [], fillIns: [], clauses: [], model: SpecificationLocalAI.model, user: user.email || user.id, visualTimedOut: true }));
+          timedOut += batch.length;
+          recordSpecLocalAiMessage(`${pageRange} exceeded 90 seconds and was marked for manual review. Analysis will continue.`);
+        } else {
+        if (/stopped responding|background service|fetch failed/i.test(batchError.message)) throw batchError;
+        recordSpecLocalAiMessage(`Batch response could not be used (${batchError.message}). Retrying ${batch.length === 1 ? "the page" : "each page"} individually.`);
+        results = [];
+        for (const unit of batch) results.push(await SpecificationLocalAI.analyze({ ...unit, sourceName: file.name }));
+        }
+      }
+      let batchEquipment = 0, batchFills = 0, batchClauses = 0;
+      batch.forEach((unit, batchIndex) => {
+        const result = results[batchIndex];
+        const counts = importSpecLocalAiResult(result, record, unit.sourcePage);
+        equipmentAdded += counts.equipment; fillsAdded += counts.fills; clausesAdded += counts.clauses;
+        batchEquipment += counts.equipment; batchFills += counts.fills; batchClauses += counts.clauses;
+        specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: result.visualTimedOut ? "Local visual review timed out" : "Local source analyzed", user: result.user, provider: "ollama-local", model: result.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: result.visualTimedOut ? "Manual page review required" : "Pending engineer review", batchSize: batch.length });
+        if (!result.visualTimedOut) completedPages.add(unit.sourcePage);
+      });
+      recordSpecLocalAiMessage(`Completed ${pageRange} in ${formatSpecLocalAiElapsed(performance.now() - batchStartedAt)}. Added ${batchEquipment} equipment, ${batchFills} fill-in, and ${batchClauses} clause suggestion(s).`);
+      saveSpecificationProject(false);
+      renderSpecLocalAiSavedResults();
+    }
+    const savedCounts = getSpecLocalAiSavedCounts(record.id);
+    record.importSummary = `${completedPages.size} of ${source.total} page(s) completed (${skipped} screened, ${timedOut} visual timeout); ${savedCounts.equipment} AI equipment item(s), ${savedCounts.fills} fill-in(s), and ${savedCounts.clauses} clause(s) saved for review`;
+    touchSpecificationProject(); renderSpecLocalAiSavedResults();
+    setSpecSourceStatus(timedOut
+      ? `Analysis finalized through the last readable page. Saved for review: ${savedCounts.equipment} equipment, ${savedCounts.fills} fill-in, and ${savedCounts.clauses} specification clause result(s). ${timedOut} visual page(s) still need retry or manual review.`
+      : `Local AI finished ${file.name}. Saved for review: ${savedCounts.equipment} equipment, ${savedCounts.fills} fill-in, and ${savedCounts.clauses} specification clause result(s).`, timedOut ? "is-error" : "is-complete");
+    recordSpecLocalAiMessage(`${completedPages.size} of ${source.total} page(s) complete; ${skipped} page(s) screened without vision; ${timedOut} page(s) require manual visual review.`);
+    stopSpecLocalAiTimer();
+  } catch (error) {
+    const savedCounts = getSpecLocalAiSavedCounts(record.id);
+    renderSpecLocalAiSavedResults();
+    setSpecSourceStatus(/stopped by user/i.test(error.message)
+      ? `Analysis stopped. ${savedCounts.total} result(s) extracted so far are saved in Source Review.`
+      : `Analysis paused: ${error.message} ${savedCounts.total} result(s) extracted before the interruption are saved in Source Review.`, /stopped by user/i.test(error.message) ? "" : "is-error");
+    stopSpecLocalAiTimer();
+  }
+}
+
+function getSpecLocalAiSavedCounts(documentId) {
+  const equipment = (specState.components || []).filter(item => item.sourceDocumentId === documentId && item.aiInvolved).length;
+  const fills = (specState.fillInSuggestions || []).filter(item => item.documentId === documentId && item.detectionMethod === "Local Qwen3-VL extraction").length;
+  const clauses = (specState.sourceSuggestions || []).filter(item => item.documentId === documentId && item.extractionKind === "Local Qwen3-VL engineering extraction").length;
+  return { equipment, fills, clauses, total: equipment + fills + clauses };
+}
+
+function renderSpecLocalAiSavedResults() {
+  renderSpecDocuments();
+  renderSpecComponents();
+  renderExtractedSpecFillIns();
+  renderSpecSourceSuggestions();
+  renderSpecificationReview();
+}
+
+async function checkSpecLocalAiFromBanner() {
+  return openSpecLocalAiStatusModal();
+}
+
+async function openSpecLocalAiStatusModal() {
+  const modal = document.getElementById("specModal");
+  const body = document.getElementById("specModalBody");
+  const actions = document.getElementById("specModalActions");
+  document.getElementById("specModalTitle").textContent = "Local AI Control Center";
+  body.innerHTML = `<div class="spec-ai-status-dashboard"><div class="spec-ai-status-hero"><div class="spec-ai-status-orb">AI</div><div><h3>Checking Local AI...</h3><p>Verifying the background service and approved model.</p></div></div></div>`;
+  actions.replaceChildren();
+  const closeButton = document.createElement("button");
+  closeButton.type = "button"; closeButton.className = "secondary"; closeButton.textContent = "Close"; closeButton.onclick = closeSpecModal;
+  actions.append(closeButton);
+  modal.classList.remove("hidden");
+
+  const user = await getSpecAiLoggedInUser().catch(error => ({ email: "Database login required", statusError: error.message }));
+  let status = null, statusError = user.statusError || "";
+  if (!statusError) {
+    try { status = await SpecificationLocalAI.status(); }
+    catch (error) { statusError = error.message; }
+  }
+  const ready = Boolean(status?.ready) && !statusError;
+  setSpecAiHeaderStatus(ready);
+  const active = Boolean(specLocalAiStartedAt);
+  const currentMessage = document.getElementById("specSourceStatus")?.textContent || "Waiting for a source.";
+  body.innerHTML = `<div class="spec-ai-status-dashboard">
+    <div class="spec-ai-status-hero${ready ? "" : " is-error"}"><div class="spec-ai-status-orb">AI</div><div><h3>${ready ? "Local AI is ready" : "Local AI needs attention"}</h3><p>${escapeSpec(statusError || (status.loaded ? "Qwen is loaded in memory and ready for the next page." : "The approved model is installed and will load when analysis begins."))}</p></div></div>
+    <div class="spec-ai-status-grid">
+      <div class="spec-ai-status-card"><span>Background service</span><strong>${ready ? "Connected" : "Unavailable"}</strong></div>
+      <div class="spec-ai-status-card"><span>Model</span><strong>${escapeSpec(status?.model || window.SpecificationLocalAI?.model || "Qwen3-VL")}</strong></div>
+      <div class="spec-ai-status-card"><span>Model memory</span><strong>${status?.loaded ? "Loaded now" : ready ? "Loads on demand" : "Not available"}</strong></div>
+      <div class="spec-ai-status-card"><span>Database account</span><strong>${escapeSpec(user.email || user.id || "Signed in")}</strong></div>
+      <div class="spec-ai-status-card"><span>Current activity</span><strong>${active ? "Analysis running" : "Idle"}</strong></div>
+      <div class="spec-ai-status-card"><span>Elapsed</span><strong>${active ? formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt) : "0:00"}</strong></div>
+    </div>
+    <div class="spec-ai-pipeline"><strong>Optimized analysis pipeline</strong><div class="spec-ai-pipeline-steps"><div class="spec-ai-pipeline-step"><b>1. Screen locally</b>Searchable, blank, and duplicate pages avoid redundant model work.</div><div class="spec-ai-pipeline-step"><b>2. Ground extraction</b>Qwen reviews only visual pages and must cite visible evidence.</div><div class="spec-ai-pipeline-step"><b>3. Review safely</b>90-second limits, checkpoints, and manual-review flags prevent stalled jobs.</div></div></div>
+    ${active ? `<p class="spec-ai-status-note"><strong>Working now:</strong> ${escapeSpec(specLocalAiActiveSource)}<br>${escapeSpec(currentMessage)}</p>` : `<p class="spec-ai-status-note">Add or resume a source from the Sources + Local AI tab. Extracted results always remain pending until engineer review.</p>`}
+  </div>`;
+
+  const sourcesButton = document.createElement("button");
+  sourcesButton.type = "button"; sourcesButton.textContent = "Open Sources"; sourcesButton.onclick = () => { closeSpecModal(); openSpecLocalAiSources(); };
+  actions.prepend(sourcesButton);
+  const examplesButton = document.createElement("button");
+  examplesButton.type = "button"; examplesButton.className = "secondary"; examplesButton.textContent = "Manage Examples";
+  examplesButton.onclick = openSpecLocalAiExamplesModal;
+  actions.prepend(examplesButton);
+  if (active && window.SpecificationLocalAI?.cancel) {
+    const stopButton = document.createElement("button");
+    stopButton.type = "button"; stopButton.className = "delete-btn"; stopButton.textContent = "Stop Analysis";
+    stopButton.onclick = () => { SpecificationLocalAI.cancel(); closeSpecModal(); };
+    actions.prepend(stopButton);
+  }
+}
+
+function openSpecLocalAiExamplesModal() {
+  const saved = localStorage.getItem(SPEC_LOCAL_AI_EXAMPLES_KEY) || "";
+  const builtInExample = `BUILT-IN REFERENCE: Chicago Canal Spec, Section 111126 - Vehicle-Washing Equipment\n\nPART 2 - EQUIPMENT\nSOURCE PATTERN: Acid Application Arch; 1 inch Schedule 40 304/304L stainless-steel pipe; minimum 30 GPM at 60 PSI; multistage stainless-steel pump.\nEXPECTED: One named equipment record plus concise Part 2 equipment/component clauses. Preserve material and performance values and quote exact evidence.\n\nPART 2 - OPERATION\nSOURCE PATTERN: Overspeed bypass, final rinse/blower exceptions, and brush retraction behavior.\nEXPECTED: System-operation clauses in the closest Part 2 article, not maintenance items.\n\nPART 3 - TRAINING AND CLOSEOUT\nSOURCE PATTERN: Minimum four hours of training and three O&M manual copies.\nEXPECTED: Training Hours = 4; O&M Manual Quantity = 3; applicable Part 3 clauses.\n\nPART 3 - WARRANTY\nSOURCE PATTERN: Two-year warranty from startup and commissioning.\nEXPECTED: Warranty Period = 2 years; Warranty Start Event = startup and commissioning; applicable Part 3 clause.\n\nRESPONSIBILITY\nSOURCE PATTERN: General Contractor provides final utilities, field plumbing/mechanical, or field electrical work.\nEXPECTED: Place responsibility in Part 1 or Part 3, never in Manufacturer.\n\nIMPORTANT: This reference teaches organization only. Its facts must never be copied into an unrelated source.`;
+  showSpecFormModal("Local AI Examples", `<div class="spec-ai-example-editor"><div class="spec-ai-example-default"><strong>Chicago Canal Spec is the built-in reference</strong><span>Every user receives these approved equipment, operation, training, closeout, warranty, and responsibility patterns automatically. No file import is required.</span><details><summary>View built-in reference</summary><pre>${escapeSpec(builtInExample)}</pre></details></div><label>Optional examples for this browser<textarea id="specLocalAiExamples" rows="14" spellcheck="true" placeholder="Add another approved SOURCE EXAMPLE → EXPECTED RESULT → DESTINATION → EVIDENCE pair, or leave this blank.">${escapeSpec(saved)}</textarea></label><div class="spec-ai-example-help"><strong>Optional local guidance</strong><span>Extra examples entered here apply only on this computer and browser.</span><span>Add IGNORE EXAMPLE entries for additional content the AI should skip.</span></div><p class="converter-muted">The Chicago Canal reference remains active even when this field is blank. It is intentionally condensed so Local AI stays fast. Keep optional examples concise; do not paste an entire manual.</p></div>`, () => {
+    const examples = val("specLocalAiExamples").trim().slice(0, 12000);
+    if (examples) localStorage.setItem(SPEC_LOCAL_AI_EXAMPLES_KEY, examples);
+    else localStorage.removeItem(SPEC_LOCAL_AI_EXAMPLES_KEY);
+    closeSpecModal();
+    showSpecMessage("AI Examples Saved", examples ? "The Chicago Canal reference and your local examples will guide future analysis on this browser." : "Local examples were cleared. The Chicago Canal reference remains active for every user.");
+  });
+}
+
+function getSpecAiWritingProjectKey() {
+  return [specState.project.projectNumber, specState.project.projectName].map(value => String(value || "").trim()).filter(Boolean).join("|") || "untitled-project";
+}
+
+function getSpecAiWritingHistory() {
+  try {
+    const history = JSON.parse(localStorage.getItem(SPEC_AI_WRITING_HISTORY_KEY) || "[]");
+    return Array.isArray(history) ? history : [];
+  } catch { return []; }
+}
+
+function saveSpecAiWritingHistory(history) {
+  const projectCounts = new Map();
+  const recentByProject = history.filter(item => {
+    const key = item.projectKey || "untitled-project";
+    const count = projectCounts.get(key) || 0;
+    if (count >= 3) return false;
+    projectCounts.set(key, count + 1);
+    return true;
+  }).slice(0, 24);
+  try { localStorage.setItem(SPEC_AI_WRITING_HISTORY_KEY, JSON.stringify(recentByProject)); }
+  catch { localStorage.setItem(SPEC_AI_WRITING_HISTORY_KEY, JSON.stringify(recentByProject.slice(0, 6))); }
+}
+
+function addSpecAiWritingHistory(entry) {
+  const history = getSpecAiWritingHistory();
+  const record = { id: crypto.randomUUID(), projectKey: getSpecAiWritingProjectKey(), createdAt: new Date().toISOString(), status: "Previewed", ...entry };
+  history.unshift(record);
+  saveSpecAiWritingHistory(history);
+  return record.id;
+}
+
+function updateSpecAiWritingHistory(id, changes) {
+  const history = getSpecAiWritingHistory();
+  const record = history.find(item => item.id === id);
+  if (record) Object.assign(record, changes);
+  saveSpecAiWritingHistory(history);
+}
+
+function renderSpecAiWritingHistory() {
+  const history = getSpecAiWritingHistory().filter(item => item.projectKey === getSpecAiWritingProjectKey()).slice(0, 3);
+  if (!history.length) return `<details class="spec-ai-writing-history"><summary><span>Writing history</span><small>No revisions yet</small></summary><p class="converter-muted">AI requests and revisions for this project will appear here.</p></details>`;
+  const cards = history.map(item => `<article class="spec-ai-history-card"><div class="spec-ai-history-heading"><div><strong>Part ${escapeSpec(item.part)} · ${escapeSpec(item.instruction || "General quality review")}</strong><small>${escapeSpec(new Date(item.createdAt).toLocaleString())}</small></div><span class="${item.status === "Accepted" ? "is-accepted" : ""}">${escapeSpec(item.status || "Previewed")}</span></div>${item.summary ? `<p>${escapeSpec(item.summary)}</p>` : ""}<details><summary>Compare original and revision</summary><div class="spec-ai-history-compare"><div><strong>Before</strong><pre>${escapeSpec(item.before || "")}</pre></div><div><strong>AI revision</strong><pre>${escapeSpec(item.after || "")}</pre></div></div></details></article>`).join("");
+  return `<details class="spec-ai-writing-history"><summary><span>Writing history</span><small>${history.length} recent revision${history.length === 1 ? "" : "s"}</small></summary><div class="spec-ai-history-list">${cards}</div></details>`;
+}
+
+function renderSpecAiWritingDiff(beforeText, afterText) {
+  const before = String(beforeText || "").split("\n");
+  const after = String(afterText || "").split("\n");
+  let operations = [];
+  if (before.length * after.length <= 90000) {
+    const table = Array.from({ length: before.length + 1 }, () => new Uint16Array(after.length + 1));
+    for (let i = before.length - 1; i >= 0; i--) for (let j = after.length - 1; j >= 0; j--) table[i][j] = before[i] === after[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    let i = 0, j = 0;
+    while (i < before.length || j < after.length) {
+      if (i < before.length && j < after.length && before[i] === after[j]) { operations.push({ type: "same", text: before[i], oldLine: ++i, newLine: ++j }); }
+      else if (j < after.length && (i === before.length || table[i][j + 1] >= table[i + 1][j])) { operations.push({ type: "added", text: after[j], oldLine: "", newLine: ++j }); }
+      else { operations.push({ type: "removed", text: before[i], oldLine: ++i, newLine: "" }); }
+    }
+  } else {
+    operations = [...before.map((text, index) => ({ type: "removed", text, oldLine: index + 1, newLine: "" })), ...after.map((text, index) => ({ type: "added", text, oldLine: "", newLine: index + 1 }))];
+  }
+  const similarity = (left, right) => {
+    const leftWords = new Set(String(left).toLowerCase().match(/[a-z0-9]+/g) || []), rightWords = new Set(String(right).toLowerCase().match(/[a-z0-9]+/g) || []);
+    if (!leftWords.size || !rightWords.size) return left === right ? 1 : 0;
+    const shared = [...leftWords].filter(word => rightWords.has(word)).length;
+    return (2 * shared) / (leftWords.size + rightWords.size);
+  };
+  const modifiedText = (left, right) => {
+    let prefix = 0, suffix = 0;
+    while (prefix < left.length && prefix < right.length && left[prefix] === right[prefix]) prefix++;
+    while (suffix < left.length - prefix && suffix < right.length - prefix && left[left.length - 1 - suffix] === right[right.length - 1 - suffix]) suffix++;
+    const start = escapeSpec(right.slice(0, prefix));
+    const removed = escapeSpec(left.slice(prefix, left.length - suffix));
+    const added = escapeSpec(right.slice(prefix, right.length - suffix));
+    const end = escapeSpec(suffix ? right.slice(right.length - suffix) : "");
+    return `${start}${removed ? `<del>${removed}</del>` : ""}${added ? `<ins>${added}</ins>` : ""}${end}` || " ";
+  };
+  const visible = [];
+  let block = [];
+  const flushBlock = () => {
+    if (!block.length) return;
+    const removed = block.filter(item => item.type === "removed"), added = block.filter(item => item.type === "added");
+    const paired = Math.min(removed.length, added.length);
+    for (let index = 0; index < paired; index++) {
+      if (similarity(removed[index].text, added[index].text) >= 0.48) visible.push({ type: "modified", oldLine: removed[index].oldLine, newLine: added[index].newLine, html: modifiedText(removed[index].text, added[index].text) });
+      else visible.push(removed[index], added[index]);
+    }
+    visible.push(...removed.slice(paired), ...added.slice(paired));
+    block = [];
+  };
+  operations.forEach(operation => { if (operation.type === "same") flushBlock(); else block.push(operation); });
+  flushBlock();
+  if (!visible.length) return `<div class="spec-ai-diff-empty">No wording changed. The specification will remain exactly as it is.</div>`;
+  return `<div class="spec-ai-diff-lines">${visible.map(operation => `<div class="spec-ai-diff-line ${operation.type}"><span>${operation.oldLine}</span><span>${operation.newLine}</span><b>${operation.type === "added" ? "+" : operation.type === "removed" ? "−" : "~"}</b><code>${operation.html || escapeSpec(operation.text) || " "}</code></div>`).join("")}</div>`;
+}
+
+function getSpecAiFillablePlaceholders(text) {
+  return [...new Set(String(text || "").match(/\[[A-Z0-9][A-Z0-9 &/.,()'’:+-]*\]/g) || [])];
+}
+
+function specAiAllowsPlaceholderRemoval(placeholder, instruction) {
+  const request = String(instruction || "").toLowerCase();
+  const namesPlaceholder = request.includes(String(placeholder).toLowerCase()) || /\b(all|every)\s+(fillable|placeholder|template field)s?\b/.test(request);
+  return namesPlaceholder && /\b(remove|delete|omit|drop)\b/.test(request);
+}
+
+function buildSpecAiUnifiedDiff(beforeText, afterText) {
+  const before = String(beforeText || "").split("\n"), after = String(afterText || "").split("\n");
+  const table = before.length * after.length <= 120000 ? Array.from({ length: before.length + 1 }, () => new Uint16Array(after.length + 1)) : null;
+  if (table) for (let i = before.length - 1; i >= 0; i--) for (let j = after.length - 1; j >= 0; j--) table[i][j] = before[i] === after[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+  const operations = [];
+  if (table) {
+    let i = 0, j = 0;
+    while (i < before.length || j < after.length) {
+      if (i < before.length && j < after.length && before[i] === after[j]) operations.push({ type: "same", text: before[i], oldLine: ++i, newLine: ++j });
+      else if (j < after.length && (i === before.length || table[i][j + 1] >= table[i + 1][j])) operations.push({ type: "added", text: after[j], oldLine: "", newLine: ++j });
+      else operations.push({ type: "removed", text: before[i], oldLine: ++i, newLine: "" });
+    }
+  } else {
+    operations.push(...before.map((text, index) => ({ type: "removed", text, oldLine: index + 1, newLine: "" })), ...after.map((text, index) => ({ type: "added", text, oldLine: "", newLine: index + 1 })));
+  }
+  const entries = [];
+  let block = [];
+  const flush = () => {
+    if (!block.length) return;
+    const removed = block.filter(item => item.type === "removed"), added = block.filter(item => item.type === "added"), paired = Math.min(removed.length, added.length);
+    for (let index = 0; index < paired; index++) entries.push({ id: crypto.randomUUID(), type: "modified", oldText: removed[index].text, newText: added[index].text, oldLine: removed[index].oldLine, newLine: added[index].newLine, accepted: true });
+    removed.slice(paired).forEach(item => entries.push({ id: crypto.randomUUID(), type: "removed", oldText: item.text, oldLine: item.oldLine, newLine: "", accepted: true }));
+    added.slice(paired).forEach(item => entries.push({ id: crypto.randomUUID(), type: "added", newText: item.text, oldLine: "", newLine: item.newLine, accepted: true }));
+    block = [];
+  };
+  operations.forEach(operation => { if (operation.type === "same") { flush(); entries.push({ id: crypto.randomUUID(), ...operation }); } else block.push(operation); });
+  flush();
+  return entries;
+}
+
+function getSpecAiUnifiedDiffText(entries) {
+  return entries.flatMap(entry => entry.type === "same" ? [entry.text] : entry.type === "modified" ? [entry.accepted ? entry.newText : entry.oldText] : entry.type === "added" ? (entry.accepted ? [entry.newText] : []) : (entry.accepted ? [] : [entry.oldText])).join("\n");
+}
+
+function renderSpecAiInlineEdit(beforeText, afterText) {
+  const before = String(beforeText || ""), after = String(afterText || "");
+  let prefix = 0, suffix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+  while (suffix < before.length - prefix && suffix < after.length - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
+  const unchangedStart = escapeSpec(after.slice(0, prefix));
+  const removed = escapeSpec(before.slice(prefix, before.length - suffix));
+  const added = escapeSpec(after.slice(prefix, after.length - suffix));
+  const unchangedEnd = escapeSpec(suffix ? after.slice(after.length - suffix) : "");
+  return `${unchangedStart}${removed ? `<del>${removed}</del>` : ""}${added ? `<ins>${added}</ins>` : ""}${unchangedEnd}` || " ";
+}
+
+function renderSpecAiChangedLine(beforeText, afterText, mode) {
+  const before = String(beforeText || ""), after = String(afterText || ""), current = mode === "removed" ? before : after;
+  let prefix = 0, suffix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+  while (suffix < before.length - prefix && suffix < after.length - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
+  const start = escapeSpec(current.slice(0, prefix)), changed = escapeSpec(current.slice(prefix, current.length - suffix)), end = escapeSpec(suffix ? current.slice(current.length - suffix) : "");
+  return `${start}${changed ? `<mark>${changed}</mark>` : ""}${end}` || " ";
+}
+
+function renderSpecAiUnifiedDiff(entries) {
+  return `<div class="spec-ai-unified-diff"><div class="spec-ai-unified-content">${entries.map(entry => entry.type === "same" ? `<div class="spec-ai-unified-line same"><span>${entry.oldLine}</span><span>${entry.newLine}</span><code>${escapeSpec(entry.text) || " "}</code></div>` : `<div class="spec-ai-unified-change ${entry.accepted ? "is-accepted" : "is-reverted"}${entry.lockedPlaceholder ? " protects-fillable" : ""}" data-ai-diff-entry="${entry.id}">${entry.type !== "added" ? `<div class="spec-ai-unified-line removed"><span>${entry.oldLine}</span><span></span><b>−</b><code>${entry.type === "modified" ? renderSpecAiChangedLine(entry.oldText, entry.newText, "removed") : escapeSpec(entry.oldText) || " "}</code></div>` : ""}${entry.type !== "removed" ? `<div class="spec-ai-unified-line added"><span></span><span>${entry.newLine}</span><b>+</b><code>${entry.type === "modified" ? renderSpecAiChangedLine(entry.oldText, entry.newText, "added") : escapeSpec(entry.newText) || " "}</code></div>` : ""}<div class="spec-ai-line-decisions"><button type="button" data-ai-diff-decision="accept"${entry.accepted ? ' class="active"' : ""}${entry.lockedPlaceholder ? ' disabled title="This change removes a protected fillable field."' : ""}>Accept</button><button type="button" data-ai-diff-decision="revert"${entry.accepted ? "" : ' class="active"'}>Revert</button></div></div>`).join("")}</div></div>`;
+}
+
+async function openSpecificationAiWriter(defaultPart = 1, draftInstruction = "") {
+  defaultPart = [1, 2, 3].includes(Number(defaultPart)) ? Number(defaultPart) : 1;
+  const signedInUser = await getSpecAiLoggedInUser().catch(error => {
+    showSpecMessage("Database Login Required", error.message || "Sign in with your Database account before using Local AI.");
+    return null;
+  });
+  if (!signedInUser) return;
+  const getScope = () => {
+    const part = Number(val("specAiWritingPart")) || 1;
+    const editor = document.querySelector(`[data-project-field="part${part}"]`);
+    const fullText = editor?.value || "";
+    const start = Number.isInteger(editor?.selectionStart) ? editor.selectionStart : 0;
+    const end = Number.isInteger(editor?.selectionEnd) ? editor.selectionEnd : 0;
+    const hasSelection = end > start;
+    return { part, editor, fullText, start, end, hasSelection, sourceText: hasSelection ? fullText.slice(start, end) : fullText };
+  };
+  showSpecFormModal("Improve with Local AI", `<div class="spec-ai-writing-modal"><div class="spec-ai-writing-intro"><span class="spec-ai-writing-icon" aria-hidden="true">✦</span><div><strong>Improve specification writing</strong><p id="specAiWritingScopeText">Select a part and describe what you want changed. Local AI preserves known facts, structure, numbering, and fillable fields, and nothing changes until you accept it.</p></div></div><div class="spec-ai-writing-setup"><label class="spec-ai-part-picker"><span>Part to improve</span><select id="specAiWritingPart"><option value="1"${defaultPart === 1 ? " selected" : ""}>Part 1 — General</option><option value="2"${defaultPart === 2 ? " selected" : ""}>Part 2 — Products</option><option value="3"${defaultPart === 3 ? " selected" : ""}>Part 3 — Execution</option></select><small>The writing rules adjust automatically for each part.</small></label></div>${renderSpecAiWritingHistory()}<details class="spec-ai-source-preview"><summary><span>Text Local AI will review</span><small>Source preview</small></summary><pre id="specAiWritingSource"></pre></details><label class="spec-ai-writing-prompt"><span>What should change? <em>Required</em></span><div class="spec-ai-prompt-compose"><textarea id="specAiWritingInstruction" rows="5" spellcheck="true" autocorrect="on" autocapitalize="sentences" placeholder="Example: Clarify the warranty responsibility and start date without changing any facts.">${escapeSpec(draftInstruction)}</textarea><div id="specAiGenerateSlot"></div></div><small>Enter sends. Shift+Enter adds a new line. Misspelled requests are understood and spelling is checked.</small><span id="specAiWritingInstructionError" class="spec-ai-field-error hidden">Describe what you want changed before generating a preview.</span></label></div>`, async () => {
+    const scope = getScope();
+    if (!scope.sourceText.trim()) return showSpecMessage(`Part ${scope.part} Text Needed`, `Add Part ${scope.part} wording before using the writing helper.`);
+    const generateButton = document.getElementById("specAiGenerateButton");
+    const instruction = val("specAiWritingInstruction").trim();
+    if (!instruction) {
+      document.getElementById("specAiWritingInstructionError")?.classList.remove("hidden");
+      document.getElementById("specAiWritingInstruction")?.focus();
+      return;
+    }
+    if (generateButton) { generateButton.disabled = true; generateButton.textContent = "…"; generateButton.title = "Generating preview"; }
+    try {
+      await SpecificationLocalAI.status();
+      const result = await SpecificationLocalAI.improveSpecificationPart({ part: scope.part, text: scope.sourceText, project: { ...specState.project, part1: undefined, part2: undefined, part3: undefined }, instruction });
+      const warnings = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
+      const requiredPlaceholders = getSpecAiFillablePlaceholders(scope.sourceText);
+      const protectedPlaceholders = requiredPlaceholders.filter(placeholder => !specAiAllowsPlaceholderRemoval(placeholder, instruction));
+      const diffEntries = buildSpecAiUnifiedDiff(scope.sourceText, result.revisedText);
+      diffEntries.forEach(entry => {
+        const acceptedText = entry.type === "modified" ? entry.newText : entry.type === "removed" ? "" : entry.type === "added" ? entry.newText : entry.text;
+        const removesProtected = protectedPlaceholders.some(placeholder => String(entry.oldText || "").includes(placeholder) && !String(result.revisedText || "").includes(placeholder));
+        if (removesProtected) { entry.accepted = false; entry.lockedPlaceholder = true; }
+      });
+      const historyId = addSpecAiWritingHistory({ part: scope.part, instruction: instruction || "General quality review", before: scope.sourceText.slice(0, 12000), after: String(result.revisedText).slice(0, 12000), summary: result.summary || "", warnings });
+      showSpecFormModal(`Review Part ${scope.part} AI Revision`, `<div class="spec-ai-writing-modal spec-ai-writing-review"><div class="spec-ai-writing-intro"><span class="spec-ai-writing-icon" aria-hidden="true">✓</span><div><strong>Review the proposed changes</strong><p>${escapeSpec(result.summary || `Local AI prepared a revised Part ${scope.part} passage.`)}</p></div></div>${warnings.length ? `<details class="spec-ai-workspace-details"><summary><span>Items to verify</span><small>${warnings.length} item${warnings.length === 1 ? "" : "s"}</small></summary><div class="spec-ai-example-help">${warnings.map(item => `<span>${escapeSpec(item)}</span>`).join("")}</div></details>` : ""}<div id="specAiFillableWarning" class="spec-ai-fillable-warning hidden"></div><section class="spec-ai-github-diff"><header><strong>Part ${scope.part} line review</strong><span><b class="neutral"></b>Unchanged <b class="removed"></b>Removed <b class="added"></b>Added</span></header>${renderSpecAiUnifiedDiff(diffEntries)}</section><textarea id="specAiWritingRevision" class="hidden">${escapeSpec(getSpecAiUnifiedDiffText(diffEntries))}</textarea>${renderSpecAiWritingHistory()}</div>`, () => {
+        const revisedText = val("specAiWritingRevision").trim();
+        if (!revisedText) return showSpecMessage("Revision Required", "The revised text cannot be blank.");
+        const missingPlaceholders = protectedPlaceholders.filter(placeholder => !revisedText.includes(placeholder));
+        if (missingPlaceholders.length) return;
+        if (scope.hasSelection) {
+          if (scope.editor.value.slice(scope.start, scope.end) !== scope.sourceText) return showSpecMessage(`Part ${scope.part} Changed`, `Part ${scope.part} changed while the preview was open. Select the passage again so no newer writing is overwritten.`);
+          scope.editor.value = `${scope.editor.value.slice(0, scope.start)}${revisedText}${scope.editor.value.slice(scope.end)}`;
+        } else {
+          if (scope.editor.value !== scope.fullText) return showSpecMessage(`Part ${scope.part} Changed`, `Part ${scope.part} changed while the preview was open. Open the writing helper again so no newer writing is overwritten.`);
+          scope.editor.value = revisedText;
+        }
+        scope.editor.dispatchEvent(new Event("input", { bubbles: true }));
+        updateSpecAiWritingHistory(historyId, { status: "Accepted", acceptedAt: new Date().toISOString(), after: revisedText.slice(0, 12000) });
+        closeSpecModal();
+        showSpecMessage(`Part ${scope.part} Changes Accepted`, scope.hasSelection ? "The accepted revision replaced the selected passage." : `The accepted revision replaced the Part ${scope.part} text.`);
+      });
+      const applyButton = document.querySelector("#specModalActions button");
+      if (applyButton) applyButton.textContent = "Accept Changes";
+      const revisionEditor = document.getElementById("specAiWritingRevision");
+      const fillableWarning = document.getElementById("specAiFillableWarning");
+      const validateFillables = () => {
+        const missing = protectedPlaceholders.filter(placeholder => !String(revisionEditor?.value || "").includes(placeholder));
+        diffEntries.forEach(entry => {
+          const finalText = entry.type === "same" ? entry.text : entry.type === "modified" ? (entry.accepted ? entry.newText : entry.oldText) : entry.type === "added" ? (entry.accepted ? entry.newText : "") : (entry.accepted ? "" : entry.oldText);
+          const removesProtectedField = missing.some(placeholder => String(entry.oldText || "").includes(placeholder) && !String(finalText || "").includes(placeholder));
+          document.querySelector(`[data-ai-diff-entry="${entry.id}"]`)?.classList.toggle("removes-fillable", removesProtectedField);
+        });
+        if (applyButton) { applyButton.disabled = missing.length > 0; applyButton.title = missing.length ? "Restore the fillable placeholders before accepting." : "Accept these changes"; }
+        if (fillableWarning) { fillableWarning.classList.toggle("hidden", !missing.length); fillableWarning.textContent = missing.length ? `The AI removed a fillable template field: ${missing.join(", ")}. Select Revert on the outlined change that removed it before accepting.` : ""; }
+      };
+      revisionEditor?.addEventListener("input", validateFillables);
+      document.querySelector(".spec-ai-unified-diff")?.addEventListener("click", event => {
+        const decisionButton = event.target.closest("[data-ai-diff-decision]");
+        const change = decisionButton?.closest("[data-ai-diff-entry]");
+        if (!decisionButton || !change) return;
+        const entry = diffEntries.find(item => item.id === change.dataset.aiDiffEntry);
+        if (!entry) return;
+        entry.accepted = decisionButton.dataset.aiDiffDecision === "accept";
+        change.classList.toggle("is-accepted", entry.accepted);
+        change.classList.toggle("is-reverted", !entry.accepted);
+        change.querySelectorAll("[data-ai-diff-decision]").forEach(button => button.classList.toggle("active", button === decisionButton));
+        if (revisionEditor) { revisionEditor.value = getSpecAiUnifiedDiffText(diffEntries); revisionEditor.dispatchEvent(new Event("input", { bubbles: true })); }
+      });
+      validateFillables();
+      const declineButton = document.querySelector("#specModalActions .secondary");
+      if (declineButton) {
+        declineButton.textContent = "Do Not Accept";
+        declineButton.onclick = () => { updateSpecAiWritingHistory(historyId, { status: "Not Accepted", decidedAt: new Date().toISOString() }); closeSpecModal(); openSpecificationAiWriter(scope.part, instruction); };
+      }
+    } catch (error) {
+      closeSpecModal();
+      showSpecMessage(`Local AI Could Not Improve Part ${scope.part}`, error.message || "Try again with a smaller selection.");
+    }
+  });
+  const refreshScope = () => {
+    const scope = getScope();
+    const source = document.getElementById("specAiWritingSource");
+    const scopeText = document.getElementById("specAiWritingScopeText");
+    if (source) source.textContent = scope.sourceText || `Part ${scope.part} is currently blank.`;
+    if (scopeText) scopeText.textContent = `${scope.hasSelection ? `Selected Part ${scope.part} text` : `Part ${scope.part}`} is ready. Describe what you want changed. Local AI preserves known facts, structure, numbering, and fillable fields, and nothing changes until you accept it.`;
+  };
+  document.getElementById("specAiWritingPart")?.addEventListener("change", refreshScope);
+  refreshScope();
+  const actions = document.getElementById("specModalActions");
+  const generateButton = actions?.querySelector("button:not(.secondary)");
+  const closeButton = actions?.querySelector(".secondary");
+  if (generateButton) { generateButton.id = "specAiGenerateButton"; generateButton.textContent = "↑"; generateButton.title = "Generate preview"; generateButton.setAttribute("aria-label", "Generate preview"); document.getElementById("specAiGenerateSlot")?.append(generateButton); }
+  if (closeButton) closeButton.textContent = "Close";
+  document.getElementById("specAiWritingInstruction")?.addEventListener("input", event => {
+    if (event.target.value.trim()) document.getElementById("specAiWritingInstructionError")?.classList.add("hidden");
+  });
+  document.getElementById("specAiWritingInstruction")?.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); generateButton?.click(); }
+  });
+}
+
+async function getSpecAiLoggedInUser() {
+  if (!window.supabaseClient) throw new Error("Open Database and sign in before using Local AI.");
+  const { data, error } = await window.supabaseClient.auth.getSession();
+  if (error || !data.session?.user) throw new Error("Open Database and sign in with your normal database login, then return to Spec Automation.");
+  return data.session.user;
+}
+
+function showSpecAiSetupNotice(user) {
+  const userKey = String(user.id || user.email || "user").replace(/[^a-z0-9_-]/gi, "_");
+  const storageKey = `ns-spec-local-ai-setup-notice-v1:${userKey}`;
+  if (localStorage.getItem(storageKey) === "hidden") return Promise.resolve(true);
+  return new Promise(resolve => {
+    const modal = document.getElementById("specModal");
+    document.getElementById("specModalTitle").textContent = "Local AI Setup";
+    document.getElementById("specModalBody").innerHTML = `<div class="spec-privacy-panel"><strong>Local AI keeps source analysis on this computer.</strong><p>Ollama and the Qwen3-VL model must be installed on each computer that performs AI analysis. This pilot computer is already configured.</p></div><p>If Local AI is not installed on another approved company computer, download Ollama from the official website and ask the automation administrator to install the approved Qwen3-VL model.</p><p><a class="button-link" href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">Download Ollama for Windows</a></p><label class="spec-ai-notice-choice"><input id="specAiHideSetupNotice" type="checkbox"> Don’t show this message again for my login on this computer</label>`;
+    const actions = document.getElementById("specModalActions");
+    actions.replaceChildren();
+    const continueButton = document.createElement("button");
+    continueButton.textContent = "Continue to Local AI";
+    continueButton.onclick = () => {
+      if (document.getElementById("specAiHideSetupNotice")?.checked) localStorage.setItem(storageKey, "hidden");
+      closeSpecModal(); resolve(true);
+    };
+    const cancelButton = document.createElement("button");
+    cancelButton.className = "secondary"; cancelButton.textContent = "Cancel";
+    cancelButton.onclick = () => { closeSpecModal(); resolve(false); };
+    actions.append(continueButton, cancelButton);
+    modal.classList.remove("hidden");
+  });
+}
+
+async function createSpecAiAnalysisSource(file) {
+  if (/\.pdf$/i.test(file.name)) {
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    return { total: pdf.numPages, pageLabel: index => `Page ${index + 1}`, getUnit: async index => {
+      const pageNumber = index + 1;
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = sanitizeExtractedSpecText(reconstructSpecificationPdfText(content.items));
+      // A substantial PDF text layer contains the same engineering labels and
+      // values at a fraction of the inference cost. Sparse/scanned pages still
+      // receive full visual review.
+      if (text.replace(/\s+/g, " ").trim().length >= 80) return { sourcePage: `Page ${pageNumber}`, text, visuallyBlank: false, searchableTextHandled: true };
+      const viewport = page.getViewport({ scale: 0.65 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+      const context = canvas.getContext("2d", { alpha: false });
+      await page.render({ canvasContext: context, viewport }).promise;
+      const stepX = Math.max(1, Math.floor(canvas.width / 80));
+      const stepY = Math.max(1, Math.floor(canvas.height / 100));
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let samples = 0, inkSamples = 0;
+      for (let y = 0; y < canvas.height; y += stepY) for (let x = 0; x < canvas.width; x += stepX) {
+        const offset = (y * canvas.width + x) * 4;
+        if (pixels[offset] + pixels[offset + 1] + pixels[offset + 2] < 720) inkSamples += 1;
+        samples += 1;
+      }
+      return { sourcePage: `Page ${pageNumber}`, text, imageBase64: canvas.toDataURL("image/jpeg", 0.58).split(",")[1], visuallyBlank: text.trim().length < 20 && inkSamples / Math.max(1, samples) < 0.004 };
+    } };
+  }
+  let text = "";
+  if (/\.docx$/i.test(file.name)) text = (await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value;
+  else text = await file.text();
+  const chunks = String(text).match(/[\s\S]{1,18000}/g) || [""];
+  const pageLabel = index => chunks.length === 1 ? "Document" : `Text section ${index + 1}`;
+  return { total: chunks.length, pageLabel, getUnit: async index => ({ sourcePage: pageLabel(index), text: chunks[index], visuallyBlank: !String(chunks[index] || "").trim() }) };
+}
+
+function importSpecLocalAiResult(result, record, sourcePage) {
+  const count = { equipment: 0, fills: 0, clauses: 0 };
+  const confidenceLabel = value => Number(value || 0) >= 0.85 ? "High" : Number(value || 0) >= 0.65 ? "Medium" : "Low";
+  (result.equipment || []).filter(item => item.description && Number(item.confidence || 0) >= 0.55).forEach(item => {
+    const duplicate = specState.components.some(existing => existing.sourceDocumentId === record.id && existing.description.toLowerCase() === String(item.description).toLowerCase() && existing.sourcePage === sourcePage);
+    if (duplicate) return;
+    specState.components.push(createSpecComponent({ partNumber: item.partNumber || "", description: item.description, manufacturer: item.manufacturer || "", model: item.model || "", quantity: Number(item.quantity) || 1, unit: item.unit || "ea", assembly: item.assembly || "", notes: item.technicalDetails || "", sourceDocument: record.name, sourceDocumentId: record.id, sourcePage, detectionMethod: "Local Qwen3-VL extraction", verificationStatus: "Needs Review", quantityExplanation: `AI extraction from ${sourcePage}; verify against source. Evidence: ${item.evidence || "not provided"}`, aiInvolved: true, extractionConfidence: item.confidence, extractionEvidence: item.evidence || "" }));
+    count.equipment += 1;
+  });
+  (result.fillIns || []).filter(item => item.placeholder && item.value && Number(item.confidence || 0) >= 0.65).forEach(item => {
+    const placeholder = item.placeholder.startsWith("[") ? item.placeholder : `[${item.placeholder.toUpperCase()}]`;
+    const part = /3/.test(item.part || "") ? "part3" : /1/.test(item.part || "") ? "part1" : "part2";
+    specState.fillInSuggestions.push({ id: crypto.randomUUID(), documentId: record.id, sourceDocument: record.name, sourcePage, status: "pending", createdAt: new Date().toISOString(), part, placeholder, label: placeholder.slice(1, -1).toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase()), value: item.value, evidence: item.evidence || "Local AI extraction", confidence: confidenceLabel(item.confidence), numericConfidence: item.confidence, detectionMethod: "Local Qwen3-VL extraction" });
+    count.fills += 1;
+  });
+  (result.clauses || []).filter(item => item.text && Number(item.confidence || 0) >= 0.6).forEach(item => {
+    const targetPart = /3/.test(item.targetPart || "") ? "part3" : "part2";
+    const articleMatch = String(item.targetArticle || "").match(/[23]\.\d+/);
+    const level = String(item.hierarchyLevel || "").toLowerCase();
+    const placementLevel = level === "equipment" || level === "letter" ? "letter" : level === "detail" ? "detail" : level === "subitem" || level === "lower" ? "lower" : "number";
+    specState.sourceSuggestions.push({ id: crypto.randomUUID(), documentId: record.id, sourceDocument: record.name, sourcePage, status: "pending", createdAt: new Date().toISOString(), targetPart, destinationArticle: articleMatch?.[0] || (targetPart === "part3" ? "3.2" : "2.5"), equipmentContext: item.descriptionAppliesTo || "General System Requirement", placementLevel, text: item.text, extractionKind: "Local Qwen3-VL engineering extraction", extractionConfidence: confidenceLabel(item.confidence), extractionEvidence: item.evidence || "", numericConfidence: item.confidence });
+    count.clauses += 1;
+  });
+  return count;
 }
 
 async function reanalyzeSpecDocument(id) {
@@ -2824,6 +3555,14 @@ function renderSpecComponents() {
   const search = val("specComponentSearch").toLowerCase(); const filter = val("specComponentStatusFilter"); const sort = val("specComponentSort") || "partNumber";
   const rows = specState.components.filter(item => (!filter || item.verificationStatus === filter) && (!search || [item.partNumber, item.alternatePartNumber, item.description, item.manufacturer, item.model, item.sourceDocument].join(" ").toLowerCase().includes(search))).sort((a, b) => sort === "quantity" ? Number(a.quantity) - Number(b.quantity) : String(a[sort] || "").localeCompare(String(b[sort] || "")));
   body.innerHTML = rows.length ? rows.map(item => `<tr><td><input type="checkbox" ${item.selected ? "checked" : ""} onchange="setSpecComponentValue('${item.id}','selected',this.checked)"></td><td><input type="checkbox" ${item.include ? "checked" : ""} onchange="setSpecComponentValue('${item.id}','include',this.checked)"></td><td>${escapeSpec(item.partNumber || "—")}</td><td>${escapeSpec(item.alternatePartNumber || "—")}</td><td>${escapeSpec(item.description || "—")}</td><td>${escapeSpec([item.manufacturer,item.model].filter(Boolean).join(" / ") || "—")}</td><td><button class="spec-quantity-link" onclick="showSpecQuantityDetails('${item.id}')">${item.quantity} ${escapeSpec(item.unit)}</button></td><td>${escapeSpec(item.assembly || "—")}</td><td>${escapeSpec(item.sourceDocument)}${item.sourcePage ? `<br><small>${escapeSpec(item.sourcePage)}</small>` : ""}</td><td>${escapeSpec(item.detectionMethod)}</td><td><span class="spec-status ${statusClass(item.verificationStatus)}">${escapeSpec(item.verificationStatus)}</span></td><td><div class="spec-row-actions"><button onclick="openSpecComponentEditor('${item.id}')">Edit</button><button class="secondary" onclick="duplicateSpecComponent('${item.id}')">Duplicate</button><button class="secondary" onclick="approveSpecComponent('${item.id}')">Approve</button><button class="delete-btn" onclick="deleteSpecComponent('${item.id}')">Delete</button></div></td></tr>`).join("") : `<tr><td colspan="12">No components added.</td></tr>`;
+  Array.from(body.querySelectorAll("tr")).forEach((row, index) => {
+    if (!rows[index]?.aiInvolved || !row.cells[9]) return;
+    const badge = document.createElement("span");
+    badge.className = "spec-ai-origin-badge";
+    badge.textContent = "AI";
+    badge.title = "Created by Local AI and requires engineer review";
+    row.cells[9].prepend(badge, document.createElement("br"));
+  });
 }
 
 function setSpecComponentValue(id, key, value) { const item = specState.components.find(row => row.id === id); if (item) { item[key] = value; touchSpecificationProject(); } }
@@ -2929,7 +3668,7 @@ async function getSpecificationHistoryRecord(id) { return (await getSpecificatio
 async function editSpecificationHistory(id) {
   const item = await getSpecificationHistoryRecord(id);
   if (!item?.state || !(await showSpecConfirm("Edit Saved Specification", "Replace the current workspace with this saved specification?", "Edit"))) return;
-  specState = { ...createEmptySpecificationState(), ...item.state, project: { ...createEmptySpecificationState().project, ...(item.state.project || {}) } };
+  specState = normalizeSpecificationCollections({ ...createEmptySpecificationState(), ...item.state, project: { ...createEmptySpecificationState().project, ...(item.state.project || {}) } });
   applySpecificationStateToUI();
   saveSpecificationProject(false);
 }
