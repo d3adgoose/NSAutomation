@@ -15,6 +15,7 @@ const MAX_REQUEST_BYTES = 28 * 1024 * 1024;
 const ALLOWED_BROWSER_ORIGINS = new Set([
   "http://127.0.0.1:5500",
   "http://localhost:5500",
+  "https://d3adgoose.github.io",
   `http://127.0.0.1:${PORT}`,
   `http://localhost:${PORT}`
 ]);
@@ -154,6 +155,7 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Private-Network", "true");
     }
     if (req.method === "OPTIONS") return send(res, 204, "", "text/plain; charset=utf-8");
     if (req.url.startsWith("/api/local-ai")) return await handleAi(req, res);

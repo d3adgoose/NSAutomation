@@ -71,8 +71,8 @@ Do not extract "clean filter monthly", troubleshooting symptom/cause tables, gen
 
   async function request(path, options = {}) {
     const token = await sessionToken();
-    const localDevelopment = location.hostname === "127.0.0.1" || location.hostname === "localhost";
-    const gatewayBase = localDevelopment && location.port !== "4173" ? "http://127.0.0.1:4173" : "";
+    const servedByLocalGateway = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+    const gatewayBase = servedByLocalGateway ? "" : "http://127.0.0.1:4173";
     const { timeoutMs = 0, ...fetchOptions } = options;
     const controller = new AbortController();
     activeRequestControllers.add(controller);

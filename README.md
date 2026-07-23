@@ -95,13 +95,13 @@ Commit the website source, shared assets, tests, Local AI gateway, and Windows s
 
 ## Local AI Pilot
 
-Local AI is optional and access is controlled by the existing Database login. Opening a local website address does not authorize Local AI. The AI gateway validates the signed-in user's active Supabase session before accepting every status or analysis request. Selected source pages are sent only to Ollama on the same computer, and results are always added as pending review.
+Local AI is optional and access is controlled by the existing Database login. The hosted website at `https://d3adgoose.github.io/NSAutomation/` connects to the protected Local AI gateway on the user's own computer at `http://127.0.0.1:4173`. The gateway validates the signed-in user's active Supabase session before accepting every status or analysis request. Selected source pages are sent only to Ollama on that computer, and results are always added as pending review.
 
-The address `http://127.0.0.1:5500/specification.html?continue=1` only opens Spec Automation and restores the user's place in the website. The `continue=1` setting must never enable, unlock, or bypass Local AI. A user who is not signed in cannot run Local AI, even when that address is opened directly.
+The hosted page address does not enable, unlock, or bypass Local AI. A user who is not signed in cannot run Local AI. A signed-in user also needs Ollama, the approved model, and **Start NS Local AI Background.cmd** running on the computer performing the analysis.
 
 Ollama and the configured Qwen3-VL model are installed on the pilot computer.
 
-1. Open N/S Automation.
+1. Open [N/S Automation](https://d3adgoose.github.io/NSAutomation/).
 2. Sign in with the normal Database login. This login—not the page address—authorizes Local AI.
 3. Open Spec Automation and add the O&amp;M manual, submittal, drawing, specification, or datasheet.
 4. After login, select **Analyze with Local AI** beside the source. Use **Reanalyze** when only the faster built-in text extraction is needed.
@@ -113,4 +113,4 @@ The configured pilot computer starts the Local AI background services automatica
 
 The first time a signed-in user selects **Analyze with Local AI**, the website shows the official [Ollama for Windows download](https://ollama.com/download/windows). Users can select **Don't show this message again** to remember the choice for their database login on that computer.
 
-On the local pilot, the website remains on port 5500 while the browser contacts the protected AI gateway on port 4173 in the background. Approved local website addresses are a network safety restriction, not proof that a user is authorized. The gateway also requires and validates the existing Supabase login session and is the only route allowed to contact Ollama. Do not expose Ollama port 11434 to the public internet.
+The browser contacts the protected loopback gateway on port 4173 in the background, whether the interface is opened from GitHub Pages or the approved local development address. The gateway accepts requests only from approved website origins, requires and validates the existing Supabase login session, and is the only route allowed to contact Ollama. Do not expose gateway port 4173 or Ollama port 11434 to the public network.
