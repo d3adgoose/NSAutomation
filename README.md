@@ -78,7 +78,8 @@ Local AI requires all of the following on the computer providing AI analysis:
 
 - Ollama installed and running.
 - The approved Qwen3-VL model installed.
-- **Start NS Local AI Background.cmd** running the protected local gateway.
+- Node.js LTS installed for the protected local gateway.
+- The one-time **Set Up NS Local AI.cmd** setup completed. Local AI then starts automatically with Windows.
 - An active N/S Automation Database login.
 
 The website address does not authorize Local AI. The signed-in Database session controls access, while the green or red Local AI status circle shows whether the local background service is available.
@@ -97,7 +98,7 @@ Commit the website source, shared assets, tests, Local AI gateway, and Windows s
 
 Local AI is optional and access is controlled by the existing Database login. The hosted website at `https://d3adgoose.github.io/NSAutomation/` connects to the protected Local AI gateway on the user's own computer at `http://127.0.0.1:4173`. The gateway validates the signed-in user's active Supabase session before accepting every status or analysis request. Selected source pages are sent only to Ollama on that computer, and results are always added as pending review.
 
-The hosted page address does not enable, unlock, or bypass Local AI. A user who is not signed in cannot run Local AI. A signed-in user also needs Ollama, the approved model, and **Start NS Local AI Background.cmd** running on the computer performing the analysis.
+The hosted page address does not enable, unlock, or bypass Local AI. A user who is not signed in cannot run Local AI. A signed-in user also needs Ollama, the approved model, Node.js LTS, and the one-time Local AI setup on the computer performing the analysis.
 
 Ollama and the configured Qwen3-VL model are installed on the pilot computer.
 
@@ -109,7 +110,26 @@ Ollama and the configured Qwen3-VL model are installed on the pilot computer.
 
 In Step 1, each Part editor has its own **Improve with AI** button and chat-style request composer. The unified review follows GitHub's familiar format: unchanged lines remain normal, each original changed line appears as a red minus row, and its replacement appears directly below as a green plus row. Every change has a green Accept action and red Revert action in the decision gutter. Fillable placeholders remain protected unless explicitly removed by request.
 
-The configured pilot computer starts the Local AI background services automatically at Windows login. If Local AI reports that it is not ready, double-click **Start NS Local AI Background.cmd**, wait several seconds, and select the Local AI status button again to open the current status popup.
+### One-time coworker setup
+
+No programming experience is needed. Each coworker completes these steps once on the Windows computer that will use Local AI:
+
+1. Download and install [Ollama for Windows](https://ollama.com/download/windows) using the normal installer.
+2. Download and install the **LTS** version of [Node.js](https://nodejs.org/en/download) using the normal installation choices.
+3. Open [d3adgoose/NSAutomation](https://github.com/d3adgoose/NSAutomation). Select the green **Code** button, then select **Download ZIP**.
+4. Open the downloaded ZIP file and select **Extract all**. Save the extracted folder somewhere permanent, such as Documents. Do not delete or move it after setup.
+5. Open the extracted **NSAutomation** folder and double-click **Set Up NS Local AI.cmd**. If Windows asks for confirmation, confirm only after checking that the file came from the repository linked above.
+6. Leave the setup window open. It creates the Windows sign-in startup entry, starts the background service, and downloads the approved Qwen model when it is missing. The model is a large one-time download and may take a while.
+7. Wait until the window says **Local AI setup is complete**, then close it.
+8. Open the [hosted N/S Automation website](https://d3adgoose.github.io/NSAutomation/) in Chrome. Select **Log in** and sign in with the normal company account.
+9. When Chrome asks whether the website may find and connect to devices on the local network, select **Allow**. This permits the hosted interface to reach only the protected Local AI service on that computer.
+10. Open Spec Automation and select the Local AI status button. A green circle confirms that the background service and model are ready.
+
+The Local AI popup displays **Your next step** based on the current login, browser permission, background service, and model status. Its focused controls are **Download One-Time Setup** when setup is needed, **Try Reconnecting** after correcting an issue, and **Close**. The approved Chicago Canal examples remain built in automatically; coworkers do not need to manage or import them.
+
+The setup adds Local AI to that user's Windows Startup folder and starts it immediately. Afterward it starts silently whenever the coworker signs in to Windows; they do not need to run a `.cmd` file each day. Keep the project folder in the same location after setup because the startup entry points to it. If the folder is moved, run setup once again from its new location.
+
+If Local AI reports that Chrome denied access, open the controls beside the website address, open **Site settings**, change **Local network access** to **Allow**, and reload the page. Chrome requires this user permission for every public website that connects to software on the same computer; CORS settings cannot override a denied browser permission.
 
 The first time a signed-in user selects **Analyze with Local AI**, the website shows the official [Ollama for Windows download](https://ollama.com/download/windows). Users can select **Don't show this message again** to remember the choice for their database login on that computer.
 

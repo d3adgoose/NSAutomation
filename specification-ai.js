@@ -79,10 +79,15 @@ Do not extract "clean filter monthly", troubleshooting symptom/cause tables, gen
     const timeout = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let response;
     try {
-      response = await fetch(`${gatewayBase}${path}`, { ...fetchOptions, signal: controller?.signal, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(fetchOptions.headers || {}) } });
+      response = await fetch(`${gatewayBase}${path}`, {
+        ...fetchOptions,
+        ...(servedByLocalGateway ? {} : { targetAddressSpace: "local" }),
+        signal: controller?.signal,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(fetchOptions.headers || {}) }
+      });
     } catch (error) {
       if (error?.name === "AbortError") throw new Error(cancelRequested ? "Analysis stopped by user." : "Visual analysis exceeded the 90-second page limit.");
-      throw new Error("The Local AI background service is not running. Double-click Start NS Local AI Background.cmd, wait a few seconds, and try again.");
+      throw new Error("Local AI could not be reached. In Chrome, open this site's controls beside the address bar, allow Local network access, and reload. If that permission is already allowed, run the one-time Local AI setup.");
     } finally {
       if (timeout) clearTimeout(timeout);
       if (controller) activeRequestControllers.delete(controller);

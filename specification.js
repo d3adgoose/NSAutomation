@@ -3048,8 +3048,16 @@ async function openSpecLocalAiStatusModal() {
   setSpecAiHeaderStatus(ready);
   const active = Boolean(specLocalAiStartedAt);
   const currentMessage = document.getElementById("specSourceStatus")?.textContent || "Waiting for a source.";
+  const nextStep = user.statusError
+    ? "Log in with your company account, then open this Local AI window again."
+    : statusError
+      ? "Allow Local network access in Chrome Site settings. If setup has not been completed on this computer, run Set Up NS Local AI.cmd once. Then select Try Reconnecting."
+      : !status?.ready
+        ? `Run the one-time setup and wait for ${escapeSpec(status?.model || window.SpecificationLocalAI?.model || "the approved Qwen model")} to finish downloading. Then select Try Reconnecting.`
+        : "Local AI is connected. Close this window, add a source, and select Analyze with AI.";
   body.innerHTML = `<div class="spec-ai-status-dashboard">
     <div class="spec-ai-status-hero${ready ? "" : " is-error"}"><div class="spec-ai-status-orb">AI</div><div><h3>${ready ? "Local AI is ready" : "Local AI needs attention"}</h3><p>${escapeSpec(statusError || (status.loaded ? "Qwen is loaded in memory and ready for the next page." : "The approved model is installed and will load when analysis begins."))}</p></div></div>
+    <p class="spec-ai-status-next"><strong>Your next step:</strong> ${nextStep}</p>
     <div class="spec-ai-status-grid">
       <div class="spec-ai-status-card"><span>Background service</span><strong>${ready ? "Connected" : "Unavailable"}</strong></div>
       <div class="spec-ai-status-card"><span>Model</span><strong>${escapeSpec(status?.model || window.SpecificationLocalAI?.model || "Qwen3-VL")}</strong></div>
@@ -3062,13 +3070,19 @@ async function openSpecLocalAiStatusModal() {
     ${active ? `<p class="spec-ai-status-note"><strong>Working now:</strong> ${escapeSpec(specLocalAiActiveSource)}<br>${escapeSpec(currentMessage)}</p>` : `<p class="spec-ai-status-note">Add or resume a source from the Sources + Local AI tab. Extracted results always remain pending until engineer review.</p>`}
   </div>`;
 
-  const sourcesButton = document.createElement("button");
-  sourcesButton.type = "button"; sourcesButton.textContent = "Open Sources"; sourcesButton.onclick = () => { closeSpecModal(); openSpecLocalAiSources(); };
-  actions.prepend(sourcesButton);
-  const examplesButton = document.createElement("button");
-  examplesButton.type = "button"; examplesButton.className = "secondary"; examplesButton.textContent = "Manage Examples";
-  examplesButton.onclick = openSpecLocalAiExamplesModal;
-  actions.prepend(examplesButton);
+  const reconnectButton = document.createElement("button");
+  reconnectButton.type = "button"; reconnectButton.textContent = "Try Reconnecting";
+  reconnectButton.onclick = openSpecLocalAiStatusModal;
+  actions.prepend(reconnectButton);
+  if (!ready && !user.statusError) {
+    const setupLink = document.createElement("a");
+    setupLink.className = "button-link spec-ai-setup-link";
+    setupLink.href = "https://raw.githubusercontent.com/d3adgoose/NSAutomation/main/Set%20Up%20NS%20Local%20AI.cmd";
+    setupLink.download = "Set Up NS Local AI.cmd";
+    setupLink.textContent = "Download One-Time Setup";
+    setupLink.title = "Run this once. Local AI will start automatically with Windows afterward.";
+    actions.prepend(setupLink);
+  }
   if (active && window.SpecificationLocalAI?.cancel) {
     const stopButton = document.createElement("button");
     stopButton.type = "button"; stopButton.className = "delete-btn"; stopButton.textContent = "Stop Analysis";
@@ -3386,7 +3400,7 @@ function showSpecAiSetupNotice(user) {
   return new Promise(resolve => {
     const modal = document.getElementById("specModal");
     document.getElementById("specModalTitle").textContent = "Local AI Setup";
-    document.getElementById("specModalBody").innerHTML = `<div class="spec-privacy-panel"><strong>Local AI keeps source analysis on this computer.</strong><p>Ollama and the Qwen3-VL model must be installed on each computer that performs AI analysis. This pilot computer is already configured.</p></div><p>If Local AI is not installed on another approved company computer, download Ollama from the official website and ask the automation administrator to install the approved Qwen3-VL model.</p><p><a class="button-link" href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">Download Ollama for Windows</a></p><label class="spec-ai-notice-choice"><input id="specAiHideSetupNotice" type="checkbox"> Don’t show this message again for my login on this computer</label>`;
+    document.getElementById("specModalBody").innerHTML = `<div class="spec-privacy-panel"><strong>Local AI keeps source analysis on this computer.</strong><p>No programming experience is needed. Complete this setup once, then Local AI starts automatically whenever you sign in to Windows.</p></div><ol class="spec-local-ai-setup-steps"><li>Install <a href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">Ollama for Windows</a> and the <strong>LTS</strong> version of <a href="https://nodejs.org/en/download" target="_blank" rel="noopener noreferrer">Node.js</a> using their normal installers.</li><li>Open <a href="https://github.com/d3adgoose/NSAutomation" target="_blank" rel="noopener noreferrer">d3adgoose/NSAutomation on GitHub</a>. Select <strong>Code</strong>, then <strong>Download ZIP</strong>.</li><li>Open the ZIP, select <strong>Extract all</strong>, and keep the extracted folder somewhere permanent.</li><li>Open that folder and double-click <strong>Set Up NS Local AI.cmd</strong>. Leave it open until it says setup is complete; the first model download may take a while.</li><li>Return to this website. When Chrome asks for <strong>Local network access</strong>, select <strong>Allow</strong>.</li></ol><p><a class="button-link" href="https://github.com/d3adgoose/NSAutomation" target="_blank" rel="noopener noreferrer">Open d3adgoose/NSAutomation</a> <a class="button-link secondary" href="https://github.com/d3adgoose/NSAutomation/archive/refs/heads/main.zip">Download ZIP</a></p><p class="converter-muted">After setup, select Continue. If permission was denied earlier, open Chrome Site settings for this website, change Local network access to Allow, and reload.</p><label class="spec-ai-notice-choice"><input id="specAiHideSetupNotice" type="checkbox"> Don’t show this message again for my login on this computer</label>`;
     const actions = document.getElementById("specModalActions");
     actions.replaceChildren();
     const continueButton = document.createElement("button");

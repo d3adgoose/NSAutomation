@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Spec Automation</title>
-  <link rel="stylesheet" href="style.css?v=20260723-ai-github-unified-v2" />
+  <link rel="stylesheet" href="style.css?v=20260723-ai-popup-buttons" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
@@ -81,8 +81,25 @@
         </div>
 
         <div class="spec-guidance-callout">
-          <strong>If Local AI will not start</strong>
-          <p>Confirm you are signed in with the shared database login. <span id="specAiLoggedInDownloadHelp" class="hidden">If Ollama is not installed on the approved company AI computer, use the <a href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">official Ollama for Windows download</a> and ask the automation administrator to install the approved Qwen3-VL model. </span>If the model is still loading, wait a minute and try the source again.</p>
+          <strong>Set up Local AI once on each computer</strong>
+          <p>You do not need programming experience. Complete these steps once on the Windows computer that will use Local AI.</p>
+          <ol class="spec-local-ai-setup-steps">
+            <li>Install <a href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">Ollama for Windows</a>. Use its normal Windows installer.</li>
+            <li>Install the <strong>LTS</strong> version from the <a href="https://nodejs.org/en/download" target="_blank" rel="noopener noreferrer">Node.js download page</a>. Keep the normal installation choices.</li>
+            <li>Open <a href="https://github.com/d3adgoose/NSAutomation" target="_blank" rel="noopener noreferrer">d3adgoose/NSAutomation on GitHub</a>. Select the green <strong>Code</strong> button, then <strong>Download ZIP</strong>.</li>
+            <li>Open the downloaded ZIP file, select <strong>Extract all</strong>, and save the extracted folder somewhere permanent, such as Documents. Local AI needs this folder to stay in that location.</li>
+            <li>Open the extracted <strong>NSAutomation</strong> folder and double-click <strong>Set Up NS Local AI.cmd</strong>. If Windows asks for confirmation, confirm only after checking that the file came from the repository linked above.</li>
+            <li>Leave the setup window open while it downloads the approved Qwen model. The first download is large and may take a while. Wait until it says <strong>Local AI setup is complete</strong>.</li>
+            <li>Open this website in Chrome and select <strong>Log in</strong>. Sign in with your normal company account.</li>
+            <li>When Chrome asks whether the website may find and connect to devices on the local network, select <strong>Allow</strong>. This lets the website reach Local AI on this computer; source documents remain local.</li>
+          </ol>
+          <p id="specAiLoggedInDownloadHelp" class="hidden"><strong>After setup:</strong> select the Local AI status button. A green circle means the service and model are ready. You do not need to run the setup file again each day.</p>
+          <p><strong>Local AI popup:</strong> follow the displayed <strong>Your next step</strong> message. Use <strong>Download One-Time Setup</strong> when this computer has not been configured, <strong>Try Reconnecting</strong> after correcting an issue, or <strong>Close</strong> to return to the specification.</p>
+        </div>
+
+        <div class="spec-guidance-callout is-note">
+          <strong>If Chrome previously blocked Local AI</strong>
+          <p>Open the controls beside the website address, choose <strong>Site settings</strong>, set <strong>Local network access</strong> to <strong>Allow</strong>, and reload the page. If the project folder was moved, run <strong>Set Up NS Local AI.cmd</strong> once from its new location.</p>
         </div>
 
         <div class="spec-guidance-callout">
@@ -352,8 +369,8 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
 
   <script src="common.js"></script>
   <script src="supabaseClient.js"></script>
-  <script src="specification-ai.js?v=20260723-hosted-local-ai"></script>
-  <script src="specification.js?v=20260723-ai-github-unified-v2"></script>
+  <script src="specification-ai.js?v=20260723-local-network-permission"></script>
+  <script src="specification.js?v=20260723-simple-ai-popup"></script>
   <script src="global-auth.js?v=20260722-database-login-style"></script>
   <script src="navigation.js?v=20260720-spec-automation"></script>
 </body>
