@@ -1,3 +1,7 @@
+/* --------------------------------------------------------------------------
+   Shared foundation
+   -------------------------------------------------------------------------- */
+
 body {
   margin: 0;
   font-family: Arial, sans-serif;
@@ -279,7 +283,9 @@ button:hover {
   color: #0b2d4d;
 }
 
-/* Specification automation */
+/* --------------------------------------------------------------------------
+   Specification automation
+   -------------------------------------------------------------------------- */
 .spec-main { display: flex; flex-direction: column; max-width: 1500px; margin: 0 auto; }
 .spec-how-to { order: -1; }
 .spec-how-to-content { margin-top: 10px; }
@@ -313,9 +319,19 @@ button:hover {
 .spec-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; }
 .spec-form-grid label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; color: #26394b; }
 .spec-form-grid input,
-.spec-form-grid select,
-.spec-form-grid textarea { width: 100%; box-sizing: border-box; font-weight: 400; }
-.spec-form-grid textarea { resize: vertical; line-height: 1.45; }
+.spec-form-grid select {
+  width: 100%;
+  box-sizing: border-box;
+  font-weight: 400;
+}
+
+.spec-form-grid textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-weight: 400;
+  line-height: 1.45;
+}
 .spec-wide-field { grid-column: 1 / -1; }
 .spec-project-transfer { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; border: 1px solid #cbdbe7; border-radius: 8px; background: #f2f7fb; }
 .spec-project-transfer p { margin: 4px 0 0; color: #5d7183; font-weight: 400; }
@@ -3419,7 +3435,12 @@ details summary:hover {
   font-weight: 600;
 }
 
-/* Shared application polish: desktop-app spacing, controls, feedback, and motion. */
+/* --------------------------------------------------------------------------
+   Shared application polish: spacing, controls, feedback, and motion
+
+   This intentionally follows the feature styles above. It is the final shared
+   theme layer, so moving it earlier would change the cascade.
+   -------------------------------------------------------------------------- */
 :root {
   --ns-bg: #f4f6f8;
   --ns-bg-strong: #e8eef4;

@@ -10,6 +10,12 @@ const SPEC_SOURCE_STORE = "files";
 const SPEC_LOCAL_AI_EXAMPLES_KEY = "ns-spec-local-ai-examples-v1";
 const SPEC_AI_WRITING_HISTORY_KEY = "ns-spec-ai-writing-history-v1";
 const SPEC_STATUSES = ["Needs Review", "Database Verified", "Document Extracted", "Rule Calculated", "Manually Entered", "Engineer Approved"];
+const SPEC_SOURCE_COMPONENT_METHODS = new Set([
+  "Table of contents product list",
+  "Structured equipment extraction",
+  "O&M product description",
+  "O&M included component"
+]);
 let specDocumentFiles = new Map();
 let specAiAuthenticatedUser = null;
 let specState = createEmptySpecificationState();
@@ -1265,7 +1271,9 @@ async function newSpecificationProject() {
   specState = createEmptySpecificationState(); specDocumentFiles.clear(); localStorage.removeItem(SPEC_STORAGE_KEY); applySpecificationStateToUI();
 }
 
-async function handleSpecAiToggle(event) {
+// Retained for reference while the current privacy-first AI flow is evaluated.
+// Keeping a distinct name prevents this placeholder from being silently replaced.
+async function handleSpecAiToggleLegacyPlaceholder(event) {
   if (!event.target.checked) {
     SpecificationAIService.configure({ provider: "disabled" });
     document.getElementById("specAiState").textContent = "Local Mode — AI Disabled";
@@ -1278,7 +1286,7 @@ async function handleSpecAiToggle(event) {
   saveSpecificationProject(false);
 }
 
-function openSpecAiConfiguration() {
+function openSpecAiConfigurationLegacyPlaceholder() {
   const current = SpecificationAIService.getState();
   showSpecFormModal("AI Configuration", `<div class="spec-privacy-panel"><strong>No credentials are stored in frontend code.</strong><p>Local/self-hosted AI is preferred. Connecting an enterprise provider later will require an approved server-side proxy and a confirmation before every request.</p></div><div class="spec-form-grid"><label>Provider<select id="specAiProvider"><option value="disabled">Disabled</option><option value="ollama">Local / Ollama (future)</option><option value="enterprise">Approved enterprise provider (future)</option></select></label><label>Local or approved proxy endpoint<input id="specAiEndpoint" placeholder="Example: http://localhost:11434" value="${escapeSpecAttr(current.endpoint)}"></label><label class="spec-wide-field">Data policy<input value="Minimum necessary text only; explicit confirmation required" disabled></label></div>`, () => {
     const provider = val("specAiProvider");
@@ -1291,6 +1299,10 @@ function openSpecAiConfiguration() {
   });
   const select = document.getElementById("specAiProvider"); if (select) select.value = current.provider || "disabled";
 }
+
+// ---------------------------------------------------------------------------
+// Source documents and extraction
+// ---------------------------------------------------------------------------
 
 async function addSpecificationDocuments(fileList) {
   const selectedFiles = Array.from(fileList || []);
@@ -2092,6 +2104,10 @@ function identifySpecEquipmentContext(text) {
   return equipment.find(([, pattern]) => pattern.test(value))?.[0] || "General System Requirement";
 }
 
+// ---------------------------------------------------------------------------
+// Source review and equipment approval
+// ---------------------------------------------------------------------------
+
 function renderSpecSourceSuggestions() {
   const list = document.getElementById("specSuggestionList");
   const summary = document.getElementById("specSuggestionSummary");
@@ -2222,11 +2238,72 @@ function renderSpecEquipmentApprovals() {
   }).join("");
 }
 
-function updateTocEquipmentName(id, value) { const item = specState.components.find(row => row.id === id); if (!item) return; item.description = String(value || "").trim(); touchSpecificationProject(); renderSpecEquipmentApprovals(); }
-function openManualTocEquipmentEntry() { showSpecFormModal("Add Equipment for Review", `<label>Equipment name<input id="specManualEquipmentName" placeholder="Example: Reclaim Pump"></label>`, () => { const description = val("specManualEquipmentName").trim(); if (!description) return; specState.components.push(createSpecComponent({ description, sourceDocument: "Manual equipment-list entry", detectionMethod: "Table of contents product list", verificationStatus: "Needs Review", quantityExplanation: "Manually added for approval before inclusion in Article 2.2." })); closeSpecModal(); touchSpecificationProject(); renderSpecEquipmentApprovals(); }); }
-function approveTocEquipment(id) { const item = specState.components.find(row => row.id === id); if (!item || !item.description.trim()) return; item.verificationStatus = "Engineer Approved"; item.approvedBy = specState.project.engineer || "Engineer"; syncApprovedEquipmentListToPart2(); touchSpecificationProject(); renderSpecEquipmentApprovals(); renderSpecSourceSuggestions(); }
-function undoTocEquipmentApproval(id) { const item = specState.components.find(row => row.id === id); if (!item) return; item.verificationStatus = "Needs Review"; item.approvedBy = ""; syncApprovedEquipmentListToPart2(); touchSpecificationProject(); renderSpecEquipmentApprovals(); renderSpecSourceSuggestions(); }
-function rejectTocEquipment(id) { const item = specState.components.find(row => row.id === id); if (!item) return; item.verificationStatus = "Rejected"; item.include = false; syncApprovedEquipmentListToPart2(); touchSpecificationProject(); renderSpecEquipmentApprovals(); renderSpecSourceSuggestions(); }
+function updateTocEquipmentName(id, value) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item) return;
+
+  item.description = String(value || "").trim();
+  touchSpecificationProject();
+  renderSpecEquipmentApprovals();
+}
+
+function openManualTocEquipmentEntry() {
+  showSpecFormModal(
+    "Add Equipment for Review",
+    `<label>Equipment name<input id="specManualEquipmentName" placeholder="Example: Reclaim Pump"></label>`,
+    () => {
+      const description = val("specManualEquipmentName").trim();
+      if (!description) return;
+
+      specState.components.push(createSpecComponent({
+        description,
+        sourceDocument: "Manual equipment-list entry",
+        detectionMethod: "Table of contents product list",
+        verificationStatus: "Needs Review",
+        quantityExplanation: "Manually added for approval before inclusion in Article 2.2."
+      }));
+      closeSpecModal();
+      touchSpecificationProject();
+      renderSpecEquipmentApprovals();
+    }
+  );
+}
+
+function approveTocEquipment(id) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item || !item.description.trim()) return;
+
+  item.verificationStatus = "Engineer Approved";
+  item.approvedBy = specState.project.engineer || "Engineer";
+  syncApprovedEquipmentListToPart2();
+  touchSpecificationProject();
+  renderSpecEquipmentApprovals();
+  renderSpecSourceSuggestions();
+}
+
+function undoTocEquipmentApproval(id) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item) return;
+
+  item.verificationStatus = "Needs Review";
+  item.approvedBy = "";
+  syncApprovedEquipmentListToPart2();
+  touchSpecificationProject();
+  renderSpecEquipmentApprovals();
+  renderSpecSourceSuggestions();
+}
+
+function rejectTocEquipment(id) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item) return;
+
+  item.verificationStatus = "Rejected";
+  item.include = false;
+  syncApprovedEquipmentListToPart2();
+  touchSpecificationProject();
+  renderSpecEquipmentApprovals();
+  renderSpecSourceSuggestions();
+}
 
 function addAcceptedSuggestionToEquipmentApproval(suggestion, destination) {
   if (destination.article !== "2.5") return;
@@ -3516,7 +3593,11 @@ async function reanalyzeSpecDocument(id) {
   }
   specState.sourceSuggestions = (specState.sourceSuggestions || []).filter(item => item.documentId !== id || item.status === "accepted");
   specState.fillInSuggestions = (specState.fillInSuggestions || []).filter(item => item.documentId !== id || item.status === "accepted");
-  specState.components = (specState.components || []).filter(item => item.sourceDocumentId !== id || item.verificationStatus === "Engineer Approved" || !["Table of contents product list", "Structured equipment extraction", "O&M product description", "O&M included component"].includes(item.detectionMethod));
+  specState.components = (specState.components || []).filter(item =>
+    item.sourceDocumentId !== id ||
+    item.verificationStatus === "Engineer Approved" ||
+    !SPEC_SOURCE_COMPONENT_METHODS.has(item.detectionMethod)
+  );
   setSpecSourceStatus(`Reanalyzing ${file.name}...`, "is-loading");
   const result = await extractSpecSourceSuggestions(file, id);
   const suggestions = Math.max(0, result?.suggestions || 0);
@@ -3527,8 +3608,43 @@ async function reanalyzeSpecDocument(id) {
   setSpecSourceStatus(`${file.name} was reanalyzed. ${suggestions} source suggestion${suggestions === 1 ? "" : "s"} and ${fillIns} template value${fillIns === 1 ? "" : "s"} are ready for review.`, "is-complete");
 }
 
-async function downloadSpecDocument(id) { let file = specDocumentFiles.get(id); if (!file) file = await getSpecificationSourceFile(id).catch(() => null); if (!file) return showSpecMessage("File Unavailable", "This older source was saved before persistent source storage was added. Reattach it once to save it locally."); specDocumentFiles.set(id, file); downloadFile(file, file.name, file.type || "application/octet-stream"); }
-async function removeSpecDocument(id) { specState.documents = specState.documents.filter(doc => doc.id !== id); specState.sourceSuggestions = (specState.sourceSuggestions || []).filter(item => item.documentId !== id); specState.fillInSuggestions = (specState.fillInSuggestions || []).filter(item => item.documentId !== id); specState.components = (specState.components || []).filter(item => item.sourceDocumentId !== id || !["Table of contents product list", "Structured equipment extraction", "O&M product description", "O&M included component"].includes(item.detectionMethod)); specDocumentFiles.delete(id); await deleteSpecificationSourceFile(id).catch(error => console.warn("Could not remove saved source:", error)); touchSpecificationProject(); renderSpecDocuments(); renderSpecSourceSuggestions(); renderExtractedSpecFillIns(); renderSpecComponents(); renderSpecificationReview(); }
+async function downloadSpecDocument(id) {
+  let file = specDocumentFiles.get(id);
+  if (!file) file = await getSpecificationSourceFile(id).catch(() => null);
+  if (!file) {
+    return showSpecMessage(
+      "File Unavailable",
+      "This older source was saved before persistent source storage was added. Reattach it once to save it locally."
+    );
+  }
+
+  specDocumentFiles.set(id, file);
+  downloadFile(file, file.name, file.type || "application/octet-stream");
+}
+
+async function removeSpecDocument(id) {
+  specState.documents = specState.documents.filter(doc => doc.id !== id);
+  specState.sourceSuggestions = (specState.sourceSuggestions || []).filter(item => item.documentId !== id);
+  specState.fillInSuggestions = (specState.fillInSuggestions || []).filter(item => item.documentId !== id);
+  specState.components = (specState.components || []).filter(item =>
+    item.sourceDocumentId !== id || !SPEC_SOURCE_COMPONENT_METHODS.has(item.detectionMethod)
+  );
+  specDocumentFiles.delete(id);
+  await deleteSpecificationSourceFile(id).catch(error =>
+    console.warn("Could not remove saved source:", error)
+  );
+
+  touchSpecificationProject();
+  renderSpecDocuments();
+  renderSpecSourceSuggestions();
+  renderExtractedSpecFillIns();
+  renderSpecComponents();
+  renderSpecificationReview();
+}
+
+// ---------------------------------------------------------------------------
+// Component and quantity-rule workspace
+// ---------------------------------------------------------------------------
 
 function createSpecComponent(values = {}) {
   return { id: crypto.randomUUID(), selected: false, include: true, partNumber: "", alternatePartNumber: "", description: "", manufacturer: "", model: "", quantity: 1, unit: "ea", assembly: "", sourceDocument: "Manual entry", sourceDocumentId: "", sourcePage: "", detectionMethod: "Manual engineer entry", verificationStatus: "Manually Entered", notes: "", quantityExplanation: "Manual engineer entry.", rulesUsed: [], aiInvolved: false, approvedBy: "", modifiedAt: new Date().toISOString(), matchConfidence: "", matchMethod: "", ...values };
@@ -3579,21 +3695,119 @@ function renderSpecComponents() {
   });
 }
 
-function setSpecComponentValue(id, key, value) { const item = specState.components.find(row => row.id === id); if (item) { item[key] = value; touchSpecificationProject(); } }
-function duplicateSpecComponent(id) { const source = specState.components.find(row => row.id === id); if (!source) return; specState.components.push({ ...source, id: crypto.randomUUID(), selected: false, verificationStatus: "Needs Review", approvedBy: "", modifiedAt: new Date().toISOString() }); touchSpecificationProject(); renderSpecComponents(); }
-function deleteSpecComponent(id) { specState.components = specState.components.filter(row => row.id !== id); touchSpecificationProject(); renderSpecComponents(); }
-function approveSpecComponent(id) { const item = specState.components.find(row => row.id === id); if (!item) return; const engineer = specState.project.engineer || "Engineer"; item.verificationStatus = "Engineer Approved"; item.approvedBy = engineer; item.modifiedAt = new Date().toISOString(); specState.aiAudit.push({ id: crypto.randomUUID(), at: item.modifiedAt, action: item.aiInvolved ? "AI suggestion approved" : "Component approved", componentId: id, engineer }); renderSpecComponents(); touchSpecificationProject(); }
+function setSpecComponentValue(id, key, value) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item) return;
 
-function showSpecQuantityDetails(id) { const item = specState.components.find(row => row.id === id); if (!item) return; showSpecMessage("Quantity Details", `<strong>Final quantity:</strong> ${item.quantity} ${escapeSpec(item.unit)}<br><strong>Calculation:</strong> ${escapeSpec(item.quantityExplanation)}<br><strong>Source:</strong> ${escapeSpec(item.sourceDocument)} ${escapeSpec(item.sourcePage)}<br><strong>Rules used:</strong> ${escapeSpec(item.rulesUsed.join(", ") || "None")}<br><strong>AI involved:</strong> ${item.aiInvolved ? "Yes — approval required" : "No"}<br><strong>Approved by:</strong> ${escapeSpec(item.approvedBy || "Not approved")}<br><strong>Last modified:</strong> ${new Date(item.modifiedAt).toLocaleString()}`, true); }
+  item[key] = value;
+  touchSpecificationProject();
+}
 
-function mergeSelectedSpecComponents() { const selected = specState.components.filter(item => item.selected); if (selected.length < 2) return showSpecMessage("Select Components", "Select at least two components to merge."); const target = selected[0]; const quantities = selected.map(item => Number(item.quantity || 0)); target.quantity = quantities.reduce((sum, quantity) => sum + quantity, 0); target.quantityExplanation = `Merged ${selected.length} engineer-selected entries: ${quantities.join(" + ")} = ${target.quantity} ${target.unit}.`; target.verificationStatus = "Needs Review"; target.selected = false; specState.components = specState.components.filter(item => !item.selected || item.id === target.id); touchSpecificationProject(); renderSpecComponents(); }
-function recalculateSelectedSpecComponents() { const selected = specState.components.filter(item => item.selected); if (!selected.length) return showSpecMessage("Select Components", "Select components to recalculate."); selected.forEach(item => { item.verificationStatus = item.rulesUsed.length ? "Rule Calculated" : "Needs Review"; item.modifiedAt = new Date().toISOString(); }); previewApplySpecRules(selected.map(item => item.id)); }
+function duplicateSpecComponent(id) {
+  const source = specState.components.find(row => row.id === id);
+  if (!source) return;
+
+  specState.components.push({
+    ...source,
+    id: crypto.randomUUID(),
+    selected: false,
+    verificationStatus: "Needs Review",
+    approvedBy: "",
+    modifiedAt: new Date().toISOString()
+  });
+  touchSpecificationProject();
+  renderSpecComponents();
+}
+
+function deleteSpecComponent(id) {
+  specState.components = specState.components.filter(row => row.id !== id);
+  touchSpecificationProject();
+  renderSpecComponents();
+}
+
+function approveSpecComponent(id) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item) return;
+
+  const engineer = specState.project.engineer || "Engineer";
+  item.verificationStatus = "Engineer Approved";
+  item.approvedBy = engineer;
+  item.modifiedAt = new Date().toISOString();
+  specState.aiAudit.push({
+    id: crypto.randomUUID(),
+    at: item.modifiedAt,
+    action: item.aiInvolved ? "AI suggestion approved" : "Component approved",
+    componentId: id,
+    engineer
+  });
+  renderSpecComponents();
+  touchSpecificationProject();
+}
+
+function showSpecQuantityDetails(id) {
+  const item = specState.components.find(row => row.id === id);
+  if (!item) return;
+
+  showSpecMessage(
+    "Quantity Details",
+    `<strong>Final quantity:</strong> ${item.quantity} ${escapeSpec(item.unit)}<br>` +
+      `<strong>Calculation:</strong> ${escapeSpec(item.quantityExplanation)}<br>` +
+      `<strong>Source:</strong> ${escapeSpec(item.sourceDocument)} ${escapeSpec(item.sourcePage)}<br>` +
+      `<strong>Rules used:</strong> ${escapeSpec(item.rulesUsed.join(", ") || "None")}<br>` +
+      `<strong>AI involved:</strong> ${item.aiInvolved ? "Yes — approval required" : "No"}<br>` +
+      `<strong>Approved by:</strong> ${escapeSpec(item.approvedBy || "Not approved")}<br>` +
+      `<strong>Last modified:</strong> ${new Date(item.modifiedAt).toLocaleString()}`,
+    true
+  );
+}
+
+function mergeSelectedSpecComponents() {
+  const selected = specState.components.filter(item => item.selected);
+  if (selected.length < 2) {
+    return showSpecMessage("Select Components", "Select at least two components to merge.");
+  }
+
+  const target = selected[0];
+  const quantities = selected.map(item => Number(item.quantity || 0));
+  target.quantity = quantities.reduce((sum, quantity) => sum + quantity, 0);
+  target.quantityExplanation = `Merged ${selected.length} engineer-selected entries: ${quantities.join(" + ")} = ${target.quantity} ${target.unit}.`;
+  target.verificationStatus = "Needs Review";
+  target.selected = false;
+  specState.components = specState.components.filter(item => !item.selected || item.id === target.id);
+  touchSpecificationProject();
+  renderSpecComponents();
+}
+
+function recalculateSelectedSpecComponents() {
+  const selected = specState.components.filter(item => item.selected);
+  if (!selected.length) {
+    return showSpecMessage("Select Components", "Select components to recalculate.");
+  }
+
+  selected.forEach(item => {
+    item.verificationStatus = item.rulesUsed.length ? "Rule Calculated" : "Needs Review";
+    item.modifiedAt = new Date().toISOString();
+  });
+  previewApplySpecRules(selected.map(item => item.id));
+}
 
 function openSpecRuleEditor(id = "") { const existing = specState.rules.find(rule => rule.uid === id || rule.id === id); const rule = existing || { id: `QR-${String(specState.rules.length + 1).padStart(3,"0")}`, uid: crypto.randomUUID(), name: "", parent: "", child: "", multiplier: 1, conditions: "", unit: "ea", active: true, notes: "" }; showSpecFormModal(existing ? "Edit Quantity Rule" : "Add Quantity Rule", `<div class="spec-form-grid"><label>Rule ID<input id="srId" value="${escapeSpecAttr(rule.id)}"></label><label>Rule name<input id="srName" value="${escapeSpecAttr(rule.name)}"></label><label>Parent component / equipment<input id="srParent" value="${escapeSpecAttr(rule.parent)}"></label><label>Required child component<input id="srChild" value="${escapeSpecAttr(rule.child)}"></label><label>Quantity multiplier<input id="srMultiplier" type="number" min="0" step="0.01" value="${rule.multiplier}"></label><label>Unit<input id="srUnit" value="${escapeSpecAttr(rule.unit)}"></label><label class="spec-wide-field">Conditions<input id="srConditions" value="${escapeSpecAttr(rule.conditions)}"></label><label class="spec-wide-field">Notes<textarea id="srNotes">${escapeSpec(rule.notes)}</textarea></label><label><input id="srActive" type="checkbox" ${rule.active ? "checked" : ""}> Active</label></div>`, () => { const values = { id: val("srId").trim(), name: val("srName").trim(), parent: val("srParent").trim(), child: val("srChild").trim(), multiplier: Number(val("srMultiplier")), unit: val("srUnit").trim() || "ea", conditions: val("srConditions"), notes: val("srNotes"), active: document.getElementById("srActive").checked }; if (!values.id || !values.name || !values.parent || !values.child || !Number.isFinite(values.multiplier) || values.multiplier <= 0) return showSpecMessage("Rule Information Required", "Enter a rule ID, name, parent, required child, and a multiplier greater than zero."); Object.assign(rule, values); if (!existing) specState.rules.push(rule); closeSpecModal(); touchSpecificationProject(); renderSpecRules(); }); }
 
 function renderSpecRules() { const body = document.getElementById("specRuleBody"); if (!body) return; body.innerHTML = specState.rules.length ? specState.rules.map(rule => `<tr><td>${escapeSpec(rule.id)}</td><td>${escapeSpec(rule.name)}</td><td>${escapeSpec(rule.parent)}</td><td>${escapeSpec(rule.child)}</td><td>${rule.multiplier}</td><td>${escapeSpec(rule.conditions || "—")}</td><td>${escapeSpec(rule.unit)}</td><td>${rule.active ? "Active" : "Inactive"}</td><td><div class="spec-row-actions"><button onclick="openSpecRuleEditor('${rule.uid}')">Edit</button><button class="secondary" onclick="toggleSpecRule('${rule.uid}')">${rule.active ? "Disable" : "Enable"}</button><button class="delete-btn" onclick="deleteSpecRule('${rule.uid}')">Delete</button></div></td></tr>`).join("") : `<tr><td colspan="9">No quantity rules defined.</td></tr>`; }
-function toggleSpecRule(uid) { const rule = specState.rules.find(row => row.uid === uid); if (rule) { rule.active = !rule.active; touchSpecificationProject(); renderSpecRules(); } }
-function deleteSpecRule(uid) { specState.rules = specState.rules.filter(row => row.uid !== uid); touchSpecificationProject(); renderSpecRules(); }
+function toggleSpecRule(uid) {
+  const rule = specState.rules.find(row => row.uid === uid);
+  if (!rule) return;
+
+  rule.active = !rule.active;
+  touchSpecificationProject();
+  renderSpecRules();
+}
+
+function deleteSpecRule(uid) {
+  specState.rules = specState.rules.filter(row => row.uid !== uid);
+  touchSpecificationProject();
+  renderSpecRules();
+}
 
 async function previewApplySpecRules(selectedIds = null) { const proposals = []; specState.rules.filter(rule => rule.active).forEach(rule => { const parents = specState.components.filter(item => (!selectedIds || selectedIds.includes(item.id)) && [item.description,item.partNumber,item.assembly].join(" ").toLowerCase().includes(rule.parent.toLowerCase())); parents.forEach(parent => { let child = specState.components.find(item => [item.description,item.partNumber].join(" ").toLowerCase().includes(rule.child.toLowerCase())); proposals.push({ rule, parent, child, quantity: Number(parent.quantity) * Number(rule.multiplier) }); }); }); if (!proposals.length) return showSpecMessage("No Rule Changes", "No active rules matched the current components."); const approved = await showSpecConfirm("Apply Quantity Rules", proposals.map(p => `${p.rule.id}: ${p.parent.quantity} ${p.parent.description || p.parent.partNumber} × ${p.rule.multiplier} = ${p.quantity} ${p.rule.unit} ${p.rule.child}`).join("\n"), "Apply Changes"); if (!approved) return; proposals.forEach(p => { const child = p.child || createSpecComponent({ description: p.rule.child, unit: p.rule.unit, sourceDocument: `Quantity Rule ${p.rule.id}` }); child.quantity = p.quantity; child.quantityExplanation = `${p.parent.quantity} ${p.rule.parent} × ${p.rule.multiplier} ${p.rule.child} per ${p.rule.parent}`; child.rulesUsed = Array.from(new Set([...(child.rulesUsed || []), p.rule.id])); child.detectionMethod = "Approved quantity rule"; child.verificationStatus = "Rule Calculated"; child.modifiedAt = new Date().toISOString(); if (!p.child) specState.components.push(child); }); touchSpecificationProject(); renderSpecComponents(); }
 
@@ -4046,15 +4260,11 @@ function showSpecFormModal(title, html, onSave) { const modal=document.getElemen
 function showSpecMessage(title,message,html=false) { showSpecFormModal(title,html?`<p>${message}</p>`:`<p>${escapeSpec(message)}</p>`,closeSpecModal); document.querySelector("#specModalActions button")?.remove(); const closeButton = document.querySelector("#specModalActions .secondary"); if (closeButton) closeButton.textContent = "Close"; }
 function showSpecConfirm(title,message,confirmLabel="Continue") { return new Promise(resolve => { const modal=document.getElementById("specModal"); document.getElementById("specModalTitle").textContent=title; const body=document.getElementById("specModalBody"); body.innerHTML=""; const p=document.createElement("p"); p.className="spec-confirm-copy"; p.textContent=message; body.appendChild(p); const actions=document.getElementById("specModalActions"); actions.replaceChildren(); const yes=document.createElement("button"); yes.textContent=confirmLabel; yes.onclick=()=>{closeSpecModal();resolve(true)}; const no=document.createElement("button"); no.className="secondary"; no.textContent="Cancel"; no.onclick=()=>{closeSpecModal();resolve(false)}; actions.append(yes,no); modal.classList.remove("hidden"); }); }
 function closeSpecModal(){document.getElementById("specModal")?.classList.add("hidden")}
-function val(id){return document.getElementById(id)?.value||""}
-function escapeSpec(value){return String(value??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
-function escapeSpecAttr(value){return escapeSpec(value)}
-function statusClass(value){return String(value||"").toLowerCase().replace(/[^a-z]+/g,"-").replace(/^-|-$/g,"")}
-function formatSpecBytes(bytes){return Number(bytes||0)>=1048576?`${(bytes/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(bytes/1024))} KB`}
-
 // Privacy-first AI Phase 1. These handlers replace the original configuration placeholder.
 async function handleSpecAiToggle(event){if(!event.target.checked){SpecificationAIService.disable();logSpecAiActivity("AI disabled",{suggestionStatus:"No request made"});updateSpecAiInterface();saveSpecificationProject(false);return}event.target.checked=false;openSpecAiConfiguration()}
-function openSpecAiConfiguration(){const c=SpecificationAIService.getConfig(),ck=k=>c[k]?"checked":"";showSpecFormModal("AI Configuration",`<div class="spec-privacy-panel"><strong>AI is optional and starts disabled every time this page opens.</strong><p>Connection testing sends no documents. Never enter API keys here. Enterprise providers require a future company-approved server proxy.</p></div><div class="spec-form-grid"><label>Provider<select id="specAiProvider"><option value="disabled">Disabled</option><option value="ollama">Local Ollama</option><option value="openai_local">Local OpenAI-compatible server</option><option value="enterprise">Enterprise (backend required)</option><option value="custom">Custom (backend required)</option></select></label><label>Endpoint<input id="specAiEndpoint" value="${escapeSpecAttr(c.endpoint)}"></label><label>Model<input id="specAiModel" list="specAiModels" value="${escapeSpecAttr(c.model)}"><datalist id="specAiModels"></datalist></label><label>Timeout (seconds)<input id="specAiTimeout" type="number" min="2" max="60" value="${Math.round(c.requestTimeout/1000)}"></label><label>Maximum context characters<input id="specAiMaxContext" type="number" min="500" max="50000" value="${c.maxContextSize}"></label><fieldset class="spec-wide-field"><legend>Information allowed for review</legend><label><input id="specAiIncludeDocs" type="checkbox" ${ck("includeDocumentContent")}> Selected document references</label><label><input id="specAiIncludeProject" type="checkbox" ${ck("includeProjectIdentifiers")}> Project identifiers</label><label><input id="specAiIncludeCustomer" type="checkbox" ${ck("includeCustomerInformation")}> Customer information</label></fieldset><fieldset class="spec-wide-field"><legend>Automatic redaction</legend><label><input id="specAiRedactEmails" type="checkbox" ${ck("redactEmails")}> Emails</label><label><input id="specAiRedactPricing" type="checkbox" ${ck("redactPricing")}> Pricing</label><label><input id="specAiRedactParts" type="checkbox" ${ck("redactInternalParts")}> Internal part numbers</label><label><input id="specAiRedactDrawings" type="checkbox" ${ck("redactDrawingNumbers")}> Drawing numbers</label><label><input id="specAiRedactPaths" type="checkbox" ${ck("redactFilePaths")}> File paths</label></fieldset></div><div class="button-row"><button type="button" class="secondary" onclick="testSpecAiConnectionFromModal()">Test Connection</button><span id="specAiTestStatus" class="converter-muted">No project data will be sent.</span></div>`,()=>{const cfg=readSpecAiModalConfig();SpecificationAIService.saveConfig(cfg);logSpecAiActivity("AI configuration changed",{provider:cfg.providerType,suggestionStatus:"No request made"});closeSpecModal();updateSpecAiInterface();saveSpecificationProject(false)});document.getElementById("specAiProvider").value=c.providerType}
+// Preserved advanced configuration implementation. The intentionally restricted
+// configuration screen below remains the public handler until it is approved.
+function openSpecAiConfigurationAdvanced(){const c=SpecificationAIService.getConfig(),ck=k=>c[k]?"checked":"";showSpecFormModal("AI Configuration",`<div class="spec-privacy-panel"><strong>AI is optional and starts disabled every time this page opens.</strong><p>Connection testing sends no documents. Never enter API keys here. Enterprise providers require a future company-approved server proxy.</p></div><div class="spec-form-grid"><label>Provider<select id="specAiProvider"><option value="disabled">Disabled</option><option value="ollama">Local Ollama</option><option value="openai_local">Local OpenAI-compatible server</option><option value="enterprise">Enterprise (backend required)</option><option value="custom">Custom (backend required)</option></select></label><label>Endpoint<input id="specAiEndpoint" value="${escapeSpecAttr(c.endpoint)}"></label><label>Model<input id="specAiModel" list="specAiModels" value="${escapeSpecAttr(c.model)}"><datalist id="specAiModels"></datalist></label><label>Timeout (seconds)<input id="specAiTimeout" type="number" min="2" max="60" value="${Math.round(c.requestTimeout/1000)}"></label><label>Maximum context characters<input id="specAiMaxContext" type="number" min="500" max="50000" value="${c.maxContextSize}"></label><fieldset class="spec-wide-field"><legend>Information allowed for review</legend><label><input id="specAiIncludeDocs" type="checkbox" ${ck("includeDocumentContent")}> Selected document references</label><label><input id="specAiIncludeProject" type="checkbox" ${ck("includeProjectIdentifiers")}> Project identifiers</label><label><input id="specAiIncludeCustomer" type="checkbox" ${ck("includeCustomerInformation")}> Customer information</label></fieldset><fieldset class="spec-wide-field"><legend>Automatic redaction</legend><label><input id="specAiRedactEmails" type="checkbox" ${ck("redactEmails")}> Emails</label><label><input id="specAiRedactPricing" type="checkbox" ${ck("redactPricing")}> Pricing</label><label><input id="specAiRedactParts" type="checkbox" ${ck("redactInternalParts")}> Internal part numbers</label><label><input id="specAiRedactDrawings" type="checkbox" ${ck("redactDrawingNumbers")}> Drawing numbers</label><label><input id="specAiRedactPaths" type="checkbox" ${ck("redactFilePaths")}> File paths</label></fieldset></div><div class="button-row"><button type="button" class="secondary" onclick="testSpecAiConnectionFromModal()">Test Connection</button><span id="specAiTestStatus" class="converter-muted">No project data will be sent.</span></div>`,()=>{const cfg=readSpecAiModalConfig();SpecificationAIService.saveConfig(cfg);logSpecAiActivity("AI configuration changed",{provider:cfg.providerType,suggestionStatus:"No request made"});closeSpecModal();updateSpecAiInterface();saveSpecificationProject(false)});document.getElementById("specAiProvider").value=c.providerType}
 function readSpecAiModalConfig(){const ck=id=>document.getElementById(id).checked;return{providerType:val("specAiProvider"),endpoint:val("specAiEndpoint").trim(),model:val("specAiModel").trim(),requestTimeout:Math.max(2000,Number(val("specAiTimeout"))*1000||10000),maxContextSize:Math.max(500,Number(val("specAiMaxContext"))||12000),includeDocumentContent:ck("specAiIncludeDocs"),includeProjectIdentifiers:ck("specAiIncludeProject"),includeCustomerInformation:ck("specAiIncludeCustomer"),redactEmails:ck("specAiRedactEmails"),redactPricing:ck("specAiRedactPricing"),redactInternalParts:ck("specAiRedactParts"),redactDrawingNumbers:ck("specAiRedactDrawings"),redactFilePaths:ck("specAiRedactPaths")}}
 async function testSpecAiConnectionFromModal(){const s=document.getElementById("specAiTestStatus");s.textContent="Testing server connection only...";try{const r=await SpecAIProviders.testConnection(readSpecAiModalConfig());s.textContent=`Connected. ${r.models.length} model(s) available.`;document.getElementById("specAiModels").innerHTML=r.models.map(m=>`<option value="${escapeSpecAttr(m)}"></option>`).join("")}catch(e){s.textContent=`Connection failed: ${e.message}. Check the server and allowed website origin.`}}
 function updateSpecAiInterface(){const s=SpecificationAIService.getState(),enabled=s.config.providerType!=="disabled";const toggle=document.getElementById("specUseAi");if(toggle)toggle.checked=enabled;const label=document.getElementById("specAiState");if(label)label.textContent=s.stateLabel;document.getElementById("specAiWorkspace")?.classList.toggle("hidden",!enabled);const badge=document.getElementById("specAiConnectionBadge");if(badge)badge.textContent=enabled?`${s.provider.label} · ${s.endpoint.networkLabel}`:"AI Disabled";const selector=document.getElementById("specAiComponent");if(selector){const prior=selector.value;selector.innerHTML=`<option value="">Choose a component</option>`+specState.components.map(c=>`<option value="${c.id}">${escapeSpec(c.partNumber||c.description||"Unnamed component")}</option>`).join("");selector.value=prior}renderSpecAiSuggestions();renderSpecAiActivity()}

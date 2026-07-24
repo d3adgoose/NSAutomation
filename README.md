@@ -2,6 +2,48 @@
 
 NS Automation is a browser-based website for common N/S Corporation PDF workflows. Use the navigation tabs to move between the main tools.
 
+## Development
+
+Node.js is only needed for local validation and the optional Local AI gateway; the
+website itself remains a static site with no build step.
+
+- Run `npm test` for regression and repository-structure tests.
+- Run `npm run check` to syntax-check every root JavaScript file.
+- Run `npm run validate` before committing to run both.
+- See `ARCHITECTURE.md` for the code map and safe refactoring order.
+
+The test suite also validates that `style.css` has balanced blocks, closed quoted
+values, no repeated properties inside a rule, and no unresolved merge markers.
+It verifies extracted feature-script order and confirms that every inline HTML
+event handler still resolves to a JavaScript function in the repository.
+
+### Refactor safety
+
+Organization work is being developed on the `bigrefactor` branch so the deployed
+version can remain unchanged until the branch is reviewed and merged. The current
+cleanup is intentionally behavior-preserving:
+
+- Existing browser workflows and global HTML event handlers remain available.
+- Older AI configuration implementations are retained under explicit legacy or
+  advanced names instead of being deleted.
+- Duplicate function declarations are rejected by an automated structure test.
+- Source extraction, approval, autosave, rendering, and export call order is
+  preserved.
+- No build system or generated production bundle has been introduced.
+
+Before merging the branch, run `npm run validate` and manually smoke-test the main
+upload, review, save, and export paths in a browser.
+
+### Repository organization
+
+- Root HTML files are the application pages.
+- Root JavaScript files contain their corresponding browser workflows and shared
+  browser utilities.
+- `tests/` contains dependency-free Node.js regression checks.
+- `Files/` contains application assets and supporting files.
+- `ARCHITECTURE.md` explains ownership boundaries and the recommended order for
+  safely splitting the largest files.
+
 ## Home
 
 The Home tab is the starting point for the website. Use it to navigate to the available tools.
