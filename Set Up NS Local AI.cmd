@@ -29,6 +29,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+reg.exe add "HKCU\Software\Policies\Google\Chrome\LocalNetworkAccessAllowedForUrls" /v 1 /t REG_SZ /d "https://d3adgoose.github.io" /f >nul
+if errorlevel 1 (
+  echo.
+  echo Chrome permission could not be set automatically on this computer.
+  echo Setup will continue. Afterward, allow Local network access in Chrome Site settings.
+)
+
 start "" /min "%NS_LAUNCHER%"
 timeout /t 3 /nobreak >nul
 
@@ -49,6 +56,8 @@ if errorlevel 1 (
 echo.
 echo Local AI setup is complete.
 echo It will start automatically whenever you sign in to Windows.
+echo Close and reopen Chrome, allow Local network access for the N/S website if asked,
+echo then select Try Reconnecting.
 echo You can close this window.
 pause
 endlocal

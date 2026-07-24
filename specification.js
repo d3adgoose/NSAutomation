@@ -3051,7 +3051,7 @@ async function openSpecLocalAiStatusModal() {
   const nextStep = user.statusError
     ? "Log in with your company account, then open this Local AI window again."
     : statusError
-      ? "Allow Local network access in Chrome Site settings. If setup has not been completed on this computer, run Set Up NS Local AI.cmd once. Then select Try Reconnecting."
+      ? "Open Chrome Site settings for this website, set Local network access to Allow, reload, and select Try Reconnecting. If Local AI is not installed yet, run Set Up NS Local AI.cmd first."
       : !status?.ready
         ? `Run the one-time setup and wait for ${escapeSpec(status?.model || window.SpecificationLocalAI?.model || "the approved Qwen model")} to finish downloading. Then select Try Reconnecting.`
         : "Local AI is connected. Close this window, add a source, and select Analyze with AI.";

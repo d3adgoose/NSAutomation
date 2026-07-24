@@ -118,18 +118,18 @@ No programming experience is needed. Each coworker completes these steps once on
 2. Download and install the **LTS** version of [Node.js](https://nodejs.org/en/download) using the normal installation choices.
 3. Open [d3adgoose/NSAutomation](https://github.com/d3adgoose/NSAutomation). Select the green **Code** button, then select **Download ZIP**.
 4. Open the downloaded ZIP file and select **Extract all**. Save the extracted folder somewhere permanent, such as Documents. Do not delete or move it after setup.
-5. Open the extracted **NSAutomation** folder and double-click **Set Up NS Local AI.cmd**. If Windows asks for confirmation, confirm only after checking that the file came from the repository linked above.
+5. Open the extracted **NSAutomation** folder and double-click **Set Up NS Local AI.cmd**. If Windows asks for confirmation, confirm only after checking that the file came from the repository linked above. Setup tries to add `https://d3adgoose.github.io` to Chrome's Local Network Access allowlist. If company policy prevents that change, setup continues and Chrome permission can be granted manually.
 6. Leave the setup window open. It creates the Windows sign-in startup entry, starts the background service, and downloads the approved Qwen model when it is missing. The model is a large one-time download and may take a while.
 7. Wait until the window says **Local AI setup is complete**, then close it.
-8. Open the [hosted N/S Automation website](https://d3adgoose.github.io/NSAutomation/) in Chrome. Select **Log in** and sign in with the normal company account.
-9. When Chrome asks whether the website may find and connect to devices on the local network, select **Allow**. This permits the hosted interface to reach only the protected Local AI service on that computer.
-10. Open Spec Automation and select the Local AI status button. A green circle confirms that the background service and model are ready.
+8. Close and reopen Chrome. Open the [hosted N/S Automation website](https://d3adgoose.github.io/NSAutomation/), select **Log in**, and sign in with the normal company account.
+9. Open Spec Automation, select the Local AI status button, and select **Try Reconnecting**. If Chrome still displays a Local Network Access permission question, select **Allow**.
+10. A green circle confirms that the background service and model are ready.
 
 The Local AI popup displays **Your next step** based on the current login, browser permission, background service, and model status. Its focused controls are **Download One-Time Setup** when setup is needed, **Try Reconnecting** after correcting an issue, and **Close**. The approved Chicago Canal examples remain built in automatically; coworkers do not need to manage or import them.
 
 The setup adds Local AI to that user's Windows Startup folder and starts it immediately. Afterward it starts silently whenever the coworker signs in to Windows; they do not need to run a `.cmd` file each day. Keep the project folder in the same location after setup because the startup entry points to it. If the folder is moved, run setup once again from its new location.
 
-If Local AI reports that Chrome denied access, open the controls beside the website address, open **Site settings**, change **Local network access** to **Allow**, and reload the page. Chrome requires this user permission for every public website that connects to software on the same computer; CORS settings cannot override a denied browser permission.
+If setup says it could not approve Chrome automatically, this does not stop the Local AI installation. Finish setup, close and reopen Chrome, open the controls beside the website address, choose **Site settings**, set **Local network access** to **Allow**, and reload. If the setting is locked or unavailable on a company-managed computer, ask IT to add `https://d3adgoose.github.io` to Chrome's `LocalNetworkAccessAllowedForUrls` policy.
 
 The first time a signed-in user selects **Analyze with Local AI**, the website shows the official [Ollama for Windows download](https://ollama.com/download/windows). Users can select **Don't show this message again** to remember the choice for their database login on that computer.
 
