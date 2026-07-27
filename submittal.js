@@ -1310,7 +1310,8 @@ function getBuildErrorMessage(buildLabel, error, context = "") {
 
 const PACKET_HISTORY_DB_NAME = "ns-packet-history";
 const PACKET_HISTORY_STORE_NAME = "packets";
-const PACKET_HISTORY_LIMIT = 3;
+const PACKET_HISTORY_LIMIT = 5;
+const PACKET_STORAGE_WARNING_PERCENT = 85;
 const PACKET_DRAFT_AUTOSAVE_DELAY = 900;
 let packetDraftAutosaveTimer = null;
 let packetDraftReady = false;
@@ -1453,6 +1454,54 @@ function formatPacketStorageBytes(bytes) {
   const value = Number(bytes || 0);
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
   return `${(value / (1024 * 1024)).toFixed(value >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function getPacketHistoryEntrySize(entry) {
+  const outputSize = Number(entry?.blob?.size || 0);
+  const sourceSize = (entry?.builderState?.pdfLibrary || []).reduce(
+    (total, item) => total + Number(item?.file?.size || 0),
+    0
+  );
+  return outputSize + sourceSize;
+}
+
+async function makeRoomForPacketHistoryEntry(entry) {
+  if (!navigator.storage?.estimate) return;
+
+  const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+  if (!quota) return;
+
+  const maximumUsage = quota * (PACKET_STORAGE_WARNING_PERCENT / 100);
+  let projectedUsage = usage + getPacketHistoryEntrySize(entry);
+  if (projectedUsage <= maximumUsage) return;
+
+  const savedItems = (
+    await Promise.all(["om", "submittal"].map(type => getPacketHistoryItems(type)))
+  )
+    .flat()
+    .sort((a, b) => b.createdAt - a.createdAt);
+  while (projectedUsage > maximumUsage && savedItems.length > 0) {
+    const oldestItem = savedItems.pop();
+    await runPacketHistoryTransaction("readwrite", store => {
+      store.delete(oldestItem.id);
+    });
+    projectedUsage = Math.max(0, projectedUsage - getPacketHistoryEntrySize(oldestItem));
+  }
+}
+
+async function warnIfPacketStorageHigh() {
+  if (!navigator.storage?.estimate) return;
+
+  const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+  if (!quota) return;
+
+  const percent = (usage / quota) * 100;
+  if (percent < PACKET_STORAGE_WARNING_PERCENT) return;
+
+  await showMessageModal(
+    "Browser Storage Warning",
+    `Local storage is ${percent.toFixed(1)}% full. The app will remove the oldest O&M or submittal history as needed, but your current draft will be kept. Download any saved versions you need and remove unused history.`
+  );
 }
 
 async function updatePacketStorageStatus() {
@@ -1855,11 +1904,32 @@ async function savePacketHistoryEntry({ pdfBytes, fileName, includedCount }) {
     builderState: getPacketBuilderState(includedCount)
   };
 
-  await runPacketHistoryTransaction("readwrite", store => {
-    store.put(entry);
-  });
+  await makeRoomForPacketHistoryEntry(entry);
 
-  const items = await getPacketHistoryItems();
+  while (true) {
+    try {
+      await runPacketHistoryTransaction("readwrite", store => {
+        store.put(entry);
+      });
+      break;
+    } catch (error) {
+      const storageFull =
+        error?.name === "QuotaExceededError" ||
+        /quota|storage|space/i.test(error?.message || "");
+
+      if (!storageFull) throw error;
+
+      const savedItems = await getPacketHistoryItems(type);
+      const oldestItem = savedItems[savedItems.length - 1];
+      if (!oldestItem) throw error;
+
+      await runPacketHistoryTransaction("readwrite", store => {
+        store.delete(oldestItem.id);
+      });
+    }
+  }
+
+  const items = await getPacketHistoryItems(type);
   const oldItems = items.slice(PACKET_HISTORY_LIMIT);
 
   if (oldItems.length > 0) {
@@ -1869,6 +1939,7 @@ async function savePacketHistoryEntry({ pdfBytes, fileName, includedCount }) {
   }
 
   await renderPacketHistory();
+  await warnIfPacketStorageHigh();
 }
 
 async function renderPacketHistory() {
