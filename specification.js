@@ -2442,6 +2442,7 @@ function renderExtractedSpecFillIns() {
   const list = document.getElementById("specExtractedFillList");
   const summary = document.getElementById("specExtractedFillSummary");
   if (!list || !summary) return;
+  reconcileAcceptedSpecFillAlternatives();
   const candidates = (specState.fillInSuggestions || []).filter(item => item.status !== "rejected");
   const pending = candidates.filter(item => item.status === "pending").length;
   const applied = candidates.filter(item => item.status === "accepted").length;
@@ -2480,6 +2481,30 @@ function renderExtractedSpecFillIns() {
   });
 }
 
+function reconcileAcceptedSpecFillAlternatives() {
+  const suggestions = specState.fillInSuggestions || [];
+  suggestions.filter(item => item.status === "accepted").forEach(accepted => {
+    const projectKey = Object.keys(SPEC_PROJECT_PLACEHOLDERS).find(key =>
+      SPEC_PROJECT_PLACEHOLDERS[key].includes(accepted.placeholder)
+    );
+    const alternatives = suggestions.filter(item =>
+      item.id !== accepted.id &&
+      item.status === "pending" &&
+      item.placeholder === accepted.placeholder &&
+      (projectKey || item.part === accepted.part)
+    );
+    if (!alternatives.length) return;
+    const remembered = new Set(accepted.autoRejectedSiblingIds || []);
+    alternatives.forEach(item => {
+      remembered.add(item.id);
+      item.status = "rejected";
+      item.reviewedAt = accepted.reviewedAt || new Date().toISOString();
+      item.rejectedByAcceptedFillId = accepted.id;
+    });
+    accepted.autoRejectedSiblingIds = [...remembered];
+  });
+}
+
 function applyExtractedSpecFillIn(id, silent = false) {
   const candidate = (specState.fillInSuggestions || []).find(item => item.id === id);
   if (!candidate || candidate.status !== "pending") return false;
@@ -2513,6 +2538,18 @@ function applyExtractedSpecFillIn(id, silent = false) {
   candidate.undoSnapshot.appliedProject = { part1: specState.project.part1, part2: specState.project.part2, part3: specState.project.part3 };
   candidate.status = "accepted";
   candidate.reviewedAt = new Date().toISOString();
+  const duplicateCandidates = (specState.fillInSuggestions || []).filter(item =>
+    item.id !== candidate.id &&
+    item.status === "pending" &&
+    item.placeholder === candidate.placeholder &&
+    (projectKey || item.part === candidate.part)
+  );
+  candidate.autoRejectedSiblingIds = duplicateCandidates.map(item => item.id);
+  duplicateCandidates.forEach(item => {
+    item.status = "rejected";
+    item.reviewedAt = candidate.reviewedAt;
+    item.rejectedByAcceptedFillId = candidate.id;
+  });
   updateSpecificationFillIndicators();
   renderExtractedSpecFillIns();
   touchSpecificationProject();
@@ -2523,6 +2560,17 @@ function undoExtractedSpecFillIn(id) {
   const candidate = (specState.fillInSuggestions || []).find(item => item.id === id);
   const snapshot = candidate?.undoSnapshot;
   if (!candidate || candidate.status !== "accepted") return;
+  const restoreAutoRejectedSiblings = () => {
+    const siblingIds = new Set(candidate.autoRejectedSiblingIds || []);
+    (specState.fillInSuggestions || []).forEach(item => {
+      if (siblingIds.has(item.id) && item.rejectedByAcceptedFillId === candidate.id) {
+        item.status = "pending";
+        item.reviewedAt = "";
+        delete item.rejectedByAcceptedFillId;
+      }
+    });
+    delete candidate.autoRejectedSiblingIds;
+  };
   if (!snapshot) {
     const projectKey = Object.keys(SPEC_PROJECT_PLACEHOLDERS).find(key => SPEC_PROJECT_PLACEHOLDERS[key].includes(candidate.placeholder));
     const affectedParts = projectKey ? ["part1", "part2", "part3"] : [candidate.part];
@@ -2542,6 +2590,7 @@ function undoExtractedSpecFillIn(id) {
     if (specState.fillInValues?.[fillKey] === candidate.value) delete specState.fillInValues[fillKey];
     candidate.status = "pending";
     candidate.reviewedAt = "";
+    restoreAutoRejectedSiblings();
     touchSpecificationProject();
     updateSpecificationFillIndicators();
     renderExtractedSpecFillIns();
@@ -2568,6 +2617,7 @@ function undoExtractedSpecFillIn(id) {
   specState.fillInValues = { ...(snapshot.fillInValues || {}) };
   candidate.status = "pending";
   candidate.reviewedAt = "";
+  restoreAutoRejectedSiblings();
   delete candidate.undoSnapshot;
   touchSpecificationProject();
   updateSpecificationFillIndicators();
@@ -2944,6 +2994,8 @@ function recordSpecLocalAiMessage(message) {
 
 function startSpecLocalAiTimer(message) {
   specLocalAiStartedAt = performance.now();
+  const messagesSummary = document.getElementById("specAiMessagesSummary");
+  if (messagesSummary) messagesSummary.textContent = "Show Local AI messages";
   specLocalAiLastMessage = "";
   document.getElementById("specAiMessageHistory")?.replaceChildren();
   const elapsed = document.getElementById("specAiElapsed");
@@ -2959,6 +3011,8 @@ function stopSpecLocalAiTimer() {
   specLocalAiTimer = null;
   specLocalAiStartedAt = 0;
   specLocalAiActiveSource = "";
+  const messagesSummary = document.getElementById("specAiMessagesSummary");
+  if (messagesSummary) messagesSummary.textContent = "Show messages";
 }
 
 function renderSpecDocuments() {
@@ -3144,13 +3198,19 @@ async function openSpecLocalAiStatusModal() {
       <div class="spec-ai-status-card"><span>Elapsed</span><strong>${active ? formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt) : "0:00"}</strong></div>
     </div>
     <div class="spec-ai-pipeline"><strong>Optimized analysis pipeline</strong><div class="spec-ai-pipeline-steps"><div class="spec-ai-pipeline-step"><b>1. Screen locally</b>Searchable, blank, and duplicate pages avoid redundant model work.</div><div class="spec-ai-pipeline-step"><b>2. Ground extraction</b>Qwen reviews only visual pages and must cite visible evidence.</div><div class="spec-ai-pipeline-step"><b>3. Review safely</b>90-second limits, checkpoints, and manual-review flags prevent stalled jobs.</div></div></div>
-    ${active ? `<p class="spec-ai-status-note"><strong>Working now:</strong> ${escapeSpec(specLocalAiActiveSource)}<br>${escapeSpec(currentMessage)}</p>` : `<p class="spec-ai-status-note">Add or resume a source from the Sources + Local AI tab. Extracted results always remain pending until engineer review.</p>`}
+    ${active ? `<p class="spec-ai-status-note"><strong>Working now:</strong> ${escapeSpec(specLocalAiActiveSource)}<br>${escapeSpec(currentMessage)}</p>` : `<p class="spec-ai-status-note">Add or resume a document from the Sources tab. Extracted results always remain pending until engineer review.</p>`}
   </div>`;
 
   const reconnectButton = document.createElement("button");
   reconnectButton.type = "button"; reconnectButton.textContent = "Try Reconnecting";
   reconnectButton.onclick = openSpecLocalAiStatusModal;
   actions.prepend(reconnectButton);
+  const knowledgeButton = document.createElement("button");
+  knowledgeButton.type = "button";
+  knowledgeButton.className = "secondary";
+  knowledgeButton.textContent = "Company Knowledge Library";
+  knowledgeButton.onclick = openSpecCompanyKnowledgeModal;
+  actions.prepend(knowledgeButton);
   if (!ready && !user.statusError) {
     const setupLink = document.createElement("a");
     setupLink.className = "button-link spec-ai-setup-link";

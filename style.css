@@ -389,6 +389,35 @@ button:hover {
 .spec-source-explanation { margin: 12px 0 16px; padding: 14px 16px; border: 1px solid #cfdae4; border-radius: 8px; background: #f4f8fb; }
 .spec-source-explanation ul { margin: 8px 0 0; padding-left: 22px; line-height: 1.5; }
 .spec-source-explanation li + li { margin-top: 5px; }
+.spec-modal-content:has(.spec-company-library) { width: min(1240px, 96vw); max-height: 92vh; overflow-y: auto; }
+.spec-modal-content:has(.spec-company-library) #specModalBody { min-height: 0; overflow: visible; }
+.spec-company-library { display: grid; gap: 14px; min-height: min(650px, 72vh); }
+.spec-company-library h3 { margin: 0 0 5px; }
+.spec-company-library-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 14px; border-bottom: 1px solid #d5e0ea; }
+.spec-company-library-heading-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.spec-company-library-guidance { display: flex; flex-wrap: wrap; gap: 5px 10px; padding: 10px 12px; border-left: 4px solid #2c6e9b; border-radius: 6px; background: #edf6fc; color: #214f70; font-size: 13px; }
+.spec-company-library-layout { display: grid; grid-template-columns: minmax(250px, 0.75fr) minmax(480px, 2fr); gap: 16px; min-height: 0; }
+.spec-company-library-add { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid #bfd0df; border-radius: 10px; background: #f8fbfe; }
+.spec-company-library-add p { margin: 5px 0 0; color: #52606d; font-size: 13px; line-height: 1.45; }
+.spec-company-library-add > small { margin-top: auto; color: #647789; }
+.spec-company-library-form { display: grid; gap: 12px; }
+.spec-company-library-form label:not(.button-link) { display: grid; gap: 5px; font-weight: 600; }
+.spec-company-library-form textarea { resize: vertical; }
+.spec-company-library-upload { display: grid; gap: 5px; place-items: center; min-height: 120px; margin: 2px 0 0; padding: 18px 12px; border: 2px dashed #8faec5; border-radius: 9px; background: #fff; color: #17476f; cursor: pointer; text-align: center; transition: border-color 0.15s ease, background 0.15s ease; }
+.spec-company-library-upload span { color: #5f7486; font-size: 12px; }
+.spec-company-library-upload.dragover { border-color: #0b5d91; background: #eaf4fb; }
+.spec-company-upload-pending { display: grid; gap: 3px; padding: 9px 10px; border-radius: 7px; background: #edf2f6; color: #526879; font-size: 12px; overflow-wrap: anywhere; }
+.spec-company-library-browser { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; border: 1px solid #d5e0ea; border-radius: 10px; background: #fff; }
+.spec-company-library-toolbar { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(170px, 0.38fr); gap: 10px; align-items: center; }
+.spec-company-knowledge-list { display: grid; gap: 9px; min-height: 0; margin-top: 12px; padding-right: 4px; overflow-y: auto; }
+.spec-company-knowledge-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; padding: 14px; border: 1px solid #d5e0ea; border-radius: 8px; background: #fff; }
+.spec-company-knowledge-info { display: grid; gap: 3px; min-width: 0; }
+.spec-company-knowledge-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.spec-company-knowledge-info strong { overflow-wrap: anywhere; }
+.spec-company-knowledge-info span { color: #52606d; font-size: 13px; }
+.spec-company-knowledge-info .spec-company-kind { padding: 3px 7px; border: 1px solid #9ebbd1; border-radius: 999px; background: #edf6fc; color: #17476f; font-size: 11px; font-weight: 750; }
+.spec-company-knowledge-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; padding-top: 10px; border-top: 1px solid #e3eaf0; }
+.spec-company-knowledge-actions button { min-height: 38px; }
 .spec-load-status { margin-top: 12px; padding: 10px 12px; border-radius: 7px; background: #eef2f5; color: #4f6374; font-size: 13px; }
 .spec-load-status.is-loading { background: #fff5dc; color: #76520f; }
 .spec-load-status.is-complete { background: #e8f6ed; color: #17623a; }
@@ -509,6 +538,15 @@ button:hover {
   .spec-suggestion-heading,
   .spec-part-editor-heading,
   .spec-project-transfer { flex-direction: column; align-items: stretch; }
+  .spec-company-library-form,
+  .spec-company-library-toolbar,
+  .spec-company-knowledge-row { grid-template-columns: 1fr; }
+  .spec-modal-content:has(.spec-company-library) { max-height: 96vh; overflow-y: auto; }
+  .spec-company-library { min-height: auto; }
+  .spec-company-library-heading { flex-direction: column; }
+  .spec-company-library-layout { grid-template-columns: 1fr; }
+  .spec-company-library-browser { min-height: 420px; }
+  .spec-company-knowledge-actions { justify-content: flex-start; }
   .spec-template-actions { grid-template-columns: 1fr; width: 100%; }
   .spec-form-grid,
   .spec-filter-row { grid-template-columns: 1fr; }

@@ -104,7 +104,7 @@ Use Spec Automation to create and review a three-part vehicle-wash specification
 ### Recommended workflow
 
 1. **Project:** Enter the project information and complete the bracketed fillable fields in Part 1, Part 2, and Part 3. Use **Improve with AI** when wording needs help. Every proposed change must be reviewed before it is accepted.
-2. **Sources + Local AI:** Add searchable PDFs, scanned manuals, drawings, submittals, specifications, datasheets, Word files, or text files. Select **Analyze** for fast text extraction or **Analyze with AI** for visual engineering review.
+2. **Sources:** Add searchable PDFs, scanned manuals, drawings, submittals, specifications, datasheets, Word files, or text files for the current specification. Select **Analyze** for fast text extraction or **Analyze with AI** for visual engineering review.
 3. **Source Review:** Review equipment, fill-ins, clauses, source evidence, and the suggested destination. Accept only information verified against the source. AI-originated results remain marked for review.
 4. **Review & Export:** Resolve incomplete fill-ins and review warnings, confirm the Part 1–3 wording, and export the automatically numbered Word or PDF specification.
 
@@ -113,6 +113,19 @@ Use Spec Automation to create and review a three-part vehicle-wash specification
 Each Part editor has its own **Improve with AI** button. Enter a specific request in the chat-style box and use the arrow or press Enter. Shift+Enter adds a new line. The review follows a GitHub-style red/green line comparison with an Accept/Revert decision for each change. The overall **Accept Changes** button applies only the selected decisions.
 
 Bracketed fillable fields such as `[EQUIPMENT TYPE]` and `[SYSTEM NAME / MODEL]` are protected. Local AI must keep them unless the request explicitly names the placeholder and asks to remove it. Writing History retains the three most recent revisions for the current project in that browser.
+
+### Company Knowledge Library
+
+The Local AI popup links to a separate shared Company Knowledge Library for
+approved specifications, company standards, standard clauses, and writing
+examples. For now, every user with an active Database login can view, upload,
+download, and remove these shared files. Removing a file removes it for
+everyone.
+
+Files can be dropped directly onto the upload area or chosen with the file
+picker. The Company Knowledge Library is intentionally separate from project
+Sources and does not import records from the Document Database. Project-specific
+datasheets, drawings, submittals, and manuals should remain under Sources.
 
 ### Local AI requirements
 
