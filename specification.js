@@ -24,6 +24,7 @@ let specLocalAiStartedAt = 0;
 let specLocalAiTimer = null;
 let specLocalAiLastMessage = "";
 let specLocalAiActiveSource = "";
+let specBuiltInAnalysisTimer = null;
 const specProjectFieldTimers = new Map();
 const SPEC_AUTOSAVE_DELAY = 900;
 const SPEC_OPTIONAL_EQUIPMENT_WORKFLOW_ENABLED = false;
@@ -1428,6 +1429,8 @@ async function extractSpecSourceSuggestions(file, documentId) {
           assembly: product.parentDescription || "",
           equipmentListCandidate: product.tocLevel !== "child",
           verificationStatus: "Needs Review",
+          extractionConfidence: "Medium",
+          extractionEvidence: product.description,
           quantityExplanation: "The product was listed in the table of contents. Confirm the required quantity from the equipment schedule or product pages."
         }));
         tocProductsAdded += 1;
@@ -1463,26 +1466,31 @@ async function extractSpecSourceSuggestions(file, documentId) {
       const evidenceNeedle = section.text.toLowerCase().replace(/\s+/g, " ").slice(0, 55);
       const evidencePage = section.sourcePage ? null : pages.find(page => page.text.toLowerCase().replace(/\s+/g, " ").includes(evidenceNeedle)) || pages[0];
       const sourcePage = section.sourcePage || evidencePage?.page || "Document";
-      specState.sourceSuggestions.push({ id: crypto.randomUUID(), documentId, sourceDocument: file.name, sourcePage, targetPart: section.targetPart, destinationArticle: section.destinationArticle, equipmentContext: section.equipmentContext, text: section.text, extractionKind: section.extractionKind || (isOandM ? "O&M sequence of operation" : "Structured specification subsection"), extractionConfidence: section.confidence || "Medium", subcomponents: section.subcomponents || [], status: "pending", createdAt: new Date().toISOString() });
+      specState.sourceSuggestions.push({ id: crypto.randomUUID(), documentId, sourceDocument: file.name, sourcePage, targetPart: section.targetPart, destinationArticle: section.destinationArticle, equipmentContext: section.equipmentContext, text: section.text, extractionKind: section.extractionKind || (isOandM ? "O&M sequence of operation" : "Structured specification subsection"), extractionConfidence: section.confidence || "Medium", extractionEvidence: section.text, subcomponents: section.subcomponents || [], status: "pending", createdAt: new Date().toISOString() });
       if (section.extractionKind === "O&M product description") {
         const topFingerprint = `${documentId}|${section.equipmentContext.toLowerCase()}`;
         const partNumber = section.text.match(/N\/S part number:\s*([^\n.]+)/i)?.[1]?.trim() || "";
         if (!existingComponents.has(topFingerprint)) {
           existingComponents.add(topFingerprint);
-          specState.components.push(createSpecComponent({ description: section.equipmentContext, partNumber, quantity: 1, unit: "ea", sourceDocument: file.name, sourceDocumentId: documentId, sourcePage, detectionMethod: "O&M product description", equipmentListCandidate: true, verificationStatus: "Needs Review", extractionConfidence: section.confidence || "High", quantityExplanation: "Principal equipment identified from an N/S Product Description page; confirm quantity from drawings or schedule." }));
+          specState.components.push(createSpecComponent({ description: section.equipmentContext, partNumber, quantity: 1, unit: "ea", sourceDocument: file.name, sourceDocumentId: documentId, sourcePage, detectionMethod: "O&M product description", equipmentListCandidate: true, verificationStatus: "Needs Review", extractionConfidence: section.confidence || "High", extractionEvidence: section.text, quantityExplanation: "Principal equipment identified from an N/S Product Description page; confirm quantity from drawings or schedule." }));
         }
         (section.subcomponents || []).forEach(component => {
           const childFingerprint = `${documentId}|${component.description.toLowerCase()}|${component.partNumber.toLowerCase()}`;
           if (existingComponents.has(childFingerprint)) return;
           existingComponents.add(childFingerprint);
-          specState.components.push(createSpecComponent({ description: component.description, partNumber: component.partNumber, quantity: 1, unit: "ea", assembly: section.equipmentContext, sourceDocument: file.name, sourceDocumentId: documentId, sourcePage, detectionMethod: "O&M included component", equipmentListCandidate: false, verificationStatus: "Document Extracted", quantityExplanation: `Listed as an included component of ${section.equipmentContext}; confirm quantity from the source and drawings.` }));
+          specState.components.push(createSpecComponent({ description: component.description, partNumber: component.partNumber, quantity: 1, unit: "ea", assembly: section.equipmentContext, sourceDocument: file.name, sourceDocumentId: documentId, sourcePage, detectionMethod: "O&M included component", equipmentListCandidate: false, verificationStatus: "Document Extracted", extractionConfidence: "Medium", extractionEvidence: `${component.description} (NS Part #: ${component.partNumber})`, quantityExplanation: `Listed as an included component of ${section.equipmentContext}; confirm quantity from the source and drawings.` }));
         });
       }
       added += 1;
     });
-    if (!structuredSections.length && !isOandM) pages.forEach(page => {
-      splitSpecSourceText(page.text).map(formatExtractedSpecSuggestion).filter(text => !isSpecSourceBoilerplate(text) && !isSpecOandMTroubleshootingText(text) && classifySpecSourceText(text)).slice(0, 4).forEach(text => {
-        if (added >= 50) return;
+    pages.forEach(page => {
+      splitSpecSourceText(page.text).map(formatExtractedSpecSuggestion).filter(text =>
+        !isSpecSourceBoilerplate(text) &&
+        !isSpecOandMTroubleshootingText(text) &&
+        classifySpecSourceText(text) &&
+        (!isOandM || isSpecWorthyOandMText(text))
+      ).slice(0, 6).forEach(text => {
+        if (added >= 80) return;
         if (isOandM && !isSpecWorthyOandMText(text)) return;
         if (isSpecSourceBoilerplate(text)) return;
         const targetPart = classifySpecSourceText(text);
@@ -1490,14 +1498,14 @@ async function extractSpecSourceSuggestions(file, documentId) {
         const fingerprint = `${file.name}|${text.toLowerCase()}`;
         if (existing.has(fingerprint)) return;
         existing.add(fingerprint);
-        specState.sourceSuggestions.push({ id: crypto.randomUUID(), documentId, sourceDocument: file.name, sourcePage: page.page, targetPart, equipmentContext: identifySpecEquipmentContext(text), text, extractionKind: isOandM ? "O&M technical requirement" : "General document requirement", status: "pending", createdAt: new Date().toISOString() });
+        specState.sourceSuggestions.push({ id: crypto.randomUUID(), documentId, sourceDocument: file.name, sourcePage: page.page, targetPart, equipmentContext: identifySpecEquipmentContext(text), text, extractionKind: isOandM ? "O&M technical requirement" : "General document requirement", extractionConfidence: "Medium", extractionEvidence: text, status: "pending", createdAt: new Date().toISOString() });
         added += 1;
       });
     });
     return { suggestions: added, tocProducts: tocProductsAdded, fillIns: fillInsAdded, equipmentRecords: equipmentRecordsAdded };
   } catch (error) {
     console.warn(`Could not read ${file.name}:`, error);
-    return { suggestions: 0, tocProducts: 0, fillIns: 0, equipmentRecords: 0 };
+    return { suggestions: 0, tocProducts: 0, fillIns: 0, equipmentRecords: 0, error: error.message || "The document could not be read." };
   }
 }
 
@@ -2006,11 +2014,15 @@ function isSpecWorthyOandMText(text) {
   const technicalIdentity = /\b(?:manufacturer|make|model|basis of design|structural material|electrical service|rated capacity|flow rate|operating pressure|horsepower)\s*[:#]/i.test(value);
   const measurements = value.match(/\b\d+(?:\.\d+)?\s*(?:V|volts?|A|amps?|HP|GPM|PSI|RPM|kW|inches?|in\.|feet|ft\.|mm|gallons?)\b/gi) || [];
   const operation = /\bsequence of operation\b|\bwash mode\b|\bpass-through mode\b|\bautomatically (?:activate|deactivate|start|stop)|\bwhen the vehicle (?:enters|passes|exits)\b|\belectric eye activation systems?\b|\bset the system to ["“]?auto|\bverify rotation of each motor and pump\b/i.test(value);
-  return operation || technicalIdentity || (designDirective && measurements.length >= 1) || measurements.length >= 3;
+  const equipmentTechnicalDescription = /\b(?:pump|motor|brush|arch|panel|control|tank|blower|dryer|compressor|activation system|reclaim system)\b/i.test(value)
+    && /\b(?:stainless|galvanized|aluminum|voltage|phase|horsepower|flow|pressure|capacity|dimension|constructed|fabricated|includes?|consists? of)\b/i.test(value);
+  return operation || technicalIdentity || (designDirective && measurements.length >= 1) ||
+    (equipmentTechnicalDescription && measurements.length >= 1) || measurements.length >= 2;
 }
 
 function splitSpecSourceText(text) {
-  const normalized = String(text || "").replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, " ").trim();
+  const source = String(text || "").replace(/\u00a0/g, " ").replace(/\r/g, "");
+  const normalized = source.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, " ").trim();
   if (!normalized) return [];
   // A colon commonly separates technical labels from their values (for example,
   // "NS Part #: 900-0543"). Treating it as a sentence boundary detached the
@@ -2023,7 +2035,21 @@ function splitSpecSourceText(text) {
     else current = current ? `${current} ${sentence}` : sentence;
   });
   if (current) chunks.push(current);
-  return chunks.slice(0, 250).map(normalizeExtractedSpecCapitalization);
+  const tableLines = source.split("\n").map(line => line.replace(/[ \t]+/g, " ").trim()).filter(line => line.length >= 12);
+  let tableChunk = "";
+  tableLines.forEach(line => {
+    if (tableChunk && (`${tableChunk}\n${line}`.length > 1100 || tableChunk.split("\n").length >= 8)) {
+      chunks.push(tableChunk);
+      tableChunk = line;
+    } else {
+      tableChunk = tableChunk ? `${tableChunk}\n${line}` : line;
+    }
+  });
+  if (tableChunk) chunks.push(tableChunk);
+  return chunks
+    .map(normalizeExtractedSpecCapitalization)
+    .filter((item, index, all) => all.findIndex(other => other.toLowerCase() === item.toLowerCase()) === index)
+    .slice(0, 300);
 }
 
 function formatExtractedSpecSuggestion(text) {
@@ -2104,6 +2130,105 @@ function identifySpecEquipmentContext(text) {
   return equipment.find(([, pattern]) => pattern.test(value))?.[0] || "General System Requirement";
 }
 
+function getTraceableSpecEvidence(item) {
+  const explicit = String(item?.extractionEvidence || item?.evidence || "").trim();
+  if (explicit && !/^(?:local ai extraction|not provided)$/i.test(explicit)) return explicit;
+  if (item?.extractionKind !== "Local Qwen3-VL engineering extraction") return String(item?.text || "").trim();
+  return "";
+}
+
+function hasTraceableSpecEvidence(item) {
+  return Boolean(String(item?.sourcePage || "").trim() && getTraceableSpecEvidence(item));
+}
+
+function isLowConfidenceAiFinding(item) {
+  const fromAi = item?.detectionMethod === "Local Qwen3-VL extraction" ||
+    item?.extractionKind === "Local Qwen3-VL engineering extraction" ||
+    item?.aiInvolved;
+  return Boolean(fromAi && (String(item?.confidence || item?.extractionConfidence || "").toLowerCase() === "low" ||
+    (Number.isFinite(Number(item?.numericConfidence)) && Number(item.numericConfidence) < 0.65)));
+}
+
+function formatSpecFindingConfidence(item) {
+  const explicit = String(item?.confidence || item?.extractionConfidence || "").trim();
+  const storedNumeric = Number(item?.numericConfidence);
+  const explicitNumeric = Number(explicit);
+  const numeric = Number.isFinite(storedNumeric)
+    ? storedNumeric
+    : explicit && Number.isFinite(explicitNumeric) ? explicitNumeric : Number.NaN;
+  const tier = explicit && !/^\d+(?:\.\d+)?$/.test(explicit)
+    ? explicit
+    : Number.isFinite(numeric)
+      ? numeric >= 0.85 ? "High" : numeric >= 0.65 ? "Medium" : "Low"
+      : "Medium";
+  return Number.isFinite(numeric)
+    ? `${tier} (${Math.round(Math.max(0, Math.min(1, numeric)) * 100)}%)`
+    : tier;
+}
+
+function getSpecFindingConfidenceClass(item) {
+  return `confidence-${formatSpecFindingConfidence(item).split(/\s|\(/)[0].toLowerCase()}`;
+}
+
+function getSpecFindingConfidenceScore(item) {
+  const numeric = Number(item?.numericConfidence);
+  if (Number.isFinite(numeric)) return numeric;
+  const explicitNumeric = Number(item?.confidence || item?.extractionConfidence);
+  if (String(item?.confidence || item?.extractionConfidence || "").trim() && Number.isFinite(explicitNumeric)) return explicitNumeric;
+  const tier = formatSpecFindingConfidence(item).toLowerCase();
+  return tier.startsWith("high") ? 0.9 : tier.startsWith("medium") ? 0.7 : 0.5;
+}
+
+function getSpecConfidenceTieredItems(items) {
+  const ordered = items.map((item, index) => ({ item, index })).sort((a, b) =>
+    getSpecFindingConfidenceScore(b.item) - getSpecFindingConfidenceScore(a.item) || a.index - b.index
+  ).map(entry => entry.item);
+  return { primary: ordered, possible: [], ordered };
+}
+
+function renderSpecConfidenceTiers(items, renderCard, preserveOrder = false) {
+  return (preserveOrder ? items : getSpecConfidenceTieredItems(items).ordered).map(renderCard).join("");
+}
+
+async function openSpecFindingSourcePage(kind, id) {
+  const item = kind === "fill"
+    ? (specState.fillInSuggestions || []).find(entry => entry.id === id)
+    : kind === "equipment"
+      ? (specState.components || []).find(entry => entry.id === id)
+      : (specState.sourceSuggestions || []).find(entry => entry.id === id);
+  if (!item || !hasTraceableSpecEvidence(item)) {
+    return showSpecMessage("Source Evidence Unavailable", "This finding does not have a traceable source page and exact evidence.");
+  }
+  const documentId = item.documentId || item.sourceDocumentId;
+  const evidence = getTraceableSpecEvidence(item);
+  showSpecFormModal("Source Page Preview", `<div class="spec-source-page-preview"><div class="spec-source-page-evidence"><strong>${escapeSpec(item.sourceDocument || "Source document")} · ${escapeSpec(item.sourcePage)}</strong><p>${escapeSpec(evidence)}</p></div><div id="specSourcePageCanvas" class="spec-source-page-canvas"><p>Loading the saved source page...</p></div></div>`, closeSpecModal);
+  document.querySelector("#specModalActions button")?.remove();
+  const closeButton = document.querySelector("#specModalActions .secondary");
+  if (closeButton) closeButton.textContent = "Close";
+  const preview = document.getElementById("specSourcePageCanvas");
+  try {
+    const file = specDocumentFiles.get(documentId) || await getSpecificationSourceFile(documentId);
+    if (!file) throw new Error("Reattach the source under Sources to preview its page.");
+    specDocumentFiles.set(documentId, file);
+    const pageNumber = Number(String(item.sourcePage || "").match(/\d+/)?.[0]);
+    if (!/\.pdf$/i.test(file.name) || !pageNumber) {
+      preview.innerHTML = `<div class="spec-source-text-preview"><strong>Exact extracted passage</strong><p>${escapeSpec(evidence)}</p><small>A rendered page preview is available for PDF sources. This source is ${escapeSpec(file.name)}.</small></div>`;
+      return;
+    }
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    if (pageNumber > pdf.numPages) throw new Error(`Page ${pageNumber} is outside this ${pdf.numPages}-page PDF.`);
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1.35 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({ canvasContext: canvas.getContext("2d", { alpha: false }), viewport }).promise;
+    preview.replaceChildren(canvas);
+  } catch (error) {
+    preview.innerHTML = `<p class="spec-load-status is-error">${escapeSpec(error.message || "The source page could not be displayed.")}</p>`;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Source review and equipment approval
 // ---------------------------------------------------------------------------
@@ -2125,30 +2250,44 @@ function renderSpecSourceSuggestions() {
     if (/spray nozzles?/i.test(context) && /spray features and benefits|flat spray pattern|spray angle/i.test(normalizedText)) normalizedText = formatSprayNozzleSpecification(context, normalizedText);
     return { ...item, text: normalizedText, targetPart: pumpStartup ? "part3" : item.targetPart, destinationArticle: pumpStartup ? "3.3" : item.destinationArticle, equipmentContext: pumpStartup ? "Pump Startup and Protection" : context };
   });
-  const suggestions = normalizedSuggestions.filter(item => item.status !== "rejected" && (item.status !== "pending" || (!isSpecSourceBoilerplate(item.text) && !isSpecOandMTroubleshootingText(item.text) && classifySpecSourceText(item.text))));
-  if (suggestions.length !== savedSuggestions.length || suggestions.some((item, index) => item.text !== savedSuggestions[index]?.text || item.equipmentContext !== savedSuggestions[index]?.equipmentContext || item.targetPart !== savedSuggestions[index]?.targetPart || item.destinationArticle !== savedSuggestions[index]?.destinationArticle)) specState.sourceSuggestions = suggestions;
+  // Extraction already screens boilerplate and maintenance noise before a
+  // suggestion is created. Do not permanently delete reviewable structured or
+  // AI suggestions merely because this display-time keyword classifier cannot
+  // categorize their wording a second time.
+  const suggestions = normalizedSuggestions.filter(item => item.status !== "rejected" && hasTraceableSpecEvidence(item));
+  if (normalizedSuggestions.some((item, index) => item.text !== savedSuggestions[index]?.text || item.equipmentContext !== savedSuggestions[index]?.equipmentContext || item.targetPart !== savedSuggestions[index]?.targetPart || item.destinationArticle !== savedSuggestions[index]?.destinationArticle)) specState.sourceSuggestions = normalizedSuggestions;
   const pending = suggestions.filter(item => item.status === "pending").length;
   const accepted = suggestions.filter(item => item.status === "accepted").length;
   const searchValue = String(document.getElementById("specSuggestionSearch")?.value || "").trim().toLowerCase();
   const statusValue = document.getElementById("specSuggestionStatus")?.value || "";
-  const sortMode = document.getElementById("specSuggestionSort")?.value || "destination";
+  const sortMode = document.getElementById("specSuggestionSort")?.value || "confidence";
   const displayedSuggestions = suggestions.filter(item => {
     if (statusValue && item.status !== statusValue) return false;
     if (!searchValue) return true;
     const destination = getSpecSuggestionDestination(item);
     return [item.equipmentContext, item.text, item.sourceDocument, item.sourcePage, destination.article, destination.title].some(value => String(value || "").toLowerCase().includes(searchValue));
-  }).sort((a, b) => {
+  }).map((item, originalIndex) => ({ item, originalIndex })).sort((left, right) => {
+    const a = left.item;
+    const b = right.item;
+    const pageA = Number(String(a.sourcePage || "").match(/\d+/)?.[0]) || 0;
+    const pageB = Number(String(b.sourcePage || "").match(/\d+/)?.[0]) || 0;
+    if (sortMode === "confidence") return getSpecFindingConfidenceScore(b) - getSpecFindingConfidenceScore(a);
+    if (sortMode === "confidence-ascending") return getSpecFindingConfidenceScore(a) - getSpecFindingConfidenceScore(b);
     if (sortMode === "equipment") return String(a.equipmentContext || identifySpecEquipmentContext(a.text)).localeCompare(String(b.equipmentContext || identifySpecEquipmentContext(b.text)), undefined, { numeric: true });
     if (sortMode === "destination") return getSpecSuggestionDestination(a).article.localeCompare(getSpecSuggestionDestination(b).article, undefined, { numeric: true }) || String(a.equipmentContext || "").localeCompare(String(b.equipmentContext || ""), undefined, { numeric: true }) || String(a.sourceDocument || "").localeCompare(String(b.sourceDocument || "")) || (Number(String(a.sourcePage || "").match(/\d+/)?.[0]) || 0) - (Number(String(b.sourcePage || "").match(/\d+/)?.[0]) || 0);
+    if (sortMode === "source") return left.originalIndex - right.originalIndex;
+    if (sortMode === "source-name") return String(a.sourceDocument || "").localeCompare(String(b.sourceDocument || ""), undefined, { numeric: true }) || pageA - pageB;
     if (sortMode === "status") return (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) || String(a.equipmentContext || "").localeCompare(String(b.equipmentContext || ""));
-    if (sortMode === "page") return (Number(String(a.sourcePage || "").match(/\d+/)?.[0]) || 0) - (Number(String(b.sourcePage || "").match(/\d+/)?.[0]) || 0);
-    return 0;
-  });
+    if (sortMode === "page") return pageA - pageB || String(a.sourceDocument || "").localeCompare(String(b.sourceDocument || ""));
+    if (sortMode === "page-descending") return pageB - pageA || String(a.sourceDocument || "").localeCompare(String(b.sourceDocument || ""));
+    return left.originalIndex - right.originalIndex;
+  }).map(entry => entry.item);
+  const renderedSuggestions = displayedSuggestions;
   summary.textContent = `${pending} awaiting review · ${accepted} accepted`;
   summary.className = `spec-load-status ${pending ? "is-loading" : "is-complete"}`;
   const aiSuggestionCount = suggestions.filter(item => item.extractionKind === "Local Qwen3-VL engineering extraction").length;
   if (aiSuggestionCount) summary.textContent += ` · ${aiSuggestionCount} from AI`;
-  list.innerHTML = displayedSuggestions.length ? displayedSuggestions.map(item => {
+  const renderSuggestionCard = item => {
     const destination = getSpecSuggestionDestination(item);
     const articleOptions = getSpecSuggestionArticleOptions(destination.key).map(option => `<option value="${option.article}" ${option.article === destination.article ? "selected" : ""}>${option.article} - ${escapeSpec(option.title)}</option>`).join("");
     const placementLevel = item.placementLevel || "auto";
@@ -2159,13 +2298,15 @@ function renderSpecSourceSuggestions() {
       ["lower", "a. Subitem"],
       ["detail", "(1) Detail item"]
     ].map(([value, label]) => `<option value="${value}" ${placementLevel === value ? "selected" : ""}>${label}</option>`).join("");
+    const evidence = getTraceableSpecEvidence(item);
     const actions = item.status === "accepted"
       ? `<button type="button" class="secondary" onclick="undoSpecSourceSuggestion('${item.id}')">Undo Accept</button>`
       : `<button type="button" onclick="acceptSpecSourceSuggestion('${item.id}')">Accept into ${escapeSpec(destination.article)}</button><button type="button" class="delete-btn" onclick="rejectSpecSourceSuggestion('${item.id}')">Reject</button>`;
-    return `<article class="spec-suggestion-card ${item.status}"><div class="spec-suggestion-heading"><div><span class="spec-status ${item.status}">${escapeSpec(item.status)}</span><strong>${escapeSpec(item.sourceDocument)}</strong><small>${escapeSpec(item.sourcePage)}</small><label class="spec-description-for"><span>Description applies to</span><input list="specApprovedEquipmentNames" value="${escapeSpecAttr(item.equipmentContext || identifySpecEquipmentContext(item.text))}" onchange="updateSpecSuggestion('${item.id}','equipmentContext',this.value)" ${item.status !== "pending" ? "disabled" : ""}></label></div><select aria-label="Specification part" onchange="updateSpecSuggestion('${item.id}','targetPart',this.value)" ${item.status !== "pending" ? "disabled" : ""}><option value="part2" ${item.targetPart === "part2" ? "selected" : ""}>Part 2 - Products</option><option value="part3" ${item.targetPart === "part3" ? "selected" : ""}>Part 3 - Execution</option></select></div><div class="spec-suggestion-placement-controls"><label class="spec-suggestion-destination"><strong>${item.status === "accepted" ? "Placed in" : "Place in article"}</strong><select onchange="updateSpecSuggestion('${item.id}','destinationArticle',this.value)" ${item.status !== "pending" ? "disabled" : ""}>${articleOptions}</select></label><label class="spec-suggestion-destination"><strong>Hierarchy level</strong><select onchange="updateSpecSuggestion('${item.id}','placementLevel',this.value)" ${item.status !== "pending" ? "disabled" : ""}>${placementOptions}</select></label></div><textarea aria-label="Extracted specification description" rows="5" spellcheck="true" autocapitalize="sentences" onchange="updateSpecSuggestion('${item.id}','text',this.value)" ${item.status !== "pending" ? "disabled" : ""}>${escapeSpec(item.text)}</textarea><div class="button-row spec-suggestion-actions">${actions}</div></article>`;
-  }).join("") : `<p class="converter-muted">No source suggestions to review. Add a source document in Step 2 to extract new suggestions.</p>`;
+    return `<article class="spec-suggestion-card ${item.status}"><div class="spec-suggestion-heading"><div><span class="spec-status ${item.status}">${escapeSpec(item.status)}</span><span class="spec-confidence-badge ${getSpecFindingConfidenceClass(item)}">${escapeSpec(formatSpecFindingConfidence(item))} confidence</span><strong>${escapeSpec(item.sourceDocument)}</strong><small>${escapeSpec(item.sourcePage)}</small><label class="spec-description-for"><span>Description applies to</span><input list="specApprovedEquipmentNames" value="${escapeSpecAttr(item.equipmentContext || identifySpecEquipmentContext(item.text))}" onchange="updateSpecSuggestion('${item.id}','equipmentContext',this.value)" ${item.status !== "pending" ? "disabled" : ""}></label></div><select aria-label="Specification part" onchange="updateSpecSuggestion('${item.id}','targetPart',this.value)" ${item.status !== "pending" ? "disabled" : ""}><option value="part2" ${item.targetPart === "part2" ? " selected" : ""}>Part 2 - Products</option><option value="part3" ${item.targetPart === "part3" ? " selected" : ""}>Part 3 - Execution</option></select></div><div class="spec-suggestion-placement-controls"><label class="spec-suggestion-destination"><strong>${item.status === "accepted" ? "Placed in" : "Place in article"}</strong><select onchange="updateSpecSuggestion('${item.id}','destinationArticle',this.value)" ${item.status !== "pending" ? "disabled" : ""}>${articleOptions}</select></label><label class="spec-suggestion-destination"><strong>Hierarchy level</strong><select onchange="updateSpecSuggestion('${item.id}','placementLevel',this.value)" ${item.status !== "pending" ? "disabled" : ""}>${placementOptions}</select></label></div><textarea aria-label="Extracted specification description" rows="5" spellcheck="true" autocapitalize="sentences" onchange="updateSpecSuggestion('${item.id}','text',this.value)" ${item.status !== "pending" ? "disabled" : ""}>${escapeSpec(item.text)}</textarea><details><summary>Exact source evidence</summary><p>${escapeSpec(evidence)}</p></details><div class="button-row spec-suggestion-actions"><button type="button" class="secondary" onclick="openSpecFindingSourcePage('suggestion','${item.id}')">View Source Page</button>${actions}</div></article>`;
+  };
+  list.innerHTML = displayedSuggestions.length ? renderSpecConfidenceTiers(displayedSuggestions, renderSuggestionCard, true) : `<p class="converter-muted">No source suggestions with traceable evidence to review. Add a source document in Step 2 to extract new suggestions.</p>`;
   Array.from(list.querySelectorAll(".spec-suggestion-card")).forEach((card, index) => {
-    const item = displayedSuggestions[index];
+    const item = renderedSuggestions[index];
     if (!item) return;
     if (item.extractionKind === "Local Qwen3-VL engineering extraction") {
       const badge = document.createElement("span");
@@ -2190,7 +2331,12 @@ function renderSpecSourceSuggestions() {
 }
 
 function getTocEquipmentCandidates() {
-  return (specState.components || []).filter(item => (item.detectionMethod === "Table of contents product list" || item.detectionMethod === "Structured equipment extraction" || item.equipmentListCandidate) && item.equipmentListCandidate !== false && item.verificationStatus !== "Rejected");
+  return (specState.components || []).filter(item =>
+    (item.detectionMethod === "Table of contents product list" || item.detectionMethod === "Structured equipment extraction" || item.equipmentListCandidate) &&
+    item.equipmentListCandidate !== false &&
+    item.verificationStatus !== "Rejected" &&
+    hasTraceableSpecEvidence(item)
+  );
 }
 
 function getApprovedTocEquipmentNames() {
@@ -2226,16 +2372,17 @@ function renderSpecEquipmentApprovals() {
   const approved = candidates.length - pending;
   summary.textContent = candidates.length ? `${pending} awaiting review · ${approved} approved for the equipment list` : "No equipment records extracted yet.";
   summary.className = `spec-load-status ${pending ? "is-loading" : candidates.length ? "is-complete" : ""}`;
-  list.innerHTML = `<datalist id="specApprovedEquipmentNames">${getApprovedTocEquipmentNames().map(name => `<option value="${escapeSpecAttr(name)}"></option>`).join("")}</datalist>` + candidates.map(item => {
+  const renderEquipmentCard = item => {
     const includedParts = (specState.components || []).filter(component => ["O&M included component", "Table of contents product list"].includes(component.detectionMethod) && component.id !== item.id && component.sourceDocumentId === item.sourceDocumentId && String(component.assembly || "").toLowerCase() === String(item.description || "").toLowerCase());
     const includedPartCount = includedParts.length;
     const details = [item.manufacturer && `Manufacturer: ${item.manufacturer}`, item.model && `Model: ${item.model}`, item.quantity && `Quantity: ${item.quantity} ${item.unit || "ea"}`, includedPartCount && `${includedPartCount} included parts extracted`].filter(Boolean);
     const technical = Object.values(item.extractedFields || {}).flat().join(" · ");
     const warning = (item.extractionWarnings || []).join(" ");
     const badgeClass = item.conflict ? "conflict" : item.verificationStatus === "Engineer Approved" ? "accepted" : "pending";
-    const badgeText = item.conflict ? "conflict" : item.verificationStatus === "Engineer Approved" ? "approved" : `${item.extractionConfidence || "Review"} confidence`;
-    return `<article class="spec-equipment-approval-card ${item.verificationStatus === "Engineer Approved" ? "accepted" : "pending"} ${item.conflict ? "has-conflict" : ""}"><div><span class="spec-status ${badgeClass}">${escapeSpec(badgeText)}</span><input aria-label="Equipment name" value="${escapeSpecAttr(item.description)}" onchange="updateTocEquipmentName('${item.id}',this.value)" ${item.verificationStatus === "Engineer Approved" ? "disabled" : ""}>${details.length ? `<p class="spec-equipment-identity">${details.map(escapeSpec).join(" · ")}</p>` : ""}${technical ? `<p class="spec-equipment-technical">${escapeSpec(technical)}</p>` : ""}${warning ? `<p class="spec-equipment-warning">${escapeSpec(warning)}</p>` : ""}<small>${escapeSpec(item.sourceDocument)} · ${escapeSpec(item.sourcePage)}</small>${item.extractionEvidence ? `<details><summary>Source evidence</summary><p>${escapeSpec(item.extractionEvidence)}</p></details>` : ""}</div><div class="button-row">${item.verificationStatus === "Engineer Approved" ? `<button type="button" class="secondary" onclick="undoTocEquipmentApproval('${item.id}')">Undo Approval</button>` : `<button type="button" onclick="approveTocEquipment('${item.id}')">Approve for 2.2</button><button type="button" class="delete-btn" onclick="rejectTocEquipment('${item.id}')">Reject</button>`}</div></article>`;
-  }).join("");
+    const badgeText = item.conflict ? "Conflict" : item.verificationStatus === "Engineer Approved" ? "Approved" : "Review";
+    return `<article class="spec-equipment-approval-card ${item.verificationStatus === "Engineer Approved" ? "accepted" : "pending"} ${item.conflict ? "has-conflict" : ""}"><div><div class="spec-equipment-badges"><span class="spec-status ${badgeClass}">${badgeText}</span><span class="spec-confidence-badge ${getSpecFindingConfidenceClass(item)}">${escapeSpec(formatSpecFindingConfidence(item))} confidence</span></div><input aria-label="Equipment name" value="${escapeSpecAttr(item.description)}" onchange="updateTocEquipmentName('${item.id}',this.value)" ${item.verificationStatus === "Engineer Approved" ? "disabled" : ""}>${details.length ? `<p class="spec-equipment-identity">${details.map(escapeSpec).join(" · ")}</p>` : ""}${technical ? `<p class="spec-equipment-technical">${escapeSpec(technical)}</p>` : ""}${warning ? `<p class="spec-equipment-warning">${escapeSpec(warning)}</p>` : ""}<small>${escapeSpec(item.sourceDocument)} · ${escapeSpec(item.sourcePage)}</small><details><summary>Exact source evidence</summary><p>${escapeSpec(getTraceableSpecEvidence(item))}</p></details></div><div class="button-row"><button type="button" class="secondary" onclick="openSpecFindingSourcePage('equipment','${item.id}')">View Source Page</button>${item.verificationStatus === "Engineer Approved" ? `<button type="button" class="secondary" onclick="undoTocEquipmentApproval('${item.id}')">Undo Approval</button>` : `<button type="button" onclick="approveTocEquipment('${item.id}')">Approve for 2.2</button><button type="button" class="delete-btn" onclick="rejectTocEquipment('${item.id}')">Reject</button>`}</div></article>`;
+  };
+  list.innerHTML = `<datalist id="specApprovedEquipmentNames">${getApprovedTocEquipmentNames().map(name => `<option value="${escapeSpecAttr(name)}"></option>`).join("")}</datalist>${renderSpecConfidenceTiers(candidates, renderEquipmentCard)}`;
 }
 
 function updateTocEquipmentName(id, value) {
@@ -2443,22 +2590,24 @@ function renderExtractedSpecFillIns() {
   const summary = document.getElementById("specExtractedFillSummary");
   if (!list || !summary) return;
   reconcileAcceptedSpecFillAlternatives();
-  const candidates = (specState.fillInSuggestions || []).filter(item => item.status !== "rejected");
+  const candidates = (specState.fillInSuggestions || []).filter(item => item.status !== "rejected" && hasTraceableSpecEvidence(item));
+  const renderedCandidates = getSpecConfidenceTieredItems(candidates).ordered;
   const pending = candidates.filter(item => item.status === "pending").length;
   const applied = candidates.filter(item => item.status === "accepted").length;
   summary.textContent = candidates.length ? `${pending} awaiting review · ${applied} applied to the template` : "No template values extracted yet.";
   summary.className = `spec-load-status ${pending ? "is-loading" : candidates.length ? "is-complete" : ""}`;
   const aiFillCount = candidates.filter(item => item.detectionMethod === "Local Qwen3-VL extraction").length;
   if (aiFillCount) summary.textContent += ` · ${aiFillCount} from AI`;
-  list.innerHTML = candidates.map(item => {
+  const renderFillCard = item => {
     const comparison = item.status === "pending" ? getExtractedSpecFillConflict(item) : { conflict: false, currentValue: "" };
     const badge = item.status === "accepted" ? "Applied" : comparison.conflict ? "Conflict" : "Review";
     const conflictMarkup = comparison.conflict ? `<div class="spec-fill-conflict"><strong>Current template value:</strong> ${comparison.currentValue ? escapeSpec(comparison.currentValue) : "This fill-in was already completed manually."}</div>` : "";
     const actions = item.status === "accepted" ? `<button type="button" class="secondary" onclick="undoExtractedSpecFillIn('${item.id}')">Undo Apply</button>` : `<button type="button" onclick="applyExtractedSpecFillIn('${item.id}')" ${comparison.conflict && !comparison.canReplace ? "disabled" : ""}>${comparison.conflict ? comparison.canReplace ? "Replace Existing" : "Review in Part" : "Apply to Template"}</button><button type="button" class="delete-btn" onclick="rejectExtractedSpecFillIn('${item.id}')">Reject</button>`;
-    return `<article class="spec-extracted-fill-card ${item.status} ${comparison.conflict ? "has-conflict" : ""}"><div class="spec-extracted-fill-heading"><div><span class="spec-status ${comparison.conflict ? "conflict" : item.status}">${badge}</span><strong>${escapeSpec(item.label)}</strong><code>${escapeSpec(item.placeholder)}</code></div><span class="spec-confidence">${escapeSpec(item.confidence)} confidence</span></div>${conflictMarkup}<p class="spec-extracted-value"><span>Extracted value</span>${escapeSpec(item.value)}</p><small>${escapeSpec(item.sourceDocument)} · ${escapeSpec(item.sourcePage)}</small><details><summary>Source evidence</summary><p>${escapeSpec(item.evidence)}</p></details><div class="button-row">${actions}</div></article>`;
-  }).join("");
+    return `<article class="spec-extracted-fill-card ${item.status} ${comparison.conflict ? "has-conflict" : ""}"><div class="spec-extracted-fill-heading"><div><span class="spec-status ${comparison.conflict ? "conflict" : item.status}">${badge}</span><strong>${escapeSpec(item.label)}</strong><code>${escapeSpec(item.placeholder)}</code></div><span class="spec-confidence spec-confidence-badge ${getSpecFindingConfidenceClass(item)}">${escapeSpec(formatSpecFindingConfidence(item))} confidence</span></div>${conflictMarkup}<p class="spec-extracted-value"><span>Extracted value</span>${escapeSpec(item.value)}</p><small>${escapeSpec(item.sourceDocument)} · ${escapeSpec(item.sourcePage)}</small><details><summary>Exact source evidence</summary><p>${escapeSpec(item.evidence)}</p></details><div class="button-row"><button type="button" class="secondary" onclick="openSpecFindingSourcePage('fill','${item.id}')">View Source Page</button>${actions}</div></article>`;
+  };
+  list.innerHTML = renderSpecConfidenceTiers(candidates, renderFillCard);
   Array.from(list.querySelectorAll(".spec-extracted-fill-card")).forEach((card, index) => {
-    const item = candidates[index];
+    const item = renderedCandidates[index];
     if (!item) return;
     if (item.detectionMethod === "Local Qwen3-VL extraction") {
       const badge = document.createElement("span");
@@ -2929,7 +3078,7 @@ function clearSpecSuggestionFilters() {
   const sort = document.getElementById("specSuggestionSort");
   if (search) search.value = "";
   if (status) status.value = "";
-  if (sort) sort.value = "destination";
+  if (sort) sort.value = "confidence";
   renderSpecSourceSuggestions();
 }
 
@@ -3013,6 +3162,26 @@ function stopSpecLocalAiTimer() {
   specLocalAiActiveSource = "";
   const messagesSummary = document.getElementById("specAiMessagesSummary");
   if (messagesSummary) messagesSummary.textContent = "Show messages";
+}
+
+function startSpecBuiltInAnalysisTimer() {
+  const startedAt = performance.now();
+  const elapsed = document.getElementById("specAiElapsed");
+  if (elapsed) elapsed.textContent = "0:00";
+  clearInterval(specBuiltInAnalysisTimer);
+  specBuiltInAnalysisTimer = setInterval(() => {
+    if (elapsed) elapsed.textContent = formatSpecLocalAiElapsed(performance.now() - startedAt);
+  }, 100);
+  return startedAt;
+}
+
+function stopSpecBuiltInAnalysisTimer(startedAt) {
+  clearInterval(specBuiltInAnalysisTimer);
+  specBuiltInAnalysisTimer = null;
+  const duration = performance.now() - startedAt;
+  const elapsed = document.getElementById("specAiElapsed");
+  if (elapsed) elapsed.textContent = duration < 1000 ? "Under 1 sec" : formatSpecLocalAiElapsed(duration);
+  return duration;
 }
 
 function renderSpecDocuments() {
@@ -3562,10 +3731,10 @@ async function createSpecAiAnalysisSource(file) {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
       const text = sanitizeExtractedSpecText(reconstructSpecificationPdfText(content.items));
-      // A substantial PDF text layer contains the same engineering labels and
-      // values at a fraction of the inference cost. Sparse/scanned pages still
+      // Searchable pages are sent as fast text batches so Analyze with AI adds
+      // semantic review beyond the built-in rules. Sparse/scanned pages still
       // receive full visual review.
-      if (text.replace(/\s+/g, " ").trim().length >= 80) return { sourcePage: `Page ${pageNumber}`, text, visuallyBlank: false, searchableTextHandled: true };
+      if (text.replace(/\s+/g, " ").trim().length >= 80) return { sourcePage: `Page ${pageNumber}`, text, visuallyBlank: false };
       const viewport = page.getViewport({ scale: 0.65 });
       const canvas = document.createElement("canvas");
       canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
@@ -3594,19 +3763,19 @@ async function createSpecAiAnalysisSource(file) {
 function importSpecLocalAiResult(result, record, sourcePage) {
   const count = { equipment: 0, fills: 0, clauses: 0 };
   const confidenceLabel = value => Number(value || 0) >= 0.85 ? "High" : Number(value || 0) >= 0.65 ? "Medium" : "Low";
-  (result.equipment || []).filter(item => item.description && Number(item.confidence || 0) >= 0.55).forEach(item => {
+  (result.equipment || []).filter(item => item.description && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).forEach(item => {
     const duplicate = specState.components.some(existing => existing.sourceDocumentId === record.id && existing.description.toLowerCase() === String(item.description).toLowerCase() && existing.sourcePage === sourcePage);
     if (duplicate) return;
-    specState.components.push(createSpecComponent({ partNumber: item.partNumber || "", description: item.description, manufacturer: item.manufacturer || "", model: item.model || "", quantity: Number(item.quantity) || 1, unit: item.unit || "ea", assembly: item.assembly || "", notes: item.technicalDetails || "", sourceDocument: record.name, sourceDocumentId: record.id, sourcePage, detectionMethod: "Local Qwen3-VL extraction", verificationStatus: "Needs Review", quantityExplanation: `AI extraction from ${sourcePage}; verify against source. Evidence: ${item.evidence || "not provided"}`, aiInvolved: true, extractionConfidence: item.confidence, extractionEvidence: item.evidence || "" }));
+    specState.components.push(createSpecComponent({ partNumber: item.partNumber || "", description: item.description, manufacturer: item.manufacturer || "", model: item.model || "", quantity: Number(item.quantity) || 1, unit: item.unit || "ea", assembly: item.assembly || "", notes: item.technicalDetails || "", sourceDocument: record.name, sourceDocumentId: record.id, sourcePage, detectionMethod: "Local Qwen3-VL extraction", verificationStatus: "Needs Review", quantityExplanation: `AI extraction from ${sourcePage}; verify against source. Evidence: ${item.evidence}`, aiInvolved: true, extractionConfidence: confidenceLabel(item.confidence), numericConfidence: Number(item.confidence || 0), extractionEvidence: item.evidence }));
     count.equipment += 1;
   });
-  (result.fillIns || []).filter(item => item.placeholder && item.value && Number(item.confidence || 0) >= 0.65).forEach(item => {
+  (result.fillIns || []).filter(item => item.placeholder && item.value && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.55).forEach(item => {
     const placeholder = item.placeholder.startsWith("[") ? item.placeholder : `[${item.placeholder.toUpperCase()}]`;
     const part = /3/.test(item.part || "") ? "part3" : /1/.test(item.part || "") ? "part1" : "part2";
     specState.fillInSuggestions.push({ id: crypto.randomUUID(), documentId: record.id, sourceDocument: record.name, sourcePage, status: "pending", createdAt: new Date().toISOString(), part, placeholder, label: placeholder.slice(1, -1).toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase()), value: item.value, evidence: item.evidence || "Local AI extraction", confidence: confidenceLabel(item.confidence), numericConfidence: item.confidence, detectionMethod: "Local Qwen3-VL extraction" });
     count.fills += 1;
   });
-  (result.clauses || []).filter(item => item.text && Number(item.confidence || 0) >= 0.6).forEach(item => {
+  (result.clauses || []).filter(item => item.text && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).forEach(item => {
     const targetPart = /3/.test(item.targetPart || "") ? "part3" : "part2";
     const articleMatch = String(item.targetArticle || "").match(/[23]\.\d+/);
     const level = String(item.hierarchyLevel || "").toLowerCase();
@@ -3659,13 +3828,25 @@ async function reanalyzeSpecDocument(id) {
     !SPEC_SOURCE_COMPONENT_METHODS.has(item.detectionMethod)
   );
   setSpecSourceStatus(`Reanalyzing ${file.name}...`, "is-loading");
+  const analysisStartedAt = startSpecBuiltInAnalysisTimer();
+  await new Promise(resolve => requestAnimationFrame(resolve));
   const result = await extractSpecSourceSuggestions(file, id);
+  const analysisDuration = stopSpecBuiltInAnalysisTimer(analysisStartedAt);
+  if (result?.error) {
+    documentRecord.importSummary = `Analysis failed: ${result.error}`;
+    touchSpecificationProject();
+    renderSpecDocuments();
+    setSpecSourceStatus(`${file.name} could not be analyzed: ${result.error}`, "is-error");
+    return;
+  }
   const suggestions = Math.max(0, result?.suggestions || 0);
   const fillIns = Math.max(0, result?.fillIns || 0);
-  documentRecord.importSummary = suggestions || fillIns ? `${suggestions} review suggestion${suggestions === 1 ? "" : "s"}; ${fillIns} template value${fillIns === 1 ? "" : "s"}` : "No clearly usable specification requirements found";
+  const equipmentRecords = Math.max(0, result?.equipmentRecords || 0);
+  documentRecord.importSummary = suggestions || fillIns || equipmentRecords ? `${suggestions} review suggestion${suggestions === 1 ? "" : "s"}; ${fillIns} template value${fillIns === 1 ? "" : "s"}; ${equipmentRecords} equipment record${equipmentRecords === 1 ? "" : "s"}` : "No clearly usable specification requirements found";
   touchSpecificationProject();
   renderSpecDocuments(); renderSpecSourceSuggestions(); renderExtractedSpecFillIns();
-  setSpecSourceStatus(`${file.name} was reanalyzed. ${suggestions} source suggestion${suggestions === 1 ? "" : "s"} and ${fillIns} template value${fillIns === 1 ? "" : "s"} are ready for review.`, "is-complete");
+  const durationLabel = analysisDuration < 1000 ? "under 1 second" : formatSpecLocalAiElapsed(analysisDuration);
+  setSpecSourceStatus(`${file.name} was fully reanalyzed in ${durationLabel}. ${suggestions} source suggestion${suggestions === 1 ? "" : "s"}, ${fillIns} template value${fillIns === 1 ? "" : "s"}, and ${equipmentRecords} equipment record${equipmentRecords === 1 ? "" : "s"} are ready for review.`, "is-complete");
 }
 
 async function downloadSpecDocument(id) {

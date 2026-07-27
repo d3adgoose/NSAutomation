@@ -441,7 +441,20 @@ button:hover {
 .spec-extracted-fill-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .spec-extracted-fill-heading > div { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .spec-extracted-fill-heading code { padding: 2px 5px; border-radius: 4px; background: #edf2f6; color: #405c73; font-size: 11px; }
-.spec-confidence { flex: 0 0 auto; color: #607586; font-size: 11px; }
+.spec-confidence { flex: 0 0 auto; font-size: 11px; }
+.spec-confidence-badge { display: inline-flex; align-items: center; justify-self: start; width: max-content; max-width: 100%; padding: 4px 9px; border: 1px solid transparent; border-radius: 999px; font-size: 11px; font-weight: 750; line-height: 1.15; white-space: nowrap; }
+.spec-confidence-badge.confidence-high { border-color: #9acbab; background: #e8f6ed; color: #17623a; }
+.spec-confidence-badge.confidence-medium { border-color: #9fc4de; background: #edf6fc; color: #174f76; }
+.spec-confidence-badge.confidence-low { border-color: #e2c277; background: #fff5d9; color: #76520f; }
+.spec-modal-content:has(.spec-source-page-preview) { display: flex; flex-direction: column; width: min(1400px, 96vw); height: min(900px, 94vh); max-height: 94vh; overflow: hidden; }
+.spec-modal-content:has(.spec-source-page-preview) #specModalBody { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.spec-modal-content:has(.spec-source-page-preview) #specModalActions { flex: 0 0 auto; margin-top: 14px; padding-top: 12px; border-top: 1px solid #d5e0ea; background: #fff; }
+.spec-source-page-preview { display: grid; grid-template-columns: minmax(260px, 0.55fr) minmax(0, 1.45fr); gap: 16px; height: 100%; min-height: 0; }
+.spec-source-page-evidence { padding: 14px; border: 1px solid #bdd3e3; border-radius: 8px; background: #f5f9fc; overflow-y: auto; }
+.spec-source-page-evidence p { white-space: pre-wrap; line-height: 1.5; }
+.spec-source-page-canvas { display: grid; min-width: 0; min-height: 320px; padding: 10px; border: 1px solid #d5e0ea; border-radius: 8px; background: #697580; overflow: auto; place-items: start center; }
+.spec-source-page-canvas canvas { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; background: #fff; box-shadow: 0 3px 14px rgba(0,0,0,0.24); }
+.spec-source-text-preview { padding: 16px; border-radius: 7px; background: #fff; }
 .spec-extracted-value { margin: 12px 0 7px; color: #102f49; font-size: 16px; font-weight: 700; }
 .spec-extracted-value span { display: block; margin-bottom: 3px; color: #66798b; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .spec-extracted-fill-card small { color: #627788; }
@@ -454,6 +467,7 @@ button:hover {
 .spec-suggestion-card.rejected { opacity: 0.66; background: #f5f6f7; }
 .spec-suggestion-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 38%); align-items: start; gap: 16px; margin: -4px -4px 14px; padding: 12px; border-radius: 8px; background: #f5f8fb; }
 .spec-suggestion-heading > div { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px 9px; min-width: 0; }
+.spec-suggestion-heading .spec-confidence-badge { grid-column: auto; }
 .spec-suggestion-heading > div > strong { overflow-wrap: anywhere; color: #102f4b; }
 .spec-suggestion-heading small { color: #697b8c; }
 .spec-suggestion-heading > select { width: 100%; min-height: 38px; }
@@ -464,6 +478,7 @@ button:hover {
 .spec-equipment-approval-list { display: grid; gap: 8px; }
 .spec-equipment-approval-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid #cedbe5; border-radius: 8px; background: #fff; }
 .spec-equipment-approval-card > div:first-child { display: grid; grid-template-columns: auto minmax(220px, 1fr); align-items: center; gap: 7px 10px; flex: 1; }
+.spec-equipment-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .spec-equipment-approval-card input { width: 100%; box-sizing: border-box; }
 .spec-equipment-approval-card small { grid-column: 2; color: #61798b; }
 .spec-equipment-approval-card.accepted { border-color: #9bc9aa; background: #f3faf5; }
@@ -547,6 +562,10 @@ button:hover {
   .spec-company-library-layout { grid-template-columns: 1fr; }
   .spec-company-library-browser { min-height: 420px; }
   .spec-company-knowledge-actions { justify-content: flex-start; }
+  .spec-source-page-preview { grid-template-columns: 1fr; max-height: none; }
+  .spec-source-page-canvas { min-height: 260px; }
+  .spec-modal-content:has(.spec-source-page-preview) { height: 96vh; max-height: 96vh; }
+  .spec-modal-content:has(.spec-source-page-preview) #specModalBody { overflow-y: auto; }
   .spec-template-actions { grid-template-columns: 1fr; width: 100%; }
   .spec-form-grid,
   .spec-filter-row { grid-template-columns: 1fr; }

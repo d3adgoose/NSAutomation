@@ -12,7 +12,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=20260723-ai-popup-buttons" />
+  <link rel="stylesheet" href="style.css?v=20260727-compact-confidence-pills" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
@@ -300,7 +300,7 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
       <div class="spec-review-toolbar">
         <label><span>Search</span><input id="specSuggestionSearch" type="search" placeholder="Equipment, wording, source, or article" oninput="renderSpecSourceSuggestions()"></label>
         <label><span>Show</span><select id="specSuggestionStatus" onchange="renderSpecSourceSuggestions()"><option value="">All review items</option><option value="pending">Awaiting review</option><option value="accepted">Accepted</option></select></label>
-        <label><span>Sort</span><select id="specSuggestionSort" onchange="renderSpecSourceSuggestions()"><option value="destination" selected>Destination article</option><option value="source">Source order</option><option value="equipment">Equipment A-Z</option><option value="status">Review status</option><option value="page">Source page</option></select></label>
+        <label><span>Sort</span><select id="specSuggestionSort" onchange="renderSpecSourceSuggestions()"><option value="confidence" selected>Confidence: high to low</option><option value="confidence-ascending">Confidence: low to high</option><option value="destination">Destination article</option><option value="source">Original extraction order</option><option value="source-name">Source filename A-Z</option><option value="equipment">Equipment A-Z</option><option value="status">Review status</option><option value="page">Source page: low to high</option><option value="page-descending">Source page: high to low</option></select></label>
         <button type="button" class="secondary" onclick="clearSpecSuggestionFilters()">Clear Filters</button>
       </div>
       <div id="specEquipmentApprovalPanel" class="spec-direct-fill-panel">
@@ -377,10 +377,10 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
 
   <script src="common.js"></script>
   <script src="supabaseClient.js"></script>
-  <script src="specification-ai.js?v=20260723-local-network-permission"></script>
+  <script src="specification-ai.js?v=20260727-exact-source-evidence"></script>
   <script src="specification-utils.js?v=20260724-refactor"></script>
   <script src="specification-company-library.js?v=20260727-company-knowledge-title-prefill"></script>
-  <script src="specification.js?v=20260727-fill-in-alternative-cleanup"></script>
+  <script src="specification.js?v=20260727-complete-sort-options"></script>
   <script src="global-auth.js?v=20260722-database-login-style"></script>
   <script src="navigation.js?v=20260720-spec-automation"></script>
 </body>
