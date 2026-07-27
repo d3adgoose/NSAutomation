@@ -2771,6 +2771,7 @@ function openWarrantyPromptModal(options = {}) {
   const washType = document.getElementById("washType")?.value;
   const durationInput = document.getElementById("warrantyLaborDuration");
   const materialYearsInput = document.getElementById("warrantyMaterialYears");
+  const standardCoverage = document.getElementById("useStandardWarrantyCoverage");
   const unitSelect = document.getElementById("warrantyLaborUnit");
   const commencementSelect = document.getElementById("warrantyCommencement");
   const commencementDate = document.getElementById("warrantyCommencementDate");
@@ -2799,8 +2800,9 @@ function openWarrantyPromptModal(options = {}) {
   if (vehicleType) {
     vehicleType.value = washType === "Car Wash" ? "car" : "transit";
   }
-  if (materialYearsInput) materialYearsInput.value = "";
-  if (durationInput) durationInput.value = "";
+  if (standardCoverage) standardCoverage.checked = true;
+  if (materialYearsInput) materialYearsInput.value = "1";
+  if (durationInput) durationInput.value = "90";
   if (unitSelect) unitSelect.value = "days";
   if (commencementSelect) commencementSelect.value = "substantial";
   if (commencementDate) commencementDate.value = "";
@@ -2814,6 +2816,7 @@ function openWarrantyPromptModal(options = {}) {
 
   updateWarrantyPeriodEnd();
   updateWarrantyVehicleFields();
+  toggleStandardWarrantyCoverage();
   toggleWarrantyCreator();
   if (continueButton && !createCheckbox.checked) {
     continueButton.textContent = options.hasIncludedWarranty
@@ -2936,6 +2939,30 @@ function updateWarrantyVehicleFields() {
       return option;
     }));
   }
+
+  toggleStandardWarrantyCoverage();
+}
+
+function toggleStandardWarrantyCoverage() {
+  const standardCoverage = document.getElementById("useStandardWarrantyCoverage");
+  const materialDuration = document.getElementById("warrantyMaterialYears");
+  const materialUnit = document.getElementById("warrantyMaterialUnit");
+  const laborDuration = document.getElementById("warrantyLaborDuration");
+  const laborUnit = document.getElementById("warrantyLaborUnit");
+
+  if (!standardCoverage) return;
+
+  const useStandard = standardCoverage.checked;
+  if (useStandard) {
+    if (materialDuration) materialDuration.value = "1";
+    if (materialUnit) materialUnit.value = "years";
+    if (laborDuration) laborDuration.value = "90";
+    if (laborUnit) laborUnit.value = "days";
+  }
+
+  [materialDuration, materialUnit, laborDuration, laborUnit].forEach(control => {
+    if (control) control.disabled = useStandard;
+  });
 }
 
 async function continueWarrantyPrompt() {

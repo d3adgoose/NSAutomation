@@ -261,6 +261,19 @@
       </label>
 
       <div id="warrantyCreatorFields" class="warranty-creator-fields hidden">
+        <label class="checkbox-row warranty-standard-coverage">
+          <input
+            type="checkbox"
+            id="useStandardWarrantyCoverage"
+            onchange="toggleStandardWarrantyCoverage()"
+            checked
+          />
+          <span>
+            <strong>Accept Standard Coverage</strong>
+            <small>90 days labor and 1 year materials</small>
+          </span>
+        </label>
+
         <label for="warrantyVehicleType">Warranty type</label>
         <select id="warrantyVehicleType" onchange="updateWarrantyVehicleFields()">
           <option value="transit">Transit</option>

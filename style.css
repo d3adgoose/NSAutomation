@@ -583,6 +583,35 @@ button:hover {
   flex: 0 0 auto;
 }
 
+.warranty-standard-coverage {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 14px;
+  border: 2px solid #7aa7d2;
+  border-radius: 8px;
+  background: #eef6ff;
+  cursor: pointer;
+}
+
+.warranty-standard-coverage input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.warranty-standard-coverage span {
+  display: grid;
+  gap: 3px;
+}
+
+.warranty-standard-coverage small {
+  color: #4c5661;
+  font-weight: 400;
+}
+
 .build-summary {
   display: grid;
   gap: 8px;
