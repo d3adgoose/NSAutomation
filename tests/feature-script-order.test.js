@@ -27,6 +27,29 @@ const families = [
   ["Parts Library", ["parts-library-utils.js", "partsLibrary.js"]]
 ];
 
+const packetScripts = [
+  "submittal.js",
+  "submittal-state-ui.js",
+  "submittal-build.js",
+  "submittal-warranty.js",
+  "submittal-organizer.js",
+  "submittal-pdf-output.js"
+];
+
+for (const htmlFile of ["submittal.html", "om.html"]) {
+  const html = fs.readFileSync(path.join(root, htmlFile), "utf8");
+  let previousIndex = -1;
+
+  for (const scriptFile of packetScripts) {
+    const scriptIndex = html.indexOf(`src="${scriptFile}`);
+    assert(scriptIndex >= 0, `${htmlFile} does not load ${scriptFile}.`);
+    assert(scriptIndex > previousIndex, `${htmlFile} loads packet scripts out of order.`);
+    previousIndex = scriptIndex;
+  }
+}
+
+families.push(["Packet Builder", packetScripts]);
+
 for (const [label, files] of families) {
   const names = files.flatMap(file => {
     const source = fs.readFileSync(path.join(root, file), "utf8");
