@@ -24,7 +24,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   menu.querySelectorAll("a").forEach(link => {
-    link.addEventListener("click", () => {
+    link.addEventListener("click", event => {
+      if (typeof window.handleSpecNavigationDuringAnalysis === "function" &&
+          window.handleSpecNavigationDuringAnalysis(link.href)) {
+        event.preventDefault();
+        return;
+      }
       menu.classList.remove("open");
       btn.classList.remove("open");
       btn.setAttribute("aria-expanded", "false");
@@ -41,9 +46,12 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.setAttribute("aria-expanded", "false");
     }
   });
+
+  initializeSpecAnalysisMenuStatus(menu);
 });
 
 const RECENT_TOOL_HISTORY_KEY = "ns-recent-tool-history-v1";
+const SPEC_ANALYSIS_STATUS_KEY = "ns-spec-analysis-status-v1";
 const RECENT_TOOL_LABELS = {
   "database.html": "PDF Datasheet Library",
   "parts-library.html": "Drawing & Parts Library",
@@ -52,6 +60,52 @@ const RECENT_TOOL_LABELS = {
   "submittal.html": "Submittal Builder",
   "om.html": "O&M Manual Builder"
 };
+
+function readSpecAnalysisStatus() {
+  try {
+    const status = JSON.parse(localStorage.getItem(SPEC_ANALYSIS_STATUS_KEY) || "null");
+    return status && typeof status === "object" ? status : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatSpecAnalysisElapsed(startedAt, finishedAt = 0) {
+  const seconds = Math.max(0, Math.floor(((finishedAt || Date.now()) - Number(startedAt || Date.now())) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const remainder = String(seconds % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${remainder}` : `${minutes}:${remainder}`;
+}
+
+function initializeSpecAnalysisMenuStatus(menu) {
+  const link = Array.from(menu.querySelectorAll("a")).find(item => (item.getAttribute("href") || "").split("?")[0] === "specification.html");
+  if (!link) return;
+  let badge = link.querySelector(".spec-menu-analysis-status");
+  if (!badge) {
+    badge = document.createElement("small");
+    badge.className = "spec-menu-analysis-status";
+    link.appendChild(badge);
+  }
+  const render = () => {
+    const status = readSpecAnalysisStatus();
+    const running = status?.state === "running" && Date.now() - Number(status.updatedAt || 0) < 120000;
+    const isReanalysis = status?.activity === "reanalyze" ||
+      /\b(?:reanalyz|regular analysis|automatic .*analysis)\b/i.test(String(status?.message || ""));
+    badge.classList.toggle("is-running", running);
+    badge.classList.toggle("is-done", Boolean(status) && !running);
+    badge.textContent = running
+      ? `${isReanalysis ? "Reanalyzing" : "AI in progress"} · ${formatSpecAnalysisElapsed(status.startedAt)}`
+      : status
+        ? "Done"
+        : "Analyze with AI";
+  };
+  render();
+  setInterval(render, 1000);
+  window.addEventListener("storage", event => {
+    if (event.key === SPEC_ANALYSIS_STATUS_KEY) render();
+  });
+}
 
 function getRecentToolHistory() {
   try {

@@ -5,6 +5,7 @@ const vm = require("vm");
 
 const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "specification.html"), "utf8");
+const localAiServer = fs.readFileSync(path.join(root, "local-ai-server.js"), "utf8");
 const redirectIndex = html.indexOf('location.port !== "4173"');
 const firstExternalScriptIndex = html.indexOf('src="https://');
 
@@ -19,6 +20,16 @@ assert(
   html.includes("location.hash"),
   "Local AI routing must preserve the current Specification URL."
 );
+assert(localAiServer.includes("worker-src 'self' blob: https://cdnjs.cloudflare.com"),
+  "The local gateway CSP must allow the configured PDF.js worker.");
+assert(html.includes('pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js?v=3.11.174"'),
+  "Specification PDF.js must use the same-origin worker to avoid CSP blob-worker failures.");
+assert(fs.existsSync(path.join(root, "vendor-pdf.worker.min.js")),
+  "The same-origin PDF.js worker asset must exist.");
+const progressIndex = html.indexOf('id="specAiProgress"');
+const projectPanelIndex = html.indexOf('id="specTab-project"');
+assert(progressIndex >= 0 && progressIndex < projectPanelIndex,
+  "Local AI progress must remain outside the numbered tab panels so it stays visible while users work in steps 1, 3, or 4.");
 
 const inlineScript = html.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1] || "";
 

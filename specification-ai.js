@@ -32,6 +32,23 @@
     },
     required: ["pages"]
   };
+  const EQUIPMENT_DETAIL_SCHEMA = {
+    type: "object",
+    properties: {
+      equipmentDetails: { type: "array", items: { type: "object", properties: {
+        equipmentName: { type: "string" }, manufacturer: { type: "string" }, model: { type: "string" },
+        partNumber: { type: "string" }, quantity: { type: "number" }, voltage: { type: "string" },
+        phase: { type: "string" }, amperage: { type: "string" }, horsepower: { type: "string" },
+        flow: { type: "string" }, pressure: { type: "string" }, dimensions: { type: "string" },
+        materials: { type: "string" }, controls: { type: "string" },
+        includedComponents: { type: "array", items: { type: "string" } },
+        installationRequirements: { type: "array", items: { type: "string" } },
+        performanceRequirements: { type: "array", items: { type: "string" } },
+        warranty: { type: "string" }, evidence: { type: "string" }, confidence: { type: "number" }
+      }, required: ["equipmentName", "evidence", "confidence"] } }
+    },
+    required: ["equipmentDetails"]
+  };
   const WRITING_SCHEMA = {
     type: "object",
     properties: {
@@ -53,7 +70,7 @@ Built-in company reference distilled from Chicago Canal Spec, Section 111126 - V
 - Fill-in: return a value only when it directly answers a known template placeholder: project number, section number, project name, customer, equipment type, vehicle type, system name/model, engineer, revision, date, installation responsibility, startup requirement, acceptance-test procedure, required trouble-free cycles, training hours, O&M manual quantity, warranty period, or warranty start event.
 - Manufacturer, model, part number, quantity, voltage, amperage, horsepower, flow, pressure, dimensions, and materials are equipment fields or Part 2 clauses. Do not return them as fillIns unless the page explicitly identifies a matching template placeholder.
 
-Every returned equipment item, fill-in, and clause must include a short exact evidence phrase copied from the supplied source page. Omit any finding that cannot cite visible or supplied source wording; never use a generic evidence label. Do not extract "clean filter monthly", troubleshooting symptom/cause tables, generic safety warnings, contact information, page navigation, parts-order instructions, or repeated marketing prose. A page with only those items must return empty arrays. The Chicago Canal reference teaches structure and placement only; never copy its facts into an unrelated source. Return only JSON matching the schema.`;
+Every returned equipment item, fill-in, and clause must include a short exact evidence phrase copied from the supplied source page. Omit any finding that cannot cite visible or supplied source wording; never use a generic evidence label. Do not extract "clean filter monthly", troubleshooting symptom/cause tables, generic safety warnings, contact information, page navigation, parts-order instructions, or repeated marketing prose. A page with only those items must return empty arrays. Do not repeat a finding already stated elsewhere on the same page. Consolidate related technical facts into one equipment record or concise clause instead of creating many near-duplicates. Per page, return at most 8 equipment records, 5 fill-ins, and 10 clauses; choose only the strongest, most project-relevant findings when more candidates exist. The Chicago Canal reference teaches structure and placement only; never copy its facts into an unrelated source. Return only JSON matching the schema.`;
   const activeRequestControllers = new Set();
   let cancelRequested = false;
 
@@ -200,13 +217,13 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     const images = units.map(unit => unit.imageBase64).filter(Boolean);
     if (images.length) message.images = images;
     const messages = [{ role: "system", content: getConfiguredSystemPrompt() }, message];
-    const numCtx = images.length ? 8192 : 16384;
-    const maxTokens = images.length ? 2048 : 6144;
+    const numCtx = images.length > 1 ? 12288 : images.length ? 8192 : 16384;
+    const maxTokens = images.length > 1 ? Math.min(4096, 1536 + images.length * 768) : images.length ? 2048 : 6144;
     const timeoutMs = images.length ? 90000 : 0;
     let response = await requestAnalysis({ messages, format: BATCH_SCHEMA, numCtx, maxTokens }, timeoutMs);
     let parsed = parseStructuredContent(response.content);
     const hasEveryPage = value => Array.isArray(value?.pages) && units.every(unit => value.pages.some(page => page.sourcePage === unit.sourcePage));
-    if (!hasEveryPage(parsed)) {
+    if (!hasEveryPage(parsed) && units.length <= 3) {
       emitAnalysisMessage(`The batch response omitted one or more pages. Retrying the batch with exact page labels.`);
       response = await requestAnalysis({
         messages: [...messages, { role: "user", content: `Return one complete JSON object only. Its pages array must contain exactly these labels: ${units.map(unit => unit.sourcePage).join(", ")}. Include equipment, fillIns, and clauses arrays for every page, even when empty.` }],
@@ -229,6 +246,24 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
         user: response.user
       };
     });
+  }
+
+  async function analyzeEquipmentDetails({ text, imageBase64, sourceName, sourcePage, equipmentNames = [] }) {
+    cancelRequested = false;
+    const names = Array.from(new Set(equipmentNames.map(value => String(value || "").trim()).filter(Boolean))).slice(0, 12);
+    if (!names.length) return { equipmentDetails: [] };
+    const prompt = `Perform a targeted detailed-equipment pass for only these already-detected items: ${names.join("; ")}. Extract every explicitly supported manufacturer, model, part number, quantity, voltage, phase, amperage, horsepower, flow, pressure, dimension, material, control, included component, installation requirement, performance requirement, and warranty fact. Do not create new equipment names. Never infer missing facts. Consolidate facts for each equipment item into one result. Evidence must be a short exact phrase from this page. Return an empty string or empty array for every unsupported field.\n\nSource: ${sourceName}\nLocation: ${sourcePage}${text ? `\n\nSearchable source text:\n${String(text).slice(0, 16000)}` : ""}`;
+    const message = { role: "user", content: prompt };
+    if (imageBase64) message.images = [imageBase64];
+    const response = await requestAnalysis({
+      messages: [{ role: "system", content: "You are a precise engineering equipment-data extractor. Use only the supplied page, never infer missing values, and return only JSON matching the schema." }, message],
+      format: EQUIPMENT_DETAIL_SCHEMA,
+      numCtx: imageBase64 ? 8192 : 12288,
+      maxTokens: 3072
+    }, imageBase64 ? 90000 : 60000);
+    const parsed = parseStructuredContent(response.content);
+    if (!Array.isArray(parsed?.equipmentDetails)) throw new Error(`Detailed equipment extraction did not return usable structured data for ${sourcePage}.`);
+    return { ...parsed, model: response.model, user: response.user };
   }
 
   async function improveSpecificationPart({ part = 1, text, project = {}, instruction = "" }) {
@@ -265,5 +300,5 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     emitAnalysisMessage("Stop requested. Canceling the active Local AI page safely.");
   }
 
-  window.SpecificationLocalAI = { status, analyze, analyzeBatch, improveSpecificationPart, cancel, model: "qwen3-vl:8b-instruct" };
+  window.SpecificationLocalAI = { status, analyze, analyzeBatch, analyzeEquipmentDetails, improveSpecificationPart, cancel, model: "qwen3-vl:8b-instruct" };
 })();

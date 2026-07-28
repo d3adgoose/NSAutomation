@@ -12,14 +12,14 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=20260727-compact-confidence-pills" />
+  <link rel="stylesheet" href="style.css?v=20260728-possible-findings" />
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js?v=3.11.174";</script>
 </head>
 <body>
   <div class="hamburger-container">
@@ -30,8 +30,8 @@
       <a href="parts-library.html">Parts Library</a>
       <a href="converter.html">Converter</a>
       <a href="submittal.html">Submittal</a>
-      <a href="om.html">O&amp;M Manuals</a>
-      <a href="specification.html">Spec Automation</a>
+      <a href="om.html">O&amp;M</a>
+      <a href="specification.html">Spec</a>
     </nav>
   </div>
 
@@ -219,6 +219,22 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
       <button data-spec-tab="review">4. Review &amp; Export</button>
     </nav>
 
+    <div id="specAiProgressGlobalSlot">
+      <div id="specAiProgress" class="packet-build-progress spec-ai-progress hidden" aria-live="polite">
+        <div class="packet-build-current">
+          <div id="specSourceStatus" class="spec-load-status" role="status">Waiting for source files.</div>
+          <div class="spec-ai-progress-controls">
+            <strong id="specAiElapsed" class="packet-build-elapsed">0:00</strong>
+            <button id="specAiCancelButton" type="button" class="delete-btn hidden" onclick="cancelSpecLocalAiAnalysis()">Cancel Analysis</button>
+          </div>
+        </div>
+        <details class="packet-build-messages">
+          <summary id="specAiMessagesSummary">Show messages</summary>
+          <ol id="specAiMessageHistory"></ol>
+        </details>
+      </div>
+    </div>
+
     <section id="specTab-project" class="card spec-tab-panel">
       <h2>Project and Specification Sections</h2>
       <p class="converter-muted">Part 1 starts with the built-in reusable template. Parts 2 and 3 hold project-specific clauses copied from reviewed source documents. All three sections are included in the final PDF.</p>
@@ -279,16 +295,7 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
         <span>Choose PDF, Word, or Text files</span>
         <input id="specDocumentInput" type="file" accept=".pdf,.docx,.txt" multiple hidden />
       </label>
-      <div id="specAiProgress" class="packet-build-progress spec-ai-progress" aria-live="polite">
-        <div class="packet-build-current">
-          <div id="specSourceStatus" class="spec-load-status" role="status">Waiting for source files.</div>
-          <strong id="specAiElapsed" class="packet-build-elapsed">0:00</strong>
-        </div>
-        <details class="packet-build-messages">
-          <summary id="specAiMessagesSummary">Show messages</summary>
-          <ol id="specAiMessageHistory"></ol>
-        </details>
-      </div>
+      <div id="specAiProgressSourceSlot"></div>
       <div id="specDocumentList" class="spec-document-list"></div>
     </section>
 
@@ -377,11 +384,11 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
 
   <script src="common.js"></script>
   <script src="supabaseClient.js"></script>
-  <script src="specification-ai.js?v=20260727-exact-source-evidence"></script>
+  <script src="specification-ai.js?v=20260728-detailed-equipment-pass"></script>
   <script src="specification-utils.js?v=20260724-refactor"></script>
   <script src="specification-company-library.js?v=20260727-company-knowledge-title-prefill"></script>
-  <script src="specification.js?v=20260727-complete-sort-options"></script>
+  <script src="specification.js?v=20260728-same-tab-navigation"></script>
   <script src="global-auth.js?v=20260722-database-login-style"></script>
-  <script src="navigation.js?v=20260720-spec-automation"></script>
+  <script src="navigation.js?v=20260728-spec-status-done"></script>
 </body>
 </html>

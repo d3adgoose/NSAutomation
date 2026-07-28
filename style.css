@@ -422,8 +422,15 @@ button:hover {
 .spec-load-status.is-loading { background: #fff5dc; color: #76520f; }
 .spec-load-status.is-complete { background: #e8f6ed; color: #17623a; }
 .spec-load-status.is-error { background: #fff0ef; color: #8d251e; }
-.spec-ai-progress { margin-top: 12px; }
+.spec-ai-progress { margin: 12px 0; }
 .spec-ai-progress .spec-load-status { flex: 1 1 auto; margin-top: 0; }
+.spec-ai-progress.is-complete { border-color: #78b88f; background: #eff9f2; box-shadow: inset 4px 0 0 #24834c; }
+.spec-ai-progress.is-complete .packet-build-messages summary,
+.spec-ai-progress.is-complete .packet-build-elapsed { color: #17623a; }
+.spec-ai-progress.is-error { border-color: #d99a94; background: #fff7f6; box-shadow: inset 4px 0 0 #c8392b; }
+.spec-ai-progress-controls { display: flex; align-items: center; gap: 10px; }
+.spec-ai-progress-controls .delete-btn { white-space: nowrap; }
+#specAiMessageHistory li.is-error { margin-block: 3px; padding: 6px 8px; border-left: 3px solid #c8392b; border-radius: 4px; background: #fff0ef; color: #7d261f; }
 .spec-direct-fill-panel { margin: 4px 0 18px; padding: 16px; border: 1px solid #bdd3e3; border-radius: 9px; background: #f5f9fc; }
 .spec-direct-fill-panel h3 { margin: 0 0 5px; color: #173e61; }
 .spec-extracted-fill-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
@@ -446,6 +453,10 @@ button:hover {
 .spec-confidence-badge.confidence-high { border-color: #9acbab; background: #e8f6ed; color: #17623a; }
 .spec-confidence-badge.confidence-medium { border-color: #9fc4de; background: #edf6fc; color: #174f76; }
 .spec-confidence-badge.confidence-low { border-color: #e2c277; background: #fff5d9; color: #76520f; }
+.spec-possible-findings { grid-column: 1 / -1; margin-top: 10px; padding: 10px 12px; border: 1px solid #e2c277; border-radius: 8px; background: #fffaf0; }
+.spec-possible-findings > summary { cursor: pointer; color: #76520f; font-weight: 750; }
+.spec-possible-findings > summary span { margin-left: 6px; color: #846d43; font-size: 11px; font-weight: 600; }
+.spec-possible-findings-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
 .spec-modal-content:has(.spec-source-page-preview) { display: flex; flex-direction: column; width: min(1400px, 96vw); height: min(900px, 94vh); max-height: 94vh; overflow: hidden; }
 .spec-modal-content:has(.spec-source-page-preview) #specModalBody { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .spec-modal-content:has(.spec-source-page-preview) #specModalActions { flex: 0 0 auto; margin-top: 14px; padding-top: 12px; border-top: 1px solid #d5e0ea; background: #fff; }
@@ -947,6 +958,10 @@ button:disabled {
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
 }
+.side-menu a:has(.spec-menu-analysis-status) { display: flex; align-items: center; gap: 10px; }
+.spec-menu-analysis-status { margin-left: auto; padding: 3px 7px; border-radius: 999px; background: #e7edf2; color: #526579; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.spec-menu-analysis-status.is-running { background: #fff0c9; color: #76520f; }
+.spec-menu-analysis-status.is-done { background: #dff3e6; color: #17623a; }
 
 .attach-pdf-btn {
   display: inline-block;

@@ -24,10 +24,18 @@ let specLocalAiStartedAt = 0;
 let specLocalAiTimer = null;
 let specLocalAiLastMessage = "";
 let specLocalAiActiveSource = "";
+let specLocalAiMessageCount = 0;
+let specLocalAiErrorCount = 0;
+let specLocalAiUnresolvedCount = 0;
+const SPEC_LOCAL_AI_MENU_STATUS_KEY = "ns-spec-analysis-status-v1";
+let specLocalAiMenuLastSync = 0;
+let specAnalysisMenuActivity = "ai";
 let specBuiltInAnalysisTimer = null;
 const specProjectFieldTimers = new Map();
 const SPEC_AUTOSAVE_DELAY = 900;
 const SPEC_OPTIONAL_EQUIPMENT_WORKFLOW_ENABLED = false;
+const SPEC_AI_TEXT_BATCH_SIZE = 6;
+const SPEC_AI_VISUAL_BATCH_SIZE = 3;
 
 function getPart1StarterTemplate() {
   return `1.1 SUMMARY
@@ -490,11 +498,11 @@ function bindSpecificationUI() {
   document.getElementById("specComponentStatusFilter")?.addEventListener("change", renderSpecComponents);
   document.getElementById("specComponentSort")?.addEventListener("change", renderSpecComponents);
   const input = document.getElementById("specDocumentInput");
-  input?.addEventListener("change", event => addSpecificationDocuments(event.target.files));
+  input?.addEventListener("change", event => addSpecificationDocuments(event.target.files, "file picker"));
   const drop = document.getElementById("specDocumentDrop");
   drop?.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("dragover"); });
   drop?.addEventListener("dragleave", () => drop.classList.remove("dragover"));
-  drop?.addEventListener("drop", event => { event.preventDefault(); drop.classList.remove("dragover"); addSpecificationDocuments(event.dataTransfer.files); });
+  drop?.addEventListener("drop", event => { event.preventDefault(); drop.classList.remove("dragover"); addSpecificationDocuments(event.dataTransfer.files, "drag and drop"); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveSpecificationProject(false);
   });
@@ -502,6 +510,9 @@ function bindSpecificationUI() {
 }
 
 function showSpecTab(tab) {
+  const progress = document.getElementById("specAiProgress");
+  const progressSlot = document.getElementById(tab === "sources" ? "specAiProgressSourceSlot" : "specAiProgressGlobalSlot");
+  if (progress && progressSlot && progress.parentElement !== progressSlot) progressSlot.appendChild(progress);
   document.querySelectorAll("[data-spec-tab]").forEach(button => button.classList.toggle("active", button.dataset.specTab === tab));
   document.querySelectorAll(".spec-tab-panel").forEach(panel => panel.classList.toggle("hidden", panel.id !== `specTab-${tab}`));
   document.getElementById("specReviewLocalSaves")?.classList.toggle("hidden", tab !== "review");
@@ -1305,26 +1316,92 @@ function openSpecAiConfigurationLegacyPlaceholder() {
 // Source documents and extraction
 // ---------------------------------------------------------------------------
 
-async function addSpecificationDocuments(fileList) {
+function normalizeSpecSourceFileName(value = "") {
+  return String(value).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function promptDuplicateSpecSourceAction(fileName, existingDocument) {
+  return new Promise(resolve => {
+    const modal = document.getElementById("specModal");
+    document.getElementById("specModalTitle").textContent = "Duplicate Source File";
+    document.getElementById("specModalBody").innerHTML = `<p class="spec-confirm-copy">A source named <strong>${escapeSpec(fileName)}</strong> already exists in this project. Replace it, keep both copies, or skip this file?</p><p class="converter-muted">Replacing keeps accepted and engineer-approved work, removes unreviewed results from the older copy, and analyzes the replacement again.</p>`;
+    const actions = document.getElementById("specModalActions");
+    actions.replaceChildren();
+    [
+      { label: "Replace Existing", value: "replace", className: "" },
+      { label: "Keep Both", value: "keep", className: "secondary" },
+      { label: "Skip", value: "skip", className: "delete-btn" }
+    ].forEach(option => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = option.label;
+      button.className = option.className;
+      button.onclick = () => { closeSpecModal(); resolve(option.value); };
+      actions.appendChild(button);
+    });
+    modal.classList.remove("hidden");
+  });
+}
+
+function prepareSpecSourceForReplacement(documentId) {
+  specState.sourceSuggestions = (specState.sourceSuggestions || []).filter(item => item.documentId !== documentId || item.status === "accepted");
+  specState.fillInSuggestions = (specState.fillInSuggestions || []).filter(item => item.documentId !== documentId || item.status === "accepted");
+  specState.components = (specState.components || []).filter(item => item.sourceDocumentId !== documentId || item.verificationStatus === "Engineer Approved");
+  specState.aiAudit = (specState.aiAudit || []).filter(item => item.documentId !== documentId);
+}
+
+async function addSpecificationDocuments(fileList, sourceMethod = "file picker") {
   const selectedFiles = Array.from(fileList || []);
   const files = selectedFiles.filter(file => /pdf|word|text/i.test(file.type) || /\.(pdf|docx|txt)$/i.test(file.name));
-  if (!files.length) return setSpecSourceStatus("No supported files were selected. Choose PDF, Word, or Text files.", "is-error");
-  setSpecSourceStatus(`Loading ${files.length} source file${files.length === 1 ? "" : "s"}...`, "is-loading");
+  startSpecLocalAiTimer(`Received ${selectedFiles.length} file${selectedFiles.length === 1 ? "" : "s"} by ${sourceMethod}.`, "reanalyze");
+  if (!files.length) {
+    setSpecSourceStatus("No supported files were selected. Choose PDF, Word, or Text files.", "is-error");
+    stopSpecLocalAiTimer();
+    return;
+  }
+  const automaticAnalysisLabel = sourceMethod === "drag and drop"
+    ? `Analyzing ${files.length} dropped source file${files.length === 1 ? "" : "s"} automatically...`
+    : `Analyzing ${files.length} selected source file${files.length === 1 ? "" : "s"} automatically...`;
+  setSpecSourceStatus(automaticAnalysisLabel, "is-loading");
   let pdfCount = 0;
   let suggestionCount = 0;
   let fillInCount = 0;
   let tocProductCount = 0;
   let equipmentRecordCount = 0;
+  let duplicateSkippedCount = 0;
   for (const file of files) {
-    const id = crypto.randomUUID();
+    recordSpecLocalAiMessage(`${file.name} was added by ${sourceMethod}. Preparing it for automatic built-in analysis (${formatSpecBytes(file.size)}).`);
+    const existingDocument = (specState.documents || []).find(item => normalizeSpecSourceFileName(item.name) === normalizeSpecSourceFileName(file.name));
+    const duplicateAction = existingDocument ? await promptDuplicateSpecSourceAction(file.name, existingDocument) : "keep";
+    if (duplicateAction === "skip") {
+      duplicateSkippedCount += 1;
+      recordSpecLocalAiMessage(`Skipped duplicate source ${file.name} by user choice.`);
+      continue;
+    }
+    const replacing = duplicateAction === "replace";
+    const id = replacing ? existingDocument.id : crypto.randomUUID();
+    if (replacing) {
+      prepareSpecSourceForReplacement(id);
+      recordSpecLocalAiMessage(`Replacing the existing ${file.name}. Accepted and engineer-approved work was preserved; unreviewed results and the old AI checkpoint were cleared.`);
+    } else if (existingDocument) {
+      recordSpecLocalAiMessage(`Keeping both copies of ${file.name} by user choice.`);
+    }
     specDocumentFiles.set(id, file);
     let storedLocally = true;
-    try { await saveSpecificationSourceFile(id, file); }
-    catch (error) { storedLocally = false; console.warn(`Could not persist ${file.name}:`, error); }
+    try {
+      await saveSpecificationSourceFile(id, file);
+      recordSpecLocalAiMessage(`${file.name} was saved locally in this browser.`);
+    } catch (error) {
+      storedLocally = false;
+      recordSpecLocalAiMessage(`${file.name} could not be saved for future sessions: ${error.message || error}. It remains available until this tab closes.`);
+      console.warn(`Could not persist ${file.name}:`, error);
+    }
     const isReadableDocument = /\.(pdf|docx|txt)$/i.test(file.name);
-    const documentRecord = { id, name: file.name, size: file.size, type: file.type || "file", addedAt: new Date().toISOString(), storage: storedLocally ? "Saved locally in this browser" : "Available until this tab closes", importSummary: "Reading source text..." };
-    specState.documents.push(documentRecord);
+    const documentRecord = replacing ? existingDocument : { id };
+    Object.assign(documentRecord, { id, name: file.name, size: file.size, type: file.type || "file", addedAt: new Date().toISOString(), storage: storedLocally ? "Saved locally in this browser" : "Available until this tab closes", importSummary: "Reading source text..." });
+    if (!replacing) specState.documents.push(documentRecord);
     if (isReadableDocument) {
+      recordSpecLocalAiMessage(`Running regular built-in extraction on ${file.name}.`);
       const result = await extractSpecSourceSuggestions(file, id);
       const count = Math.max(0, result?.suggestions || 0);
       const tocCount = Math.max(0, result?.tocProducts || 0);
@@ -1339,6 +1416,9 @@ async function addSpecificationDocuments(fileList) {
       if (extractedFillCount) summaryParts.push(`${extractedFillCount} template value${extractedFillCount === 1 ? "" : "s"} extracted`);
       if (extractedEquipmentCount) summaryParts.push(`${extractedEquipmentCount} equipment record${extractedEquipmentCount === 1 ? "" : "s"} extracted`);
       documentRecord.importSummary = summaryParts.join("; ") || "No searchable specification text found";
+      recordSpecLocalAiMessage(result?.error
+        ? `Regular extraction failed for ${file.name}: ${result.error}`
+        : `Regular extraction finished for ${file.name}: ${count} source suggestion(s), ${extractedFillCount} template value(s), and ${extractedEquipmentCount} equipment record(s).`);
       if (/\.pdf$/i.test(file.name)) pdfCount += 1;
     }
   }
@@ -1350,7 +1430,9 @@ async function addSpecificationDocuments(fileList) {
   if (fillInCount) messages.push(`${fillInCount} template value${fillInCount === 1 ? "" : "s"} ready to apply`);
   if (equipmentRecordCount) messages.push(`${equipmentRecordCount} structured equipment record${equipmentRecordCount === 1 ? "" : "s"} ready to review`);
   if (skipped) messages.push(`${skipped} unsupported file${skipped === 1 ? "" : "s"} skipped`);
-  setSpecSourceStatus(`${messages.join("; ")}. Review suggestions before anything is added to Parts 2 or 3.`, "is-complete");
+  if (duplicateSkippedCount) messages.push(`${duplicateSkippedCount} duplicate file${duplicateSkippedCount === 1 ? "" : "s"} skipped by choice`);
+  setSpecSourceStatus(`Automatic ${sourceMethod} analysis finished. ${messages.length ? messages.join("; ") : "No files were added"}. Review suggestions before anything is added to Parts 2 or 3.`, "is-complete");
+  stopSpecLocalAiTimer();
   renderSpecSourceSuggestions();
   renderExtractedSpecFillIns();
 }
@@ -1379,7 +1461,7 @@ async function extractSpecSourceSuggestions(file, documentId) {
     const pages = [];
     if (/\.pdf$/i.test(file.name)) {
       if (!window.pdfjsLib) throw new Error("The PDF reader is unavailable.");
-      const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+      const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer(), useSystemFonts: true, disableFontFace: false, verbosity: pdfjsLib.VerbosityLevel?.ERRORS ?? 0 }).promise;
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
         setSpecSourceStatus(`Reading ${file.name}, page ${pageNumber} of ${pdf.numPages}...`, "is-loading");
         const page = await pdf.getPage(pageNumber);
@@ -2183,11 +2265,24 @@ function getSpecConfidenceTieredItems(items) {
   const ordered = items.map((item, index) => ({ item, index })).sort((a, b) =>
     getSpecFindingConfidenceScore(b.item) - getSpecFindingConfidenceScore(a.item) || a.index - b.index
   ).map(entry => entry.item);
-  return { primary: ordered, possible: [], ordered };
+  const possible = ordered.filter(item =>
+    getSpecFindingConfidenceScore(item) < 0.65 &&
+    item.status !== "accepted" &&
+    item.verificationStatus !== "Engineer Approved");
+  const possibleIds = new Set(possible.map(item => item.id));
+  const primary = ordered.filter(item => !possibleIds.has(item.id));
+  return { primary, possible, ordered: [...primary, ...possible] };
 }
 
 function renderSpecConfidenceTiers(items, renderCard, preserveOrder = false) {
-  return (preserveOrder ? items : getSpecConfidenceTieredItems(items).ordered).map(renderCard).join("");
+  const ordered = preserveOrder ? items : getSpecConfidenceTieredItems(items).ordered;
+  const possible = ordered.filter(item =>
+    getSpecFindingConfidenceScore(item) < 0.65 &&
+    item.status !== "accepted" &&
+    item.verificationStatus !== "Engineer Approved");
+  const possibleIds = new Set(possible.map(item => item.id));
+  const primary = ordered.filter(item => !possibleIds.has(item.id));
+  return `${primary.map(renderCard).join("")}${possible.length ? `<details class="spec-possible-findings"><summary>Possible Findings <span>${possible.length} low-confidence item${possible.length === 1 ? "" : "s"}</span></summary><div class="spec-possible-findings-list">${possible.map(renderCard).join("")}</div></details>` : ""}`;
 }
 
 async function openSpecFindingSourcePage(kind, id) {
@@ -2215,7 +2310,7 @@ async function openSpecFindingSourcePage(kind, id) {
       preview.innerHTML = `<div class="spec-source-text-preview"><strong>Exact extracted passage</strong><p>${escapeSpec(evidence)}</p><small>A rendered page preview is available for PDF sources. This source is ${escapeSpec(file.name)}.</small></div>`;
       return;
     }
-    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer(), useSystemFonts: true, disableFontFace: false, verbosity: pdfjsLib.VerbosityLevel?.ERRORS ?? 0 }).promise;
     if (pageNumber > pdf.numPages) throw new Error(`Page ${pageNumber} is outside this ${pdf.numPages}-page PDF.`);
     const page = await pdf.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1.35 });
@@ -2282,7 +2377,9 @@ function renderSpecSourceSuggestions() {
     if (sortMode === "page-descending") return pageB - pageA || String(a.sourceDocument || "").localeCompare(String(b.sourceDocument || ""));
     return left.originalIndex - right.originalIndex;
   }).map(entry => entry.item);
-  const renderedSuggestions = displayedSuggestions;
+  const sourcePossible = displayedSuggestions.filter(item => getSpecFindingConfidenceScore(item) < 0.65 && item.status !== "accepted");
+  const sourcePossibleIds = new Set(sourcePossible.map(item => item.id));
+  const renderedSuggestions = [...displayedSuggestions.filter(item => !sourcePossibleIds.has(item.id)), ...sourcePossible];
   summary.textContent = `${pending} awaiting review · ${accepted} accepted`;
   summary.className = `spec-load-status ${pending ? "is-loading" : "is-complete"}`;
   const aiSuggestionCount = suggestions.filter(item => item.extractionKind === "Local Qwen3-VL engineering extraction").length;
@@ -2591,7 +2688,8 @@ function renderExtractedSpecFillIns() {
   if (!list || !summary) return;
   reconcileAcceptedSpecFillAlternatives();
   const candidates = (specState.fillInSuggestions || []).filter(item => item.status !== "rejected" && hasTraceableSpecEvidence(item));
-  const renderedCandidates = getSpecConfidenceTieredItems(candidates).ordered;
+  const fillTiers = getSpecConfidenceTieredItems(candidates);
+  const renderedCandidates = [...fillTiers.primary, ...fillTiers.possible];
   const pending = candidates.filter(item => item.status === "pending").length;
   const applied = candidates.filter(item => item.status === "accepted").length;
   summary.textContent = candidates.length ? `${pending} awaiting review · ${applied} applied to the template` : "No template values extracted yet.";
@@ -3108,7 +3206,49 @@ function setSpecSourceStatus(message, state = "") {
   if (!status) return;
   status.textContent = message;
   status.className = `spec-load-status${state ? ` ${state}` : ""}`;
+  const progress = document.getElementById("specAiProgress");
+  if (progress) {
+    progress.classList.remove("hidden");
+    progress.classList.toggle("is-loading", state === "is-loading");
+    progress.classList.toggle("is-complete", state === "is-complete");
+    progress.classList.toggle("is-error", state === "is-error");
+  }
+  document.getElementById("specAiCancelButton")?.classList.toggle("hidden", state !== "is-loading");
+  if (state === "is-complete" || state === "is-error") {
+    saveSpecAnalysisMenuStatus("done", message);
+  }
   recordSpecLocalAiMessage(message);
+}
+
+function saveSpecAnalysisMenuStatus(state, message = "") {
+  try {
+    const now = Date.now();
+    if (state === "running" && now - specLocalAiMenuLastSync < 900) return;
+    specLocalAiMenuLastSync = now;
+    const previous = JSON.parse(localStorage.getItem(SPEC_LOCAL_AI_MENU_STATUS_KEY) || "{}");
+    localStorage.setItem(SPEC_LOCAL_AI_MENU_STATUS_KEY, JSON.stringify({
+      state,
+      source: specLocalAiActiveSource || previous.source || "",
+      activity: specAnalysisMenuActivity || previous.activity || "ai",
+      startedAt: state === "running" ? Number(previous.startedAt) || Date.now() : Number(previous.startedAt) || Date.now(),
+      updatedAt: now,
+      finishedAt: state === "done" ? now : 0,
+      message
+    }));
+  } catch (error) {
+    console.warn("Could not update the shared Specification analysis status:", error);
+  }
+}
+
+function cancelSpecLocalAiAnalysis() {
+  if (!specLocalAiStartedAt || !window.SpecificationLocalAI?.cancel) return;
+  SpecificationLocalAI.cancel();
+  const button = document.getElementById("specAiCancelButton");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Stopping...";
+  }
+  recordSpecLocalAiMessage("Cancel requested by user. Finishing the current interruption and saving results extracted so far.");
 }
 
 function formatSpecLocalAiElapsed(milliseconds) {
@@ -3119,10 +3259,11 @@ function formatSpecLocalAiElapsed(milliseconds) {
   return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
 }
 
-function updateSpecLocalAiElapsed() {
+function updateSpecLocalAiElapsed(updateSharedStatus = true) {
   if (!specLocalAiStartedAt) return;
   const elapsed = document.getElementById("specAiElapsed");
   if (elapsed) elapsed.textContent = formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt);
+  if (updateSharedStatus) saveSpecAnalysisMenuStatus("running", document.getElementById("specSourceStatus")?.textContent || "");
 }
 
 function recordSpecLocalAiMessage(message) {
@@ -3133,36 +3274,91 @@ function recordSpecLocalAiMessage(message) {
   const item = document.createElement("li");
   const time = document.createElement("time");
   const text = document.createElement("span");
+  const isError = /\b(?:error|failed|failure|timed out|timeout|unresolved|incomplete|omitted|malformed|stopped responding|could not|difficult to read)\b/i.test(message);
   time.textContent = formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt);
   text.textContent = message;
+  item.className = isError ? "is-error" : "";
   item.append(time, text);
   history.appendChild(item);
-  while (history.children.length > 80) history.firstElementChild?.remove();
+  specLocalAiMessageCount += 1;
+  if (isError) specLocalAiErrorCount += 1;
+  updateSpecLocalAiMessageSummary();
   history.scrollTop = history.scrollHeight;
 }
 
-function startSpecLocalAiTimer(message) {
+function updateSpecLocalAiMessageSummary() {
+  const summary = document.getElementById("specAiMessagesSummary");
+  if (!summary) return;
+  const status = document.getElementById("specSourceStatus");
+  const runState = status?.classList.contains("is-loading")
+    ? "analysis in progress"
+    : status?.classList.contains("is-error")
+      ? specLocalAiUnresolvedCount ? `${specLocalAiUnresolvedCount} unresolved page${specLocalAiUnresolvedCount === 1 ? "" : "s"}` : "finished with an error"
+      : status?.classList.contains("is-complete")
+        ? specLocalAiUnresolvedCount ? `${specLocalAiUnresolvedCount} unresolved page${specLocalAiUnresolvedCount === 1 ? "" : "s"}` : "complete — no unresolved pages"
+        : "ready";
+  summary.textContent = `Show all ${specLocalAiMessageCount} activity message${specLocalAiMessageCount === 1 ? "" : "s"} — ${runState}`;
+}
+
+function startSpecLocalAiTimer(message, activity = "ai") {
   specLocalAiStartedAt = performance.now();
-  const messagesSummary = document.getElementById("specAiMessagesSummary");
-  if (messagesSummary) messagesSummary.textContent = "Show Local AI messages";
+  specAnalysisMenuActivity = activity;
   specLocalAiLastMessage = "";
+  specLocalAiMessageCount = 0;
+  specLocalAiErrorCount = 0;
+  specLocalAiUnresolvedCount = 0;
+  specLocalAiMenuLastSync = 0;
+  localStorage.removeItem(SPEC_LOCAL_AI_MENU_STATUS_KEY);
   document.getElementById("specAiMessageHistory")?.replaceChildren();
+  updateSpecLocalAiMessageSummary();
   const elapsed = document.getElementById("specAiElapsed");
   if (elapsed) elapsed.textContent = "0:00";
   clearInterval(specLocalAiTimer);
   specLocalAiTimer = setInterval(updateSpecLocalAiElapsed, 250);
+  const cancelButton = document.getElementById("specAiCancelButton");
+  if (cancelButton) {
+    cancelButton.disabled = false;
+    cancelButton.textContent = "Cancel Analysis";
+  }
   setSpecSourceStatus(message, "is-loading");
+  saveSpecAnalysisMenuStatus("running", message);
 }
 
 function stopSpecLocalAiTimer() {
-  updateSpecLocalAiElapsed();
+  updateSpecLocalAiElapsed(false);
   clearInterval(specLocalAiTimer);
   specLocalAiTimer = null;
+  const finalMessage = document.getElementById("specSourceStatus")?.textContent || "Analysis finished.";
+  saveSpecAnalysisMenuStatus("done", finalMessage);
   specLocalAiStartedAt = 0;
   specLocalAiActiveSource = "";
-  const messagesSummary = document.getElementById("specAiMessagesSummary");
-  if (messagesSummary) messagesSummary.textContent = "Show messages";
+  document.getElementById("specAiCancelButton")?.classList.add("hidden");
+  updateSpecLocalAiMessageSummary();
 }
+
+window.handleSpecNavigationDuringAnalysis = function handleSpecNavigationDuringAnalysis(destination) {
+  if (!specLocalAiStartedAt || !destination) return false;
+  const modal = document.getElementById("specModal");
+  document.getElementById("specModalTitle").textContent = "Local AI Is Still Analyzing";
+  document.getElementById("specModalBody").innerHTML = `<p class="spec-confirm-copy">Local AI must keep this Specification page open until analysis finishes. Would you like to continue working here or stop the analysis and open the selected tool in this same browser tab?</p><p class="converter-muted">Results extracted before stopping are saved for Source Review.</p>`;
+  const actions = document.getElementById("specModalActions");
+  actions.replaceChildren();
+  const continueButton = document.createElement("button");
+  continueButton.textContent = "Continue Analysis Here";
+  continueButton.onclick = () => {
+    closeSpecModal();
+  };
+  const stopButton = document.createElement("button");
+  stopButton.className = "delete-btn";
+  stopButton.textContent = "Stop Analysis and Leave";
+  stopButton.onclick = () => {
+    SpecificationLocalAI.cancel();
+    window.location.href = destination;
+  };
+  actions.append(continueButton, stopButton);
+  modal.classList.remove("hidden");
+  return true;
+};
 
 function startSpecBuiltInAnalysisTimer() {
   const startedAt = performance.now();
@@ -3194,11 +3390,16 @@ function renderSpecDocuments() {
     const aiButton = row.querySelector('[onclick^="analyzeSpecDocumentWithLocalAI"]');
     const analyzeButton = row.querySelector('[onclick^="reanalyzeSpecDocument"]');
     if (aiButton) { aiButton.classList.add("spec-ai-source-button"); aiButton.innerHTML = '<span aria-hidden="true">✦</span><span>Analyze with AI</span>'; aiButton.title = "Visual review with Local AI"; }
-    if (analyzeButton) { analyzeButton.textContent = "Analyze"; analyzeButton.title = "Fast built-in text extraction"; }
+    if (analyzeButton) {
+      analyzeButton.title = "Run the fast built-in extraction again";
+    }
   });
 }
 
 async function analyzeSpecDocumentWithLocalAI(id) {
+  if (specLocalAiStartedAt) {
+    return showSpecMessage("Analysis Already Running", `Local AI is still analyzing ${specLocalAiActiveSource || "another source"}. You can keep working in Project, Source Review, or Review & Export, or use Cancel Analysis to stop it.`);
+  }
   const record = specState.documents.find(item => item.id === id);
   if (!record || !window.SpecificationLocalAI) return showSpecMessage("Local AI Unavailable", "The local AI connector did not load.");
   let file = specDocumentFiles.get(id) || await getSpecificationSourceFile(id).catch(() => null);
@@ -3211,40 +3412,62 @@ async function analyzeSpecDocumentWithLocalAI(id) {
     const status = await SpecificationLocalAI.status();
     if (!status.ready) return showSpecMessage("Model Not Installed", `Install ${status.model} in Ollama before analyzing this source.`);
   } catch (error) { return showSpecMessage("Local AI Not Ready", error.message); }
-  const confirmed = await showSpecConfirm("Analyze Confidential Source Locally", `${file.name} will be sent only to the N/S local AI service after your database login is verified. Extracted results will require review.`, "Analyze Locally");
-  if (!confirmed) return;
+  const analysisChoice = await promptSpecLocalAiAnalysisMode(file.name);
+  if (!analysisChoice.confirmed) return;
+  const focusedAnalysis = analysisChoice.focused;
   specLocalAiActiveSource = file.name;
-  startSpecLocalAiTimer(`Preparing ${file.name}...`);
+  startSpecLocalAiTimer(`Preparing ${file.name}...`, "ai");
   try {
     const source = await createSpecAiAnalysisSource(file);
     const completedPages = new Set((specState.aiAudit || [])
-      .filter(entry => ["Local source analyzed", "Local source skipped"].includes(entry.action) && entry.documentId === id && entry.sourcePage)
+      .filter(entry => entry.documentId === id && entry.sourcePage && (
+        entry.action === "Local source analyzed" ||
+        (entry.action === "Local source skipped" && (focusedAnalysis || entry.outcome !== "low-value page screened by focused analysis"))
+      ))
       .map(entry => entry.sourcePage));
-    recordSpecLocalAiMessage(`Opened ${source.total} page(s). ${completedPages.size} page(s) were restored from the previous checkpoint.`);
+    const detailCandidateUnits = new Map();
+    const existingDetailPages = Array.from(new Set((specState.components || [])
+      .filter(item => item.sourceDocumentId === id && item.aiInvolved && !item.detailedAt && item.sourcePage)
+      .map(item => item.sourcePage))).slice(0, 24);
+    const sourceIndexes = new Map(Array.from({ length: source.total }, (_, index) => [source.pageLabel(index), index]));
+    for (const sourcePage of existingDetailPages) {
+      const sourceIndex = sourceIndexes.get(sourcePage);
+      if (Number.isInteger(sourceIndex)) detailCandidateUnits.set(sourcePage, await source.getUnit(sourceIndex));
+    }
+    recordSpecLocalAiMessage(`Opened ${source.total} page(s). ${completedPages.size} page(s) were restored from the previous checkpoint. ${focusedAnalysis ? "Focused screening is on." : "Full-page review is on."} Visual pages will be analyzed in groups of up to ${SPEC_AI_VISUAL_BATCH_SIZE}.`);
     const pendingIndexes = Array.from({ length: source.total }, (_, index) => index).filter(index => !completedPages.has(source.pageLabel(index)));
     if (!pendingIndexes.length) {
-      setSpecSourceStatus(`Local AI already finished all ${source.total} page(s) in ${file.name}.`, "is-complete");
+      const detailedCount = await runSpecDetailedEquipmentPass(Array.from(detailCandidateUnits.values()), record, file.name);
+      setSpecSourceStatus(`Local AI already finished all ${source.total} page(s) in ${file.name}.${detailedCount ? ` Detailed Equipment Pass enriched ${detailedCount} saved equipment record${detailedCount === 1 ? "" : "s"}.` : ""}`, "is-complete");
       stopSpecLocalAiTimer();
       return;
     }
     let equipmentAdded = 0, fillsAdded = 0, clausesAdded = 0, skipped = 0, timedOut = 0, cursor = 0, queuedUnit = null;
+    const deferredUnits = [];
     const seenText = new Set();
     while (cursor < pendingIndexes.length || queuedUnit) {
       const batch = [];
       let batchMode = "";
-      while ((cursor < pendingIndexes.length || queuedUnit) && batch.length < (batchMode === "text" ? 10 : 1)) {
+      while ((cursor < pendingIndexes.length || queuedUnit) && batch.length < (batchMode === "text" ? SPEC_AI_TEXT_BATCH_SIZE : SPEC_AI_VISUAL_BATCH_SIZE)) {
         const unit = queuedUnit || await source.getUnit(pendingIndexes[cursor++]);
         queuedUnit = null;
         const textKey = String(unit.text || "").toLowerCase().replace(/\s+/g, " ").trim();
         const skipReason = unit.visuallyBlank ? "blank page"
           : unit.searchableTextHandled ? "searchable text already handled by built-in extraction"
           : textKey.length > 160 && seenText.has(textKey) ? "exact duplicate page"
+          : focusedAnalysis && !unit.imageBase64 && !isLikelySpecAiEngineeringPage(unit.text) ? "low-value page screened by focused analysis"
           : "";
         if (textKey.length > 160) seenText.add(textKey);
         if (skipReason) {
           specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source skipped", provider: "built-in-text-screening", documentId: id, sourcePage: unit.sourcePage, dataSent: false, outcome: skipReason });
           completedPages.add(unit.sourcePage); skipped += 1;
-          setSpecSourceStatus(`Screening ${unit.sourcePage} | ${completedPages.size} of ${source.total} | ${unit.searchableTextHandled ? "Text already extracted" : "Skipped"}`, "is-loading");
+          const skipExplanation = {
+            "blank page": "blank or nearly blank page",
+            "searchable text already handled by built-in extraction": "searchable text was already handled by built-in extraction",
+            "exact duplicate page": "exact duplicate of an earlier page",
+            "low-value page screened by focused analysis": "focused screening found no likely specification or engineering requirements; available in Full review"
+          }[skipReason] || skipReason;
+          setSpecSourceStatus(`Screening ${unit.sourcePage} | ${completedPages.size} of ${source.total} | Skipped: ${skipExplanation}`, "is-loading");
           if (skipped % 20 === 0) saveSpecificationProject(false);
         } else {
           const unitMode = unit.imageBase64 ? "vision" : "text";
@@ -3258,28 +3481,23 @@ async function analyzeSpecDocumentWithLocalAI(id) {
       const pageRange = pageNumbers.length && pageNumbers.length === batch.length
         ? `Page${pageNumbers.length === 1 ? "" : "s"} ${pageNumbers[0]}${pageNumbers.length > 1 ? `-${pageNumbers.at(-1)}` : ""}`
         : batch.map(unit => unit.sourcePage).join(", ");
-      setSpecSourceStatus(`Analyzing ${pageRange} | ${completedPages.size} of ${source.total} complete | ${batchMode === "text" ? "Fast text batch" : "Visual page"}`, "is-loading");
+      setSpecSourceStatus(`Analyzing ${pageRange} | ${completedPages.size} of ${source.total} complete | ${batchMode === "text" ? "Fast text batch" : batch.length > 1 ? "Fast visual batch" : "Visual page"}`, "is-loading");
       let results;
       const batchStartedAt = performance.now();
       try {
         results = await SpecificationLocalAI.analyzeBatch({ units: batch, sourceName: file.name });
       } catch (batchError) {
         if (/stopped by user/i.test(batchError.message)) throw batchError;
-        if (/90-second page limit/i.test(batchError.message) && batch.every(unit => unit.imageBase64)) {
-          results = batch.map(() => ({ equipment: [], fillIns: [], clauses: [], model: SpecificationLocalAI.model, user: user.email || user.id, visualTimedOut: true }));
-          timedOut += batch.length;
-          recordSpecLocalAiMessage(`${pageRange} exceeded 90 seconds and was marked for manual review. Analysis will continue.`);
-        } else {
         if (/stopped responding|background service|fetch failed/i.test(batchError.message)) throw batchError;
-        recordSpecLocalAiMessage(`Batch response could not be used (${batchError.message}). Retrying ${batch.length === 1 ? "the page" : "each page"} individually.`);
-        results = [];
-        for (const unit of batch) results.push(await SpecificationLocalAI.analyze({ ...unit, sourceName: file.name }));
-        }
+        deferredUnits.push(...batch.map(unit => ({ unit, firstError: batchError.message })));
+        recordSpecLocalAiMessage(`${pageRange} was difficult to read (${batchError.message}). Deferred ${batch.length === 1 ? "it" : "those pages"} until the normal pass finishes.`);
+        continue;
       }
       let batchEquipment = 0, batchFills = 0, batchClauses = 0;
       batch.forEach((unit, batchIndex) => {
         const result = results[batchIndex];
         const counts = importSpecLocalAiResult(result, record, unit.sourcePage);
+        if (counts.equipment > 0) detailCandidateUnits.set(unit.sourcePage, unit);
         equipmentAdded += counts.equipment; fillsAdded += counts.fills; clausesAdded += counts.clauses;
         batchEquipment += counts.equipment; batchFills += counts.fills; batchClauses += counts.clauses;
         specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: result.visualTimedOut ? "Local visual review timed out" : "Local source analyzed", user: result.user, provider: "ollama-local", model: result.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: result.visualTimedOut ? "Manual page review required" : "Pending engineer review", batchSize: batch.length });
@@ -3289,13 +3507,38 @@ async function analyzeSpecDocumentWithLocalAI(id) {
       saveSpecificationProject(false);
       renderSpecLocalAiSavedResults();
     }
+    if (deferredUnits.length) recordSpecLocalAiMessage(`Normal pass complete. Retrying ${deferredUnits.length} difficult page(s) individually once, then continuing past any unresolved pages.`);
+    for (let index = 0; index < deferredUnits.length; index += 1) {
+      const { unit, firstError } = deferredUnits[index];
+      setSpecSourceStatus(`Recovery review ${index + 1} of ${deferredUnits.length} | ${unit.sourcePage} | Individual page`, "is-loading");
+      const retryStartedAt = performance.now();
+      try {
+        const result = await SpecificationLocalAI.analyze({ ...unit, sourceName: file.name });
+        const counts = importSpecLocalAiResult(result, record, unit.sourcePage);
+        if (counts.equipment > 0) detailCandidateUnits.set(unit.sourcePage, unit);
+        equipmentAdded += counts.equipment; fillsAdded += counts.fills; clausesAdded += counts.clauses;
+        completedPages.add(unit.sourcePage);
+        specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source analyzed", user: result.user, provider: "ollama-local", model: result.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: "Recovered after deferred individual review", batchSize: 1, recoveryAttempt: true });
+        recordSpecLocalAiMessage(`Recovered ${unit.sourcePage} individually in ${formatSpecLocalAiElapsed(performance.now() - retryStartedAt)}. Added ${counts.equipment} equipment, ${counts.fills} fill-in, and ${counts.clauses} clause suggestion(s).`);
+      } catch (retryError) {
+        if (/stopped by user/i.test(retryError.message)) throw retryError;
+        timedOut += 1;
+        specLocalAiUnresolvedCount += 1;
+        specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source unresolved", user: user.email || user.id, provider: "ollama-local", model: SpecificationLocalAI.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: "Retry later or review manually", firstError, errorStatus: retryError.message });
+        recordSpecLocalAiMessage(`${unit.sourcePage} failed its individual recovery attempt and was skipped for this run. Original issue: ${firstError}. Individual retry issue: ${retryError.message}. It remains available for a later retry or manual review.`);
+      }
+      saveSpecificationProject(false);
+      renderSpecLocalAiSavedResults();
+    }
+    const detailedCount = await runSpecDetailedEquipmentPass(Array.from(detailCandidateUnits.values()), record, file.name);
+    if (detailedCount) recordSpecLocalAiMessage(`Detailed Equipment Pass enriched ${detailedCount} equipment record${detailedCount === 1 ? "" : "s"} with additional source-supported fields.`);
     const savedCounts = getSpecLocalAiSavedCounts(record.id);
-    record.importSummary = `${completedPages.size} of ${source.total} page(s) completed (${skipped} screened, ${timedOut} visual timeout); ${savedCounts.equipment} AI equipment item(s), ${savedCounts.fills} fill-in(s), and ${savedCounts.clauses} clause(s) saved for review`;
+    record.importSummary = `${completedPages.size} of ${source.total} page(s) completed (${skipped} screened, ${timedOut} unresolved after individual retry); ${savedCounts.equipment} AI equipment item(s), ${savedCounts.fills} fill-in(s), and ${savedCounts.clauses} clause(s) saved for review`;
     touchSpecificationProject(); renderSpecLocalAiSavedResults();
     setSpecSourceStatus(timedOut
-      ? `Analysis finalized through the last readable page. Saved for review: ${savedCounts.equipment} equipment, ${savedCounts.fills} fill-in, and ${savedCounts.clauses} specification clause result(s). ${timedOut} visual page(s) still need retry or manual review.`
+      ? `Analysis finished the normal pass and individual recovery. Saved for review: ${savedCounts.equipment} equipment, ${savedCounts.fills} fill-in, and ${savedCounts.clauses} specification clause result(s). ${timedOut} page(s) still need a later retry or manual review.`
       : `Local AI finished ${file.name}. Saved for review: ${savedCounts.equipment} equipment, ${savedCounts.fills} fill-in, and ${savedCounts.clauses} specification clause result(s).`, timedOut ? "is-error" : "is-complete");
-    recordSpecLocalAiMessage(`${completedPages.size} of ${source.total} page(s) complete; ${skipped} page(s) screened without vision; ${timedOut} page(s) require manual visual review.`);
+    recordSpecLocalAiMessage(`${completedPages.size} of ${source.total} page(s) complete; ${skipped} page(s) screened without vision; ${timedOut} page(s) remain unresolved after one individual recovery attempt.`);
     stopSpecLocalAiTimer();
   } catch (error) {
     const savedCounts = getSpecLocalAiSavedCounts(record.id);
@@ -3320,6 +3563,70 @@ function renderSpecLocalAiSavedResults() {
   renderExtractedSpecFillIns();
   renderSpecSourceSuggestions();
   renderSpecificationReview();
+}
+
+async function runSpecDetailedEquipmentPass(units, record, sourceName) {
+  if (!window.SpecificationLocalAI?.analyzeEquipmentDetails || !Array.isArray(units) || !units.length) return 0;
+  const selectedUnits = units.slice(0, 24);
+  let enriched = 0;
+  recordSpecLocalAiMessage(`Starting Detailed Equipment Pass on ${selectedUnits.length} page${selectedUnits.length === 1 ? "" : "s"} that produced equipment findings.${units.length > selectedUnits.length ? ` Limited from ${units.length} candidate pages to keep the second pass bounded.` : ""}`);
+  for (let index = 0; index < selectedUnits.length; index += 1) {
+    const unit = selectedUnits[index];
+    const pageComponents = (specState.components || []).filter(item => item.sourceDocumentId === record.id && item.sourcePage === unit.sourcePage && item.aiInvolved);
+    const equipmentNames = Array.from(new Set(pageComponents.map(item => String(item.description || "").trim()).filter(Boolean)));
+    if (!equipmentNames.length) continue;
+    setSpecSourceStatus(`Detailed Equipment Pass ${index + 1} of ${selectedUnits.length} | ${unit.sourcePage}`, "is-loading");
+    try {
+      const result = await SpecificationLocalAI.analyzeEquipmentDetails({ ...unit, sourceName, equipmentNames });
+      let pageEnriched = 0;
+      (result.equipmentDetails || []).forEach(detail => {
+        const detailName = String(detail.equipmentName || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const component = pageComponents.find(item => String(item.description || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === detailName)
+          || pageComponents.find(item => {
+            const name = String(item.description || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+            return name && detailName && (name.includes(detailName) || detailName.includes(name));
+          });
+        if (!component || !String(detail.evidence || "").trim() || Number(detail.confidence || 0) < 0.5) return;
+        let changed = false;
+        [["manufacturer", "manufacturer"], ["model", "model"], ["partNumber", "partNumber"]].forEach(([target, source]) => {
+          const value = String(detail[source] || "").trim();
+          if (value && !String(component[target] || "").trim()) { component[target] = value; changed = true; }
+        });
+        if (Number(detail.quantity) > 0 && Number(component.quantity || 0) !== Number(detail.quantity)) {
+          component.quantity = Number(detail.quantity);
+          component.quantityExplanation = `Detailed Equipment Pass found quantity ${detail.quantity} on ${unit.sourcePage}.`;
+          changed = true;
+        }
+        const detailFields = {
+          Voltage: detail.voltage, Phase: detail.phase, Amperage: detail.amperage,
+          Horsepower: detail.horsepower, Flow: detail.flow, Pressure: detail.pressure,
+          Dimensions: detail.dimensions, Materials: detail.materials, Controls: detail.controls,
+          "Included Components": detail.includedComponents,
+          "Installation Requirements": detail.installationRequirements,
+          "Performance Requirements": detail.performanceRequirements,
+          Warranty: detail.warranty
+        };
+        component.extractedFields = component.extractedFields && typeof component.extractedFields === "object" ? component.extractedFields : {};
+        Object.entries(detailFields).forEach(([label, rawValue]) => {
+          const values = (Array.isArray(rawValue) ? rawValue : [rawValue]).map(value => String(value || "").trim()).filter(Boolean);
+          if (!values.length) return;
+          const existing = Array.isArray(component.extractedFields[label]) ? component.extractedFields[label] : component.extractedFields[label] ? [component.extractedFields[label]] : [];
+          const combined = Array.from(new Set([...existing, ...values]));
+          if (combined.length !== existing.length) { component.extractedFields[label] = combined; changed = true; }
+        });
+        component.detailEvidence = Array.from(new Set([...(component.detailEvidence || []), String(detail.evidence).trim()]));
+        component.numericConfidence = Math.max(Number(component.numericConfidence || 0), Number(detail.confidence || 0));
+        component.detailedAt = new Date().toISOString();
+        if (changed) { enriched += 1; pageEnriched += 1; }
+      });
+      recordSpecLocalAiMessage(`Detailed Equipment Pass completed ${unit.sourcePage}: ${pageEnriched} equipment record${pageEnriched === 1 ? "" : "s"} enriched.`);
+    } catch (error) {
+      recordSpecLocalAiMessage(`Detailed Equipment Pass skipped ${unit.sourcePage} after an error: ${error.message || error}. Normal extraction results were preserved.`);
+    }
+    saveSpecificationProject(false);
+    renderSpecLocalAiSavedResults();
+  }
+  return enriched;
 }
 
 async function checkSpecLocalAiFromBanner() {
@@ -3407,6 +3714,156 @@ function openSpecLocalAiExamplesModal() {
     closeSpecModal();
     showSpecMessage("AI Examples Saved", examples ? "The Chicago Canal reference and your local examples will guide future analysis on this browser." : "Local examples were cleared. The Chicago Canal reference remains active for every user.");
   });
+}
+
+function isLikelySpecAiEngineeringPage(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return false;
+  const signals = [
+    /\b(?:shall|must|required|provide|furnish|install|comply|warrant)\b/i,
+    /\b(?:manufacturer|model|part(?:\s+number|\s+no\.?)|quantity|equipment|assembly|system)\b/i,
+    /\b(?:voltage|phase|amperage|horsepower|electrical|motor|pump|control|sensor|plc|hmi)\b/i,
+    /\b(?:flow|pressure|gpm|psi|cfm|temperature|capacity|speed|performance)\b/i,
+    /\b(?:stainless steel|galvanized|aluminum|material|dimension|diameter|length|width|height)\b/i,
+    /\b(?:installation|startup|commissioning|acceptance test|training|warranty|closeout)\b/i,
+    /\b(?:project name|project number|section number|drawing number|revision|customer)\b/i,
+    /\b(?:brush|dryer|blower|arch|rinse|wash|chemical|detergent|conveyor|vehicle)\b/i,
+    /\b\d+(?:\.\d+)?\s*(?:v|vac|a|amp|hp|kw|gpm|psi|cfm|rpm|hz|inch|inches|ft|feet|mm|cm|°f|deg)\b/i
+  ];
+  const score = signals.reduce((total, pattern) => total + (pattern.test(value) ? 1 : 0), 0);
+  return score >= 2 || (score >= 1 && value.length < 900);
+}
+
+function promptSpecLocalAiAnalysisMode(fileName) {
+  return new Promise(resolve => {
+    const modal = document.getElementById("specModal");
+    document.getElementById("specModalTitle").textContent = "Analyze Confidential Source Locally";
+    document.getElementById("specModalBody").innerHTML = `<div class="spec-confirm-copy"><p><strong>${escapeSpec(fileName)}</strong> will be sent only to the N/S local AI service after your database login is verified. Extracted results will require review.</p><label class="spec-ai-notice-choice"><input id="specAiFocusedAnalysis" type="checkbox" checked> <span><strong>Use focused analysis (recommended)</strong><small>Screen out low-value searchable pages such as routine maintenance, contacts, indexes, and troubleshooting before asking the model. Scanned visual pages are still reviewed.</small></span></label><p class="converter-muted">Uncheck this for a slower full-page review. You can run full review later; pages skipped by focused screening will remain eligible.</p></div>`;
+    const actions = document.getElementById("specModalActions");
+    actions.replaceChildren();
+    const analyze = document.createElement("button");
+    analyze.textContent = "Analyze Locally";
+    analyze.onclick = () => {
+      const focused = document.getElementById("specAiFocusedAnalysis")?.checked !== false;
+      closeSpecModal();
+      resolve({ confirmed: true, focused });
+    };
+    const cancel = document.createElement("button");
+    cancel.className = "secondary";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => { closeSpecModal(); resolve({ confirmed: false, focused: true }); };
+    actions.append(analyze, cancel);
+    modal.classList.remove("hidden");
+  });
+}
+
+function collectSpecCorrectionMemoryExamples() {
+  const examples = [];
+  const isAiItem = item => item?.detectionMethod === "Local Qwen3-VL extraction" ||
+    item?.extractionKind === "Local Qwen3-VL engineering extraction" ||
+    item?.aiInvolved === true ||
+    (item?.sourceSuggestionId && (specState.sourceSuggestions || []).some(source =>
+      source.id === item.sourceSuggestionId && source.extractionKind === "Local Qwen3-VL engineering extraction"));
+  const addExample = (item, lines) => {
+    const block = lines.map(line => String(line || "").trim()).filter(Boolean).join("\n");
+    if (block) examples.push({ text: block, ai: isAiItem(item) });
+  };
+  (specState.fillInSuggestions || []).forEach(item => {
+    if (!item.reviewedAt || item.rejectedByAcceptedFillId || !["accepted", "rejected"].includes(item.status)) return;
+    addExample(item, [
+      `${item.status === "accepted" ? "ACCEPT" : "REJECT"} FILL-IN EXAMPLE`,
+      `ORIGIN: ${isAiItem(item) ? "LOCAL AI" : "STANDARD EXTRACTION"}`,
+      `FIELD: ${item.placeholder || "Unknown template field"}`,
+      `VALUE: ${item.value || ""}`,
+      `SOURCE LABEL: ${item.sourceLabel || item.sourceDocument || ""}`,
+      `EVIDENCE: ${getTraceableSpecEvidence(item)}`,
+      item.status === "accepted"
+        ? `EXPECTED: Treat this evidence pattern as ${item.placeholder || "this template field"}.`
+        : `EXPECTED: Do not classify this evidence pattern as ${item.placeholder || "this template field"}.`
+    ]);
+  });
+  (specState.sourceSuggestions || []).forEach(item => {
+    if (!item.reviewedAt || !["accepted", "rejected"].includes(item.status)) return;
+    const destination = getSpecSuggestionDestination(item);
+    addExample(item, [
+      `${item.status === "accepted" ? "ACCEPT" : "REJECT"} SPECIFICATION CLAUSE EXAMPLE`,
+      `ORIGIN: ${isAiItem(item) ? "LOCAL AI" : "STANDARD EXTRACTION"}`,
+      `EQUIPMENT: ${item.equipmentContext || identifySpecEquipmentContext(item.text) || "General requirement"}`,
+      `CLAUSE: ${item.text || ""}`,
+      `EVIDENCE: ${getTraceableSpecEvidence(item)}`,
+      item.status === "accepted"
+        ? `EXPECTED DESTINATION: ${destination.article} ${destination.title}; hierarchy ${item.placementLevel || "auto"}.`
+        : "EXPECTED: Do not create a specification clause from this evidence pattern."
+    ]);
+  });
+  getTocEquipmentCandidates().forEach(item => {
+    if (!["Engineer Approved", "Rejected"].includes(item.verificationStatus)) return;
+    addExample(item, [
+      `${item.verificationStatus === "Engineer Approved" ? "ACCEPT" : "REJECT"} EQUIPMENT NAME EXAMPLE`,
+      `ORIGIN: ${isAiItem(item) ? "LOCAL AI" : "STANDARD EXTRACTION"}`,
+      `EQUIPMENT: ${item.description || ""}`,
+      `MANUFACTURER: ${item.manufacturer || ""}`,
+      `MODEL: ${item.model || ""}`,
+      `EVIDENCE: ${getTraceableSpecEvidence(item)}`,
+      item.verificationStatus === "Engineer Approved"
+        ? "EXPECTED: Use this naming pattern as an equipment record and specification heading."
+        : "EXPECTED: Do not treat this evidence pattern as a distinct equipment record."
+    ]);
+  });
+  return Array.from(new Map(examples.map(item => [item.text, item])).values());
+}
+
+function promptSpecCorrectionMemoryBeforeExport() {
+  const examples = collectSpecCorrectionMemoryExamples();
+  if (!examples.length) return Promise.resolve({ proceed: true, save: false, examples: [] });
+  const acceptedCount = examples.filter(item => item.text.startsWith("ACCEPT")).length;
+  const rejectedCount = examples.length - acceptedCount;
+  const standardExamples = examples.filter(item => !item.ai);
+  const aiExamples = examples.filter(item => item.ai);
+  return new Promise(resolve => {
+    const modal = document.getElementById("specModal");
+    document.getElementById("specModalTitle").textContent = "Help Improve Future Extractions?";
+    document.getElementById("specModalBody").innerHTML = `<div class="spec-confirm-copy"><p>This project has <strong>${acceptedCount} accepted</strong> and <strong>${rejectedCount} rejected</strong> reviewed example${examples.length === 1 ? "" : "s"} that can guide future analysis.</p><fieldset class="spec-wide-field"><legend>Choose what to remember</legend><label><input id="specSaveStandardCorrections" type="checkbox" ${standardExamples.length ? "checked" : "disabled"}> Standard extraction corrections (${standardExamples.length})</label>${aiExamples.length ? `<label><input id="specSaveAiCorrections" type="checkbox" checked> Local AI corrections (${aiExamples.length})</label>` : ""}</fieldset><p>Only the selected reviewed extraction patterns, destinations, and supporting evidence will be saved. Examples stay in this browser and can be reviewed or removed from Local AI Examples.</p><p class="converter-muted">The Local AI option appears only when reviewed AI results were applied or rejected. Automatically dismissed duplicate values are not saved as corrections.</p></div>`;
+    const actions = document.getElementById("specModalActions");
+    actions.replaceChildren();
+    const save = document.createElement("button");
+    save.textContent = "Continue";
+    save.onclick = () => {
+      const selectedExamples = [
+        ...(document.getElementById("specSaveStandardCorrections")?.checked ? standardExamples : []),
+        ...(document.getElementById("specSaveAiCorrections")?.checked ? aiExamples : [])
+      ].map(item => item.text);
+      closeSpecModal();
+      resolve({ proceed: true, save: selectedExamples.length > 0, examples: selectedExamples });
+    };
+    const cancel = document.createElement("button");
+    cancel.className = "secondary";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => { closeSpecModal(); resolve({ proceed: false, save: false, examples: [] }); };
+    actions.append(save, cancel);
+    modal.classList.remove("hidden");
+  });
+}
+
+function saveSpecCorrectionMemoryExamples(examples) {
+  if (!Array.isArray(examples) || !examples.length) return false;
+  try {
+    const prior = String(localStorage.getItem(SPEC_LOCAL_AI_EXAMPLES_KEY) || "").trim();
+    const blocks = Array.from(new Set([
+      ...prior.split(/\n{3,}/).map(item => item.trim()).filter(Boolean),
+      ...examples.map(item => item.trim()).filter(Boolean)
+    ]));
+    let saved = blocks.join("\n\n\n");
+    while (saved.length > 12000 && blocks.length > 1) {
+      blocks.shift();
+      saved = blocks.join("\n\n\n");
+    }
+    localStorage.setItem(SPEC_LOCAL_AI_EXAMPLES_KEY, saved.slice(0, 12000));
+    return true;
+  } catch (error) {
+    console.warn("Could not save Local AI correction examples:", error);
+    return false;
+  }
 }
 
 function getSpecAiWritingProjectKey() {
@@ -3725,7 +4182,7 @@ function showSpecAiSetupNotice(user) {
 
 async function createSpecAiAnalysisSource(file) {
   if (/\.pdf$/i.test(file.name)) {
-    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer(), useSystemFonts: true, disableFontFace: false, verbosity: pdfjsLib.VerbosityLevel?.ERRORS ?? 0 }).promise;
     return { total: pdf.numPages, pageLabel: index => `Page ${index + 1}`, getUnit: async index => {
       const pageNumber = index + 1;
       const page = await pdf.getPage(pageNumber);
@@ -3763,20 +4220,31 @@ async function createSpecAiAnalysisSource(file) {
 function importSpecLocalAiResult(result, record, sourcePage) {
   const count = { equipment: 0, fills: 0, clauses: 0 };
   const confidenceLabel = value => Number(value || 0) >= 0.85 ? "High" : Number(value || 0) >= 0.65 ? "Medium" : "Low";
-  (result.equipment || []).filter(item => item.description && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).forEach(item => {
+  (result.equipment || []).filter(item => item.description && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).slice(0, 8).forEach(item => {
     const duplicate = specState.components.some(existing => existing.sourceDocumentId === record.id && existing.description.toLowerCase() === String(item.description).toLowerCase() && existing.sourcePage === sourcePage);
     if (duplicate) return;
-    specState.components.push(createSpecComponent({ partNumber: item.partNumber || "", description: item.description, manufacturer: item.manufacturer || "", model: item.model || "", quantity: Number(item.quantity) || 1, unit: item.unit || "ea", assembly: item.assembly || "", notes: item.technicalDetails || "", sourceDocument: record.name, sourceDocumentId: record.id, sourcePage, detectionMethod: "Local Qwen3-VL extraction", verificationStatus: "Needs Review", quantityExplanation: `AI extraction from ${sourcePage}; verify against source. Evidence: ${item.evidence}`, aiInvolved: true, extractionConfidence: confidenceLabel(item.confidence), numericConfidence: Number(item.confidence || 0), extractionEvidence: item.evidence }));
+    specState.components.push(createSpecComponent({ partNumber: item.partNumber || "", description: item.description, manufacturer: item.manufacturer || "", model: item.model || "", quantity: Number(item.quantity) || 1, unit: item.unit || "ea", assembly: item.assembly || "", notes: item.technicalDetails || "", sourceDocument: record.name, sourceDocumentId: record.id, sourcePage, detectionMethod: "Local Qwen3-VL extraction", equipmentListCandidate: true, verificationStatus: "Needs Review", quantityExplanation: `AI extraction from ${sourcePage}; verify against source. Evidence: ${item.evidence}`, aiInvolved: true, extractionConfidence: confidenceLabel(item.confidence), numericConfidence: Number(item.confidence || 0), extractionEvidence: item.evidence }));
     count.equipment += 1;
   });
-  (result.fillIns || []).filter(item => item.placeholder && item.value && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.55).forEach(item => {
+  (result.fillIns || []).filter(item => item.placeholder && item.value && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.55).slice(0, 5).forEach(item => {
     const placeholder = item.placeholder.startsWith("[") ? item.placeholder : `[${item.placeholder.toUpperCase()}]`;
     const part = /3/.test(item.part || "") ? "part3" : /1/.test(item.part || "") ? "part1" : "part2";
+    const duplicate = (specState.fillInSuggestions || []).some(existing =>
+      existing.documentId === record.id &&
+      String(existing.placeholder || "").toUpperCase() === placeholder.toUpperCase() &&
+      String(existing.value || "").toLowerCase().replace(/\s+/g, " ").trim() === String(item.value).toLowerCase().replace(/\s+/g, " ").trim());
+    if (duplicate) return;
     specState.fillInSuggestions.push({ id: crypto.randomUUID(), documentId: record.id, sourceDocument: record.name, sourcePage, status: "pending", createdAt: new Date().toISOString(), part, placeholder, label: placeholder.slice(1, -1).toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase()), value: item.value, evidence: item.evidence || "Local AI extraction", confidence: confidenceLabel(item.confidence), numericConfidence: item.confidence, detectionMethod: "Local Qwen3-VL extraction" });
     count.fills += 1;
   });
-  (result.clauses || []).filter(item => item.text && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).forEach(item => {
+  (result.clauses || []).filter(item => item.text && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).slice(0, 10).forEach(item => {
     const targetPart = /3/.test(item.targetPart || "") ? "part3" : "part2";
+    const normalizedText = String(item.text).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const duplicate = (specState.sourceSuggestions || []).some(existing =>
+      existing.documentId === record.id &&
+      String(existing.targetPart || "") === targetPart &&
+      String(existing.text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalizedText);
+    if (duplicate) return;
     const articleMatch = String(item.targetArticle || "").match(/[23]\.\d+/);
     const level = String(item.hierarchyLevel || "").toLowerCase();
     const placementLevel = level === "equipment" || level === "letter" ? "letter" : level === "detail" ? "detail" : level === "subitem" || level === "lower" ? "lower" : "number";
@@ -3827,16 +4295,18 @@ async function reanalyzeSpecDocument(id) {
     item.verificationStatus === "Engineer Approved" ||
     !SPEC_SOURCE_COMPONENT_METHODS.has(item.detectionMethod)
   );
+  startSpecLocalAiTimer(`Regular analysis started for ${file.name}.`, "reanalyze");
   setSpecSourceStatus(`Reanalyzing ${file.name}...`, "is-loading");
-  const analysisStartedAt = startSpecBuiltInAnalysisTimer();
+  const analysisStartedAt = performance.now();
   await new Promise(resolve => requestAnimationFrame(resolve));
   const result = await extractSpecSourceSuggestions(file, id);
-  const analysisDuration = stopSpecBuiltInAnalysisTimer(analysisStartedAt);
+  const analysisDuration = performance.now() - analysisStartedAt;
   if (result?.error) {
     documentRecord.importSummary = `Analysis failed: ${result.error}`;
     touchSpecificationProject();
     renderSpecDocuments();
     setSpecSourceStatus(`${file.name} could not be analyzed: ${result.error}`, "is-error");
+    stopSpecLocalAiTimer();
     return;
   }
   const suggestions = Math.max(0, result?.suggestions || 0);
@@ -3847,6 +4317,7 @@ async function reanalyzeSpecDocument(id) {
   renderSpecDocuments(); renderSpecSourceSuggestions(); renderExtractedSpecFillIns();
   const durationLabel = analysisDuration < 1000 ? "under 1 second" : formatSpecLocalAiElapsed(analysisDuration);
   setSpecSourceStatus(`${file.name} was fully reanalyzed in ${durationLabel}. ${suggestions} source suggestion${suggestions === 1 ? "" : "s"}, ${fillIns} template value${fillIns === 1 ? "" : "s"}, and ${equipmentRecords} equipment record${equipmentRecords === 1 ? "" : "s"} are ready for review.`, "is-complete");
+  stopSpecLocalAiTimer();
 }
 
 async function downloadSpecDocument(id) {
@@ -4238,6 +4709,8 @@ function renumberSpecificationHierarchy(text) {
 
 async function exportSpecificationWord() {
   if (!window.docx) return showSpecMessage("Word Export Unavailable", "The Word export library did not load. Check the internet connection and reload the page.");
+  const correctionMemory = await promptSpecCorrectionMemoryBeforeExport();
+  if (!correctionMemory.proceed) return;
   setSpecExportStatus("Building Chicago-style Word specification...", "is-loading");
   try {
     const { Document, Packer, Paragraph, TextRun, AlignmentType, Header, Footer, PageNumber } = window.docx;
@@ -4329,7 +4802,8 @@ async function exportSpecificationWord() {
     });
     const blob = await Packer.toBlob(documentFile);
     downloadFile(blob, specificationFileName("docx"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    setSpecExportStatus("Chicago-style Word specification created.", "is-complete");
+    const examplesSaved = correctionMemory.save && saveSpecCorrectionMemoryExamples(correctionMemory.examples);
+    setSpecExportStatus(`Chicago-style Word specification created.${examplesSaved ? " Reviewed examples were saved for future Local AI analysis." : ""}`, "is-complete");
   } catch (error) {
     console.error("Word export failed:", error);
     setSpecExportStatus("Word export failed. Review the message and try again.", "is-error");
@@ -4339,6 +4813,8 @@ async function exportSpecificationWord() {
 
 async function exportSpecificationPDF() {
   try {
+    const correctionMemory = await promptSpecCorrectionMemoryBeforeExport();
+    if (!correctionMemory.proceed) return;
     const { PDFDocument, StandardFonts, rgb } = PDFLib;
     const pdf = await PDFDocument.create();
     const regular = await pdf.embedFont(StandardFonts.TimesRoman);
@@ -4477,10 +4953,11 @@ async function exportSpecificationPDF() {
     const fileName = specificationFileName("pdf");
     const pdfBlob = new Blob([bytes], { type: "application/pdf" });
     downloadFile(pdfBlob, fileName, "application/pdf");
+    const examplesSaved = correctionMemory.save && saveSpecCorrectionMemoryExamples(correctionMemory.examples);
     try {
       await putSpecificationHistory({ id: crypto.randomUUID(), fileName, savedAt: new Date().toISOString(), pdfBlob, state: JSON.parse(JSON.stringify(specState)) });
       await renderSpecificationLocalSaves();
-      setSpecExportStatus("PDF exported and saved automatically in Local History.", "is-complete");
+      setSpecExportStatus(`PDF exported and saved automatically in Local History.${examplesSaved ? " Reviewed examples were saved for future Local AI analysis." : ""}`, "is-complete");
     } catch (historyError) {
       console.warn("Could not save specification history:", historyError);
       setSpecExportStatus("PDF exported, but it could not be saved in Local History.", "is-error");
