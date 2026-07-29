@@ -39,12 +39,12 @@ if errorlevel 1 (
 start "" /min "%NS_LAUNCHER%"
 timeout /t 3 /nobreak >nul
 
-"%LOCALAPPDATA%\Programs\Ollama\ollama.exe" list 2>nul | findstr /i /c:"qwen3-vl:30b-a3b-instruct" >nul
+"%LOCALAPPDATA%\Programs\Ollama\ollama.exe" list 2>nul | findstr /i /c:"qwen3-vl:8b-instruct" >nul
 if errorlevel 1 (
   echo.
-  echo Installing the approved Qwen3-VL model.
+  echo Installing the approved Qwen3-VL 8B model.
   echo This is a large one-time download and may take a while.
-  "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" pull qwen3-vl:30b-a3b-instruct
+  "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" pull qwen3-vl:8b-instruct
   if errorlevel 1 (
     echo.
     echo The model download did not finish. Check the internet connection and run setup again.

@@ -12,6 +12,7 @@ const FALLBACK_MODEL = "qwen3-vl:30b-a3b-instruct";
 const SUPABASE_URL = "https://yidinujmeuztqohwxfxs.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_LVvQQpJHxeif-zmJjIJy8w_jDV_MXX4";
 const MAX_REQUEST_BYTES = 28 * 1024 * 1024;
+const activeOllamaControllers = new Map();
 const ALLOWED_BROWSER_ORIGINS = new Set([
   "http://127.0.0.1:5500",
   "http://localhost:5500",
@@ -82,6 +83,14 @@ function readJson(req) {
 async function handleAi(req, res) {
   const user = await authenticatedUser(req);
   if (!user) return send(res, 401, { error: "Sign in with the Database login before using local AI." });
+  const userKey = String(user.id || user.email || "signed-in-user");
+
+  if (req.method === "DELETE") {
+    const controllers = activeOllamaControllers.get(userKey) || new Set();
+    controllers.forEach(controller => controller.abort());
+    activeOllamaControllers.delete(userKey);
+    return send(res, 200, { canceled: controllers.size });
+  }
 
   if (req.method === "GET") {
     const selected = await selectLocalAiModel();
@@ -101,6 +110,8 @@ async function handleAi(req, res) {
   if (!selected.ready) return send(res, 503, { error: `Install ${FAST_MODEL} in Ollama before using Local AI.` });
 
   const ollamaController = new AbortController();
+  if (!activeOllamaControllers.has(userKey)) activeOllamaControllers.set(userKey, new Set());
+  activeOllamaControllers.get(userKey).add(ollamaController);
   const cancelOllamaIfBrowserLeft = () => {
     if (!res.writableEnded) ollamaController.abort();
   };
@@ -131,6 +142,9 @@ async function handleAi(req, res) {
     throw Object.assign(new Error("Ollama stopped responding. Restart Ollama and the NS Local AI Background service, then resume this source."), { status: 503 });
   } finally {
     res.removeListener("close", cancelOllamaIfBrowserLeft);
+    const controllers = activeOllamaControllers.get(userKey);
+    controllers?.delete(ollamaController);
+    if (!controllers?.size) activeOllamaControllers.delete(userKey);
   }
   if (!response.ok) throw new Error(`Ollama returned ${response.status}.`);
   const result = await response.json();
@@ -154,7 +168,7 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
       res.setHeader("Access-Control-Allow-Private-Network", "true");
     }
     if (req.method === "OPTIONS") return send(res, 204, "", "text/plain; charset=utf-8");

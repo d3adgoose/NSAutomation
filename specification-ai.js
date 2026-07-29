@@ -49,6 +49,20 @@
     },
     required: ["equipmentDetails"]
   };
+  const EQUIPMENT_DISCOVERY_SCHEMA = {
+    type: "object",
+    properties: {
+      pages: { type: "array", items: {
+        type: "object",
+        properties: {
+          sourcePage: { type: "string" },
+          equipment: SCHEMA.properties.equipment
+        },
+        required: ["sourcePage", "equipment"]
+      } }
+    },
+    required: ["pages"]
+  };
   const WRITING_SCHEMA = {
     type: "object",
     properties: {
@@ -210,7 +224,7 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     let imageNumber = 0;
     const pageSections = units.map(unit => {
       const visualLabel = unit.imageBase64 ? `Visual image ${++imageNumber} belongs to this page.\n` : "";
-      return `${unit.sourcePage}:\n${visualLabel}Searchable text:\n${String(unit.text || "").slice(0, 4000)}`;
+      return `${unit.sourcePage}:\n${visualLabel}Searchable text:\n${String(unit.text || "").slice(0, 8000)}`;
     }).join("\n\n");
     const content = `Analyze this ordered batch from ${sourceName}. Visual images, when supplied, are numbered in the same order as their labeled page sections. Return a pages array with exactly one result for every sourcePage, preserving each sourcePage label exactly. Do not combine evidence between pages.\n\n${pageSections}`;
     const message = { role: "user", content };
@@ -266,6 +280,42 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     return { ...parsed, model: response.model, user: response.user };
   }
 
+  async function analyzeEquipmentDiscovery({ units, sourceName }) {
+    cancelRequested = false;
+    if (!Array.isArray(units) || !units.length) return [];
+    const selectedUnits = units.slice(0, 3);
+    let imageNumber = 0;
+    const sections = selectedUnits.map(unit => {
+      const visualLabel = unit.imageBase64 ? `Visual image ${++imageNumber} belongs to this page.\n` : "";
+      return `${unit.sourcePage}:\n${visualLabel}Searchable text:\n${String(unit.text || "").slice(0, 10000)}`;
+    }).join("\n\n");
+    const prompt = `Perform a fast equipment-only completion check for these pages from ${sourceName}. Find every explicitly named equipment item, assembly, major component, control, pump, motor, panel, sensor, tank, arch, brush, blower, conveyor, or reclaim unit that may have been missed during the general pass. Preserve manufacturer, model, part number, quantity, unit, assembly, and concise technical details when explicitly supported. Do not return specification clauses, instructions, headings with no equipment meaning, or generic materials. Never infer missing facts. Every item requires a short exact evidence phrase from its own page. Return one pages entry for every supplied sourcePage, even when its equipment array is empty. Return at most 8 strong equipment records per page.\n\n${sections}`;
+    const message = { role: "user", content: prompt };
+    const images = selectedUnits.map(unit => unit.imageBase64).filter(Boolean);
+    if (images.length) message.images = images;
+    const response = await requestAnalysis({
+      messages: [{ role: "system", content: "You are a precise engineering equipment extractor. Use only the supplied pages and return only JSON matching the schema." }, message],
+      format: EQUIPMENT_DISCOVERY_SCHEMA,
+      numCtx: images.length ? 12288 : 16384,
+      maxTokens: images.length ? 3072 : 4096
+    }, images.length ? 90000 : 60000);
+    const parsed = parseStructuredContent(response.content);
+    const hasEveryPage = Array.isArray(parsed?.pages) && selectedUnits.every(unit => parsed.pages.some(page => page.sourcePage === unit.sourcePage));
+    if (!hasEveryPage) throw new Error(`Equipment completion could not return every requested page: ${selectedUnits.map(unit => unit.sourcePage).join(", ")}.`);
+    return selectedUnits.map(unit => {
+      const page = parsed.pages.find(item => item.sourcePage === unit.sourcePage);
+      return {
+        documentType: "equipment completion",
+        discipline: "unknown",
+        equipment: Array.isArray(page?.equipment) ? page.equipment : [],
+        fillIns: [],
+        clauses: [],
+        model: response.model,
+        user: response.user
+      };
+    });
+  }
+
   async function improveSpecificationPart({ part = 1, text, project = {}, instruction = "" }) {
     cancelRequested = false;
     const sourceText = String(text || "").trim();
@@ -297,8 +347,9 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
   function cancel() {
     cancelRequested = true;
     activeRequestControllers.forEach(controller => controller.abort());
+    void request("/api/local-ai", { method: "DELETE" }).catch(() => {});
     emitAnalysisMessage("Stop requested. Canceling the active Local AI page safely.");
   }
 
-  window.SpecificationLocalAI = { status, analyze, analyzeBatch, analyzeEquipmentDetails, improveSpecificationPart, cancel, model: "qwen3-vl:8b-instruct" };
+  window.SpecificationLocalAI = { status, analyze, analyzeBatch, analyzeEquipmentDiscovery, analyzeEquipmentDetails, improveSpecificationPart, cancel, model: "qwen3-vl:8b-instruct" };
 })();

@@ -35,6 +35,8 @@ const specProjectFieldTimers = new Map();
 const SPEC_AUTOSAVE_DELAY = 900;
 const SPEC_OPTIONAL_EQUIPMENT_WORKFLOW_ENABLED = false;
 const SPEC_AI_TEXT_BATCH_SIZE = 6;
+const SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT = 16000;
+const SPEC_AI_TEXT_PAGE_CHARACTER_LIMIT = 8000;
 const SPEC_AI_VISUAL_BATCH_SIZE = 3;
 
 function getPart1StarterTemplate() {
@@ -517,7 +519,7 @@ function showSpecTab(tab) {
   document.querySelectorAll(".spec-tab-panel").forEach(panel => panel.classList.toggle("hidden", panel.id !== `specTab-${tab}`));
   document.getElementById("specReviewLocalSaves")?.classList.toggle("hidden", tab !== "review");
   if (tab === "review") { renderSpecificationReview(); renderSpecificationLocalSaves(); }
-  if (tab === "suggestions") { renderSpecSourceSuggestions(); renderExtractedSpecFillIns(); }
+  if (tab === "suggestions") { renderSpecComponents(); renderSpecSourceSuggestions(); renderExtractedSpecFillIns(); }
 }
 
 function touchSpecificationProject() {
@@ -2231,6 +2233,29 @@ function isLowConfidenceAiFinding(item) {
     (Number.isFinite(Number(item?.numericConfidence)) && Number(item.numericConfidence) < 0.65)));
 }
 
+function isSpecAiExtractedFinding(item) {
+  return item?.detectionMethod === "Local Qwen3-VL extraction" ||
+    item?.extractionKind === "Local Qwen3-VL engineering extraction" ||
+    item?.aiInvolved === true;
+}
+
+function getSpecExtractionMethodBadge(item) {
+  const fromAi = isSpecAiExtractedFinding(item);
+  return `<span class="spec-ai-origin-badge ${fromAi ? "is-ai" : "is-built-in"}">${fromAi ? "AI Extracted" : "Built-in Extracted"}</span>`;
+}
+
+function matchesSpecExtractionMethod(item) {
+  const method = document.getElementById("specSuggestionMethod")?.value || "";
+  return !method || (method === "ai" ? isSpecAiExtractedFinding(item) : !isSpecAiExtractedFinding(item));
+}
+
+function compareSpecExtractionMethod(a, b, sortMode) {
+  if (!["ai-first", "built-in-first"].includes(sortMode)) return 0;
+  const aiA = isSpecAiExtractedFinding(a) ? 1 : 0;
+  const aiB = isSpecAiExtractedFinding(b) ? 1 : 0;
+  return sortMode === "ai-first" ? aiB - aiA : aiA - aiB;
+}
+
 function formatSpecFindingConfidence(item) {
   const explicit = String(item?.confidence || item?.extractionConfidence || "").trim();
   const storedNumeric = Number(item?.numericConfidence);
@@ -2283,6 +2308,16 @@ function renderSpecConfidenceTiers(items, renderCard, preserveOrder = false) {
   const possibleIds = new Set(possible.map(item => item.id));
   const primary = ordered.filter(item => !possibleIds.has(item.id));
   return `${primary.map(renderCard).join("")}${possible.length ? `<details class="spec-possible-findings"><summary>Possible Findings <span>${possible.length} low-confidence item${possible.length === 1 ? "" : "s"}</span></summary><div class="spec-possible-findings-list">${possible.map(renderCard).join("")}</div></details>` : ""}`;
+}
+
+function getSpecRenderedConfidenceOrder(items, preserveOrder = false) {
+  const ordered = preserveOrder ? items : getSpecConfidenceTieredItems(items).ordered;
+  const possible = ordered.filter(item =>
+    getSpecFindingConfidenceScore(item) < 0.65 &&
+    item.status !== "accepted" &&
+    item.verificationStatus !== "Engineer Approved");
+  const possibleIds = new Set(possible.map(item => item.id));
+  return [...ordered.filter(item => !possibleIds.has(item.id)), ...possible];
 }
 
 async function openSpecFindingSourcePage(kind, id) {
@@ -2358,6 +2393,7 @@ function renderSpecSourceSuggestions() {
   const sortMode = document.getElementById("specSuggestionSort")?.value || "confidence";
   const displayedSuggestions = suggestions.filter(item => {
     if (statusValue && item.status !== statusValue) return false;
+    if (!matchesSpecExtractionMethod(item)) return false;
     if (!searchValue) return true;
     const destination = getSpecSuggestionDestination(item);
     return [item.equipmentContext, item.text, item.sourceDocument, item.sourcePage, destination.article, destination.title].some(value => String(value || "").toLowerCase().includes(searchValue));
@@ -2366,6 +2402,9 @@ function renderSpecSourceSuggestions() {
     const b = right.item;
     const pageA = Number(String(a.sourcePage || "").match(/\d+/)?.[0]) || 0;
     const pageB = Number(String(b.sourcePage || "").match(/\d+/)?.[0]) || 0;
+    const methodOrder = compareSpecExtractionMethod(a, b, sortMode);
+    if (methodOrder) return methodOrder;
+    if (sortMode === "ai-first" || sortMode === "built-in-first") return getSpecFindingConfidenceScore(b) - getSpecFindingConfidenceScore(a) || left.originalIndex - right.originalIndex;
     if (sortMode === "confidence") return getSpecFindingConfidenceScore(b) - getSpecFindingConfidenceScore(a);
     if (sortMode === "confidence-ascending") return getSpecFindingConfidenceScore(a) - getSpecFindingConfidenceScore(b);
     if (sortMode === "equipment") return String(a.equipmentContext || identifySpecEquipmentContext(a.text)).localeCompare(String(b.equipmentContext || identifySpecEquipmentContext(b.text)), undefined, { numeric: true });
@@ -2405,13 +2444,10 @@ function renderSpecSourceSuggestions() {
   Array.from(list.querySelectorAll(".spec-suggestion-card")).forEach((card, index) => {
     const item = renderedSuggestions[index];
     if (!item) return;
-    if (item.extractionKind === "Local Qwen3-VL engineering extraction") {
-      const badge = document.createElement("span");
-      badge.className = "spec-ai-origin-badge";
-      badge.textContent = "AI Extracted";
-      badge.title = "Created by Local AI and requires engineer review";
-      card.querySelector(".spec-suggestion-heading > div")?.prepend(badge);
-    }
+    const methodBadge = document.createElement("span");
+    methodBadge.className = `spec-ai-origin-badge ${isSpecAiExtractedFinding(item) ? "is-ai" : "is-built-in"}`;
+    methodBadge.textContent = isSpecAiExtractedFinding(item) ? "AI Extracted" : "Built-in Extracted";
+    card.querySelector(".spec-suggestion-heading > div")?.prepend(methodBadge);
     const destination = getSpecSuggestionDestination(item);
     const preview = document.createElement("div");
     preview.className = "spec-inline-placement-preview";
@@ -2464,7 +2500,11 @@ function renderSpecEquipmentApprovals() {
   const list = document.getElementById("specEquipmentApprovalList");
   const summary = document.getElementById("specEquipmentApprovalSummary");
   if (!list || !summary) return;
-  const candidates = getTocEquipmentCandidates();
+  const sortMode = document.getElementById("specSuggestionSort")?.value || "confidence";
+  const candidates = getTocEquipmentCandidates().filter(matchesSpecExtractionMethod).sort((a, b) =>
+    compareSpecExtractionMethod(a, b, sortMode) ||
+    (["ai-first", "built-in-first"].includes(sortMode) ? getSpecFindingConfidenceScore(b) - getSpecFindingConfidenceScore(a) : 0)
+  );
   const pending = candidates.filter(item => item.verificationStatus !== "Engineer Approved").length;
   const approved = candidates.length - pending;
   summary.textContent = candidates.length ? `${pending} awaiting review · ${approved} approved for the equipment list` : "No equipment records extracted yet.";
@@ -2479,7 +2519,17 @@ function renderSpecEquipmentApprovals() {
     const badgeText = item.conflict ? "Conflict" : item.verificationStatus === "Engineer Approved" ? "Approved" : "Review";
     return `<article class="spec-equipment-approval-card ${item.verificationStatus === "Engineer Approved" ? "accepted" : "pending"} ${item.conflict ? "has-conflict" : ""}"><div><div class="spec-equipment-badges"><span class="spec-status ${badgeClass}">${badgeText}</span><span class="spec-confidence-badge ${getSpecFindingConfidenceClass(item)}">${escapeSpec(formatSpecFindingConfidence(item))} confidence</span></div><input aria-label="Equipment name" value="${escapeSpecAttr(item.description)}" onchange="updateTocEquipmentName('${item.id}',this.value)" ${item.verificationStatus === "Engineer Approved" ? "disabled" : ""}>${details.length ? `<p class="spec-equipment-identity">${details.map(escapeSpec).join(" · ")}</p>` : ""}${technical ? `<p class="spec-equipment-technical">${escapeSpec(technical)}</p>` : ""}${warning ? `<p class="spec-equipment-warning">${escapeSpec(warning)}</p>` : ""}<small>${escapeSpec(item.sourceDocument)} · ${escapeSpec(item.sourcePage)}</small><details><summary>Exact source evidence</summary><p>${escapeSpec(getTraceableSpecEvidence(item))}</p></details></div><div class="button-row"><button type="button" class="secondary" onclick="openSpecFindingSourcePage('equipment','${item.id}')">View Source Page</button>${item.verificationStatus === "Engineer Approved" ? `<button type="button" class="secondary" onclick="undoTocEquipmentApproval('${item.id}')">Undo Approval</button>` : `<button type="button" onclick="approveTocEquipment('${item.id}')">Approve for 2.2</button><button type="button" class="delete-btn" onclick="rejectTocEquipment('${item.id}')">Reject</button>`}</div></article>`;
   };
-  list.innerHTML = `<datalist id="specApprovedEquipmentNames">${getApprovedTocEquipmentNames().map(name => `<option value="${escapeSpecAttr(name)}"></option>`).join("")}</datalist>${renderSpecConfidenceTiers(candidates, renderEquipmentCard)}`;
+  const preserveMethodOrder = ["ai-first", "built-in-first"].includes(sortMode);
+  list.innerHTML = `<datalist id="specApprovedEquipmentNames">${getApprovedTocEquipmentNames().map(name => `<option value="${escapeSpecAttr(name)}"></option>`).join("")}</datalist>${renderSpecConfidenceTiers(candidates, renderEquipmentCard, preserveMethodOrder)}`;
+  const renderedEquipment = getSpecRenderedConfidenceOrder(candidates, preserveMethodOrder);
+  Array.from(list.querySelectorAll(".spec-equipment-approval-card")).forEach((card, index) => {
+    const item = renderedEquipment[index];
+    if (!item) return;
+    const methodBadge = document.createElement("span");
+    methodBadge.className = `spec-ai-origin-badge ${isSpecAiExtractedFinding(item) ? "is-ai" : "is-built-in"}`;
+    methodBadge.textContent = isSpecAiExtractedFinding(item) ? "AI Extracted" : "Built-in Extracted";
+    card.querySelector(".spec-equipment-badges")?.prepend(methodBadge);
+  });
 }
 
 function updateTocEquipmentName(id, value) {
@@ -2687,9 +2737,13 @@ function renderExtractedSpecFillIns() {
   const summary = document.getElementById("specExtractedFillSummary");
   if (!list || !summary) return;
   reconcileAcceptedSpecFillAlternatives();
-  const candidates = (specState.fillInSuggestions || []).filter(item => item.status !== "rejected" && hasTraceableSpecEvidence(item));
-  const fillTiers = getSpecConfidenceTieredItems(candidates);
-  const renderedCandidates = [...fillTiers.primary, ...fillTiers.possible];
+  const sortMode = document.getElementById("specSuggestionSort")?.value || "confidence";
+  const candidates = (specState.fillInSuggestions || []).filter(item => item.status !== "rejected" && hasTraceableSpecEvidence(item) && matchesSpecExtractionMethod(item)).sort((a, b) =>
+    compareSpecExtractionMethod(a, b, sortMode) ||
+    (["ai-first", "built-in-first"].includes(sortMode) ? getSpecFindingConfidenceScore(b) - getSpecFindingConfidenceScore(a) : 0)
+  );
+  const preserveMethodOrder = ["ai-first", "built-in-first"].includes(sortMode);
+  const renderedCandidates = getSpecRenderedConfidenceOrder(candidates, preserveMethodOrder);
   const pending = candidates.filter(item => item.status === "pending").length;
   const applied = candidates.filter(item => item.status === "accepted").length;
   summary.textContent = candidates.length ? `${pending} awaiting review · ${applied} applied to the template` : "No template values extracted yet.";
@@ -2703,17 +2757,14 @@ function renderExtractedSpecFillIns() {
     const actions = item.status === "accepted" ? `<button type="button" class="secondary" onclick="undoExtractedSpecFillIn('${item.id}')">Undo Apply</button>` : `<button type="button" onclick="applyExtractedSpecFillIn('${item.id}')" ${comparison.conflict && !comparison.canReplace ? "disabled" : ""}>${comparison.conflict ? comparison.canReplace ? "Replace Existing" : "Review in Part" : "Apply to Template"}</button><button type="button" class="delete-btn" onclick="rejectExtractedSpecFillIn('${item.id}')">Reject</button>`;
     return `<article class="spec-extracted-fill-card ${item.status} ${comparison.conflict ? "has-conflict" : ""}"><div class="spec-extracted-fill-heading"><div><span class="spec-status ${comparison.conflict ? "conflict" : item.status}">${badge}</span><strong>${escapeSpec(item.label)}</strong><code>${escapeSpec(item.placeholder)}</code></div><span class="spec-confidence spec-confidence-badge ${getSpecFindingConfidenceClass(item)}">${escapeSpec(formatSpecFindingConfidence(item))} confidence</span></div>${conflictMarkup}<p class="spec-extracted-value"><span>Extracted value</span>${escapeSpec(item.value)}</p><small>${escapeSpec(item.sourceDocument)} · ${escapeSpec(item.sourcePage)}</small><details><summary>Exact source evidence</summary><p>${escapeSpec(item.evidence)}</p></details><div class="button-row"><button type="button" class="secondary" onclick="openSpecFindingSourcePage('fill','${item.id}')">View Source Page</button>${actions}</div></article>`;
   };
-  list.innerHTML = renderSpecConfidenceTiers(candidates, renderFillCard);
+  list.innerHTML = renderSpecConfidenceTiers(candidates, renderFillCard, preserveMethodOrder);
   Array.from(list.querySelectorAll(".spec-extracted-fill-card")).forEach((card, index) => {
     const item = renderedCandidates[index];
     if (!item) return;
-    if (item.detectionMethod === "Local Qwen3-VL extraction") {
-      const badge = document.createElement("span");
-      badge.className = "spec-ai-origin-badge";
-      badge.textContent = "AI Extracted";
-      badge.title = "Created by Local AI and requires engineer review";
-      card.querySelector(".spec-extracted-fill-heading > div")?.prepend(badge);
-    }
+    const methodBadge = document.createElement("span");
+    methodBadge.className = `spec-ai-origin-badge ${isSpecAiExtractedFinding(item) ? "is-ai" : "is-built-in"}`;
+    methodBadge.textContent = isSpecAiExtractedFinding(item) ? "AI Extracted" : "Built-in Extracted";
+    card.querySelector(".spec-extracted-fill-heading > div")?.prepend(methodBadge);
     const placement = getExtractedSpecFillPlacementPreview(item);
     const preview = document.createElement("div");
     preview.className = "spec-inline-placement-preview spec-fill-placement-preview";
@@ -3165,6 +3216,7 @@ function isSpecSuggestionVisible(item) {
   const statusValue = document.getElementById("specSuggestionStatus")?.value || "";
   const searchValue = String(document.getElementById("specSuggestionSearch")?.value || "").trim().toLowerCase();
   if (statusValue && item.status !== statusValue) return false;
+  if (!matchesSpecExtractionMethod(item)) return false;
   if (!searchValue) return true;
   const destination = getSpecSuggestionDestination(item);
   return [item.equipmentContext, item.text, item.sourceDocument, item.sourcePage, destination.article, destination.title].some(value => String(value || "").toLowerCase().includes(searchValue));
@@ -3174,15 +3226,22 @@ function clearSpecSuggestionFilters() {
   const search = document.getElementById("specSuggestionSearch");
   const status = document.getElementById("specSuggestionStatus");
   const sort = document.getElementById("specSuggestionSort");
+  const method = document.getElementById("specSuggestionMethod");
   if (search) search.value = "";
   if (status) status.value = "";
   if (sort) sort.value = "confidence";
+  if (method) method.value = "";
+  renderSpecSourceReviewResults();
+}
+
+function renderSpecSourceReviewResults() {
+  renderSpecComponents();
+  renderExtractedSpecFillIns();
   renderSpecSourceSuggestions();
 }
 
 function refreshSpecSourceReview() {
-  renderExtractedSpecFillIns();
-  renderSpecSourceSuggestions();
+  renderSpecSourceReviewResults();
   renderSpecificationReview();
   updateSpecificationFillIndicators();
   touchSpecificationProject();
@@ -3248,7 +3307,8 @@ function cancelSpecLocalAiAnalysis() {
     button.disabled = true;
     button.textContent = "Stopping...";
   }
-  recordSpecLocalAiMessage("Cancel requested by user. Finishing the current interruption and saving results extracted so far.");
+  setSpecSourceStatus("Stopping Local AI now and saving results extracted so far.", "is-loading");
+  recordSpecLocalAiMessage("Cancel requested by user. The active browser and Ollama requests were interrupted immediately.");
 }
 
 function formatSpecLocalAiElapsed(milliseconds) {
@@ -3264,6 +3324,11 @@ function updateSpecLocalAiElapsed(updateSharedStatus = true) {
   const elapsed = document.getElementById("specAiElapsed");
   if (elapsed) elapsed.textContent = formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt);
   if (updateSharedStatus) saveSpecAnalysisMenuStatus("running", document.getElementById("specSourceStatus")?.textContent || "");
+}
+
+function getSpecSourceReviewAvailabilityMessage(equipment = 0, fills = 0, clauses = 0) {
+  const total = Number(equipment || 0) + Number(fills || 0) + Number(clauses || 0);
+  return total ? ` ${total} new result${total === 1 ? " is" : "s are"} available in Source Review.` : "";
 }
 
 function recordSpecLocalAiMessage(message) {
@@ -3308,6 +3373,7 @@ function startSpecLocalAiTimer(message, activity = "ai") {
   specLocalAiErrorCount = 0;
   specLocalAiUnresolvedCount = 0;
   specLocalAiMenuLastSync = 0;
+  document.querySelector('[data-spec-tab="suggestions"]')?.classList.add("is-updating");
   localStorage.removeItem(SPEC_LOCAL_AI_MENU_STATUS_KEY);
   document.getElementById("specAiMessageHistory")?.replaceChildren();
   updateSpecLocalAiMessageSummary();
@@ -3332,6 +3398,7 @@ function stopSpecLocalAiTimer() {
   saveSpecAnalysisMenuStatus("done", finalMessage);
   specLocalAiStartedAt = 0;
   specLocalAiActiveSource = "";
+  document.querySelector('[data-spec-tab="suggestions"]')?.classList.remove("is-updating");
   document.getElementById("specAiCancelButton")?.classList.add("hidden");
   updateSpecLocalAiMessageSummary();
 }
@@ -3417,6 +3484,7 @@ async function analyzeSpecDocumentWithLocalAI(id) {
   const focusedAnalysis = analysisChoice.focused;
   specLocalAiActiveSource = file.name;
   startSpecLocalAiTimer(`Preparing ${file.name}...`, "ai");
+  recordSpecLocalAiMessage(`Source Review will update after each completed batch while ${file.name} continues analyzing. You can open it whenever you are ready.`);
   try {
     const source = await createSpecAiAnalysisSource(file);
     const completedPages = new Set((specState.aiAudit || [])
@@ -3426,6 +3494,15 @@ async function analyzeSpecDocumentWithLocalAI(id) {
       ))
       .map(entry => entry.sourcePage));
     const detailCandidateUnits = new Map();
+    const builtInEquipmentCountByPage = new Map();
+    (specState.components || []).filter(item => item.sourceDocumentId === id && !item.aiInvolved && item.sourcePage).forEach(item => {
+      builtInEquipmentCountByPage.set(item.sourcePage, (builtInEquipmentCountByPage.get(item.sourcePage) || 0) + 1);
+    });
+    const pagesWithBuiltInFindings = new Set([
+      ...(specState.components || []).filter(item => item.sourceDocumentId === id && !item.aiInvolved).map(item => item.sourcePage),
+      ...(specState.fillInSuggestions || []).filter(item => item.documentId === id && item.detectionMethod !== "Local Qwen3-VL extraction").map(item => item.sourcePage),
+      ...(specState.sourceSuggestions || []).filter(item => item.documentId === id && item.extractionKind !== "Local Qwen3-VL engineering extraction").map(item => item.sourcePage)
+    ].filter(Boolean));
     const existingDetailPages = Array.from(new Set((specState.components || [])
       .filter(item => item.sourceDocumentId === id && item.aiInvolved && !item.detailedAt && item.sourcePage)
       .map(item => item.sourcePage))).slice(0, 24);
@@ -3444,10 +3521,13 @@ async function analyzeSpecDocumentWithLocalAI(id) {
     }
     let equipmentAdded = 0, fillsAdded = 0, clausesAdded = 0, skipped = 0, timedOut = 0, cursor = 0, queuedUnit = null;
     const deferredUnits = [];
+    const equipmentCompletionUnits = new Map();
     const seenText = new Set();
     while (cursor < pendingIndexes.length || queuedUnit) {
       const batch = [];
       let batchMode = "";
+      let batchTextCharacters = 0;
+      let batchHasBuiltInFindings = false;
       while ((cursor < pendingIndexes.length || queuedUnit) && batch.length < (batchMode === "text" ? SPEC_AI_TEXT_BATCH_SIZE : SPEC_AI_VISUAL_BATCH_SIZE)) {
         const unit = queuedUnit || await source.getUnit(pendingIndexes[cursor++]);
         queuedUnit = null;
@@ -3472,8 +3552,22 @@ async function analyzeSpecDocumentWithLocalAI(id) {
         } else {
           const unitMode = unit.imageBase64 ? "vision" : "text";
           if (batchMode && unitMode !== batchMode) { queuedUnit = unit; break; }
+          const unitHasBuiltInFindings = unitMode === "text" && pagesWithBuiltInFindings.has(unit.sourcePage);
+          if (unitMode === "text" && batch.length >= 3 && (batchHasBuiltInFindings || unitHasBuiltInFindings)) {
+            queuedUnit = unit;
+            break;
+          }
+          const unitTextCharacters = unitMode === "text"
+            ? Math.min(SPEC_AI_TEXT_PAGE_CHARACTER_LIMIT, String(unit.text || "").length)
+            : 0;
+          if (unitMode === "text" && batch.length && batchTextCharacters + unitTextCharacters > SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT) {
+            queuedUnit = unit;
+            break;
+          }
           batchMode = unitMode;
           batch.push(unit);
+          batchTextCharacters += unitTextCharacters;
+          batchHasBuiltInFindings ||= unitHasBuiltInFindings;
         }
       }
       if (!batch.length) continue;
@@ -3498,35 +3592,108 @@ async function analyzeSpecDocumentWithLocalAI(id) {
         const result = results[batchIndex];
         const counts = importSpecLocalAiResult(result, record, unit.sourcePage);
         if (counts.equipment > 0) detailCandidateUnits.set(unit.sourcePage, unit);
+        const builtInEquipmentCount = builtInEquipmentCountByPage.get(unit.sourcePage) || 0;
+        const equipmentSignalScore = getSpecAiEquipmentSignalScore(unit.text);
+        const likelyMissedEquipment = counts.equipment === 0 && equipmentSignalScore >= 3;
+        if (batchMode === "text" && (counts.equipment < builtInEquipmentCount || likelyMissedEquipment)) {
+          equipmentCompletionUnits.set(unit.sourcePage, {
+            unit,
+            priority: (builtInEquipmentCount - counts.equipment) * 10 + equipmentSignalScore + (counts.clauses >= 6 ? 3 : 0)
+          });
+        }
         equipmentAdded += counts.equipment; fillsAdded += counts.fills; clausesAdded += counts.clauses;
         batchEquipment += counts.equipment; batchFills += counts.fills; batchClauses += counts.clauses;
         specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: result.visualTimedOut ? "Local visual review timed out" : "Local source analyzed", user: result.user, provider: "ollama-local", model: result.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: result.visualTimedOut ? "Manual page review required" : "Pending engineer review", batchSize: batch.length });
         if (!result.visualTimedOut) completedPages.add(unit.sourcePage);
       });
-      recordSpecLocalAiMessage(`Completed ${pageRange} in ${formatSpecLocalAiElapsed(performance.now() - batchStartedAt)}. Added ${batchEquipment} equipment, ${batchFills} fill-in, and ${batchClauses} clause suggestion(s).`);
+      recordSpecLocalAiMessage(`Completed ${pageRange} in ${formatSpecLocalAiElapsed(performance.now() - batchStartedAt)}. Added ${batchEquipment} equipment, ${batchFills} fill-in, and ${batchClauses} clause suggestion(s).${getSpecSourceReviewAvailabilityMessage(batchEquipment, batchFills, batchClauses)}`);
       saveSpecificationProject(false);
       renderSpecLocalAiSavedResults();
     }
-    if (deferredUnits.length) recordSpecLocalAiMessage(`Normal pass complete. Retrying ${deferredUnits.length} difficult page(s) individually once, then continuing past any unresolved pages.`);
-    for (let index = 0; index < deferredUnits.length; index += 1) {
-      const { unit, firstError } = deferredUnits[index];
-      setSpecSourceStatus(`Recovery review ${index + 1} of ${deferredUnits.length} | ${unit.sourcePage} | Individual page`, "is-loading");
-      const retryStartedAt = performance.now();
-      try {
-        const result = await SpecificationLocalAI.analyze({ ...unit, sourceName: file.name });
-        const counts = importSpecLocalAiResult(result, record, unit.sourcePage);
-        if (counts.equipment > 0) detailCandidateUnits.set(unit.sourcePage, unit);
-        equipmentAdded += counts.equipment; fillsAdded += counts.fills; clausesAdded += counts.clauses;
-        completedPages.add(unit.sourcePage);
-        specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source analyzed", user: result.user, provider: "ollama-local", model: result.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: "Recovered after deferred individual review", batchSize: 1, recoveryAttempt: true });
-        recordSpecLocalAiMessage(`Recovered ${unit.sourcePage} individually in ${formatSpecLocalAiElapsed(performance.now() - retryStartedAt)}. Added ${counts.equipment} equipment, ${counts.fills} fill-in, and ${counts.clauses} clause suggestion(s).`);
-      } catch (retryError) {
-        if (/stopped by user/i.test(retryError.message)) throw retryError;
-        timedOut += 1;
-        specLocalAiUnresolvedCount += 1;
-        specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source unresolved", user: user.email || user.id, provider: "ollama-local", model: SpecificationLocalAI.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: "Retry later or review manually", firstError, errorStatus: retryError.message });
-        recordSpecLocalAiMessage(`${unit.sourcePage} failed its individual recovery attempt and was skipped for this run. Original issue: ${firstError}. Individual retry issue: ${retryError.message}. It remains available for a later retry or manual review.`);
+    const saveRecoveredResult = (unit, result, batchSize, recoveryLabel) => {
+      const counts = importSpecLocalAiResult(result, record, unit.sourcePage);
+      if (counts.equipment > 0) detailCandidateUnits.set(unit.sourcePage, unit);
+      equipmentAdded += counts.equipment; fillsAdded += counts.fills; clausesAdded += counts.clauses;
+      completedPages.add(unit.sourcePage);
+      specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source analyzed", user: result.user, provider: "ollama-local", model: result.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: recoveryLabel, batchSize, recoveryAttempt: true });
+      return counts;
+    };
+    if (deferredUnits.length) recordSpecLocalAiMessage(`Normal pass complete. Retrying ${deferredUnits.length} difficult page(s) in smaller groups of up to 3. Only groups that still fail will be reviewed one page at a time.`);
+    let recoveryCompleted = 0;
+    for (let offset = 0; offset < deferredUnits.length; offset += 3) {
+      const recoveryGroup = deferredUnits.slice(offset, offset + 3);
+      let groupRecovered = false;
+      if (recoveryGroup.length > 1) {
+        const groupLabel = recoveryGroup.map(item => item.unit.sourcePage).join(", ");
+        setSpecSourceStatus(`Recovery review ${recoveryCompleted + 1}-${recoveryCompleted + recoveryGroup.length} of ${deferredUnits.length} | Smaller batch: ${groupLabel}`, "is-loading");
+        const groupStartedAt = performance.now();
+        try {
+          const groupResults = await SpecificationLocalAI.analyzeBatch({ units: recoveryGroup.map(item => item.unit), sourceName: file.name });
+          let groupEquipment = 0, groupFills = 0, groupClauses = 0;
+          recoveryGroup.forEach((item, index) => {
+            const counts = saveRecoveredResult(item.unit, groupResults[index], recoveryGroup.length, "Recovered after smaller-batch review");
+            groupEquipment += counts.equipment; groupFills += counts.fills; groupClauses += counts.clauses;
+          });
+          recoveryCompleted += recoveryGroup.length;
+          groupRecovered = true;
+          recordSpecLocalAiMessage(`Recovered ${groupLabel} as a smaller batch in ${formatSpecLocalAiElapsed(performance.now() - groupStartedAt)}. Added ${groupEquipment} equipment, ${groupFills} fill-in, and ${groupClauses} clause suggestion(s).${getSpecSourceReviewAvailabilityMessage(groupEquipment, groupFills, groupClauses)}`);
+        } catch (groupError) {
+          if (/stopped by user/i.test(groupError.message)) throw groupError;
+          if (/stopped responding|background service|fetch failed/i.test(groupError.message)) throw groupError;
+          recordSpecLocalAiMessage(`The smaller recovery batch for ${groupLabel} still could not complete (${groupError.message}). Retrying only these pages individually.`);
+        }
       }
+      if (!groupRecovered) {
+        for (const { unit, firstError } of recoveryGroup) {
+          setSpecSourceStatus(`Recovery review ${recoveryCompleted + 1} of ${deferredUnits.length} | ${unit.sourcePage} | Individual page`, "is-loading");
+          const retryStartedAt = performance.now();
+          try {
+            const result = await SpecificationLocalAI.analyze({ ...unit, sourceName: file.name });
+            const counts = saveRecoveredResult(unit, result, 1, "Recovered after deferred individual review");
+            recordSpecLocalAiMessage(`Recovered ${unit.sourcePage} individually in ${formatSpecLocalAiElapsed(performance.now() - retryStartedAt)}. Added ${counts.equipment} equipment, ${counts.fills} fill-in, and ${counts.clauses} clause suggestion(s).${getSpecSourceReviewAvailabilityMessage(counts.equipment, counts.fills, counts.clauses)}`);
+          } catch (retryError) {
+            if (/stopped by user/i.test(retryError.message)) throw retryError;
+            timedOut += 1;
+            specLocalAiUnresolvedCount += 1;
+            specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local source unresolved", user: user.email || user.id, provider: "ollama-local", model: SpecificationLocalAI.model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: "Retry later or review manually", firstError, errorStatus: retryError.message });
+            recordSpecLocalAiMessage(`${unit.sourcePage} failed its individual recovery attempt and was skipped for this run. Original issue: ${firstError}. Individual retry issue: ${retryError.message}. It remains available for a later retry or manual review.`);
+          }
+          recoveryCompleted += 1;
+        }
+      }
+      saveSpecificationProject(false);
+      renderSpecLocalAiSavedResults();
+    }
+    const completionCandidates = Array.from(equipmentCompletionUnits.values())
+      .sort((left, right) => right.priority - left.priority)
+      .slice(0, 12)
+      .map(candidate => candidate.unit);
+    if (completionCandidates.length && window.SpecificationLocalAI?.analyzeEquipmentDiscovery) {
+      recordSpecLocalAiMessage(`Starting a short Equipment Completion Check on ${completionCandidates.length} high-signal page(s) where the general pass may have favored clauses over equipment.`);
+      let completionAdded = 0;
+      for (let offset = 0; offset < completionCandidates.length; offset += 3) {
+        const group = completionCandidates.slice(offset, offset + 3);
+        const groupLabel = group.map(unit => unit.sourcePage).join(", ");
+        setSpecSourceStatus(`Equipment Completion Check ${offset + 1}-${offset + group.length} of ${completionCandidates.length} | ${groupLabel}`, "is-loading");
+        const completionStartedAt = performance.now();
+        try {
+          const results = await SpecificationLocalAI.analyzeEquipmentDiscovery({ units: group, sourceName: file.name });
+          let groupAdded = 0;
+          group.forEach((unit, index) => {
+            const counts = importSpecLocalAiResult(results[index], record, unit.sourcePage);
+            if (counts.equipment > 0) detailCandidateUnits.set(unit.sourcePage, unit);
+            equipmentAdded += counts.equipment;
+            completionAdded += counts.equipment;
+            groupAdded += counts.equipment;
+            specState.aiAudit.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action: "Local equipment completion checked", user: results[index].user, provider: "ollama-local", model: results[index].model, documentId: id, sourcePage: unit.sourcePage, dataSent: true, destination: "Company-controlled local AI", suggestionStatus: "Pending engineer review", batchSize: group.length });
+          });
+          recordSpecLocalAiMessage(`Equipment Completion Check finished ${groupLabel} in ${formatSpecLocalAiElapsed(performance.now() - completionStartedAt)}. Added ${groupAdded} previously missed equipment record(s).${getSpecSourceReviewAvailabilityMessage(groupAdded, 0, 0)}`);
+        } catch (completionError) {
+          if (/stopped by user/i.test(completionError.message)) throw completionError;
+          recordSpecLocalAiMessage(`Equipment Completion Check skipped ${groupLabel} after an issue (${completionError.message}). The normal analysis results remain saved.`);
+        }
+      }
+      recordSpecLocalAiMessage(`Equipment Completion Check added ${completionAdded} equipment record${completionAdded === 1 ? "" : "s"} without repeating the full document analysis.`);
       saveSpecificationProject(false);
       renderSpecLocalAiSavedResults();
     }
@@ -3558,11 +3725,14 @@ function getSpecLocalAiSavedCounts(documentId) {
 }
 
 function renderSpecLocalAiSavedResults() {
-  renderSpecDocuments();
-  renderSpecComponents();
-  renderExtractedSpecFillIns();
-  renderSpecSourceSuggestions();
-  renderSpecificationReview();
+  const activeTab = document.querySelector("[data-spec-tab].active")?.dataset.specTab || "sources";
+  if (activeTab === "sources") renderSpecDocuments();
+  if (activeTab === "suggestions") {
+    renderSpecComponents();
+    renderExtractedSpecFillIns();
+    renderSpecSourceSuggestions();
+  }
+  if (activeTab === "review") renderSpecificationReview();
 }
 
 async function runSpecDetailedEquipmentPass(units, record, sourceName) {
@@ -3732,6 +3902,21 @@ function isLikelySpecAiEngineeringPage(text) {
   ];
   const score = signals.reduce((total, pattern) => total + (pattern.test(value) ? 1 : 0), 0);
   return score >= 2 || (score >= 1 && value.length < 900);
+}
+
+function getSpecAiEquipmentSignalScore(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return 0;
+  const signals = [
+    /\b(?:manufacturer|manufactured by|make)\b/i,
+    /\b(?:model|model number|model no\.?)\b/i,
+    /\b(?:part number|part no\.?|catalog number)\b/i,
+    /\b(?:equipment|assembly|product description|components?|included)\b/i,
+    /\b(?:motor|pump|panel|controller|sensor|tank|blower|dryer|brush|arch|conveyor|reclaim)\b/i,
+    /\b(?:voltage|phase|amperage|horsepower|flow|pressure|capacity|dimensions?)\b/i,
+    /\b\d+(?:\.\d+)?\s*(?:v|vac|a|amp|hp|kw|gpm|psi|cfm|rpm|hz|inch|inches|ft|feet|mm)\b/i
+  ];
+  return signals.reduce((total, pattern) => total + (pattern.test(value) ? 1 : 0), 0);
 }
 
 function promptSpecLocalAiAnalysisMode(fileName) {

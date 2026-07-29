@@ -20,10 +20,18 @@ assert(source.includes("const SPEC_AI_VISUAL_BATCH_SIZE = 3"),
   "Visual Local AI analysis must group pages to avoid one model request per scanned page");
 assert(source.includes("const SPEC_AI_TEXT_BATCH_SIZE = 6"),
   "Text batches must remain small enough for reliable complete structured responses");
+assert(source.includes("const SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT = 16000") &&
+  source.includes("batchTextCharacters + unitTextCharacters > SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT"),
+  "Dense text pages must be split by content size before they overflow a large batch");
 assert(source.includes("const deferredUnits = []"),
   "Difficult Local AI pages must not block the normal document pass");
+assert(source.includes("pagesWithBuiltInFindings") && source.includes("batch.length >= 3") &&
+  source.includes("batchHasBuiltInFindings || unitHasBuiltInFindings"),
+  "Pages already known to contain useful findings must use smaller initial batches instead of failing a large batch first");
 assert(source.includes("Normal pass complete. Retrying"),
-  "Deferred Local AI pages must receive a bounded individual recovery pass");
+  "Deferred Local AI pages must receive a bounded recovery pass");
+assert(source.includes("smaller groups of up to 3") && source.includes("Recovered after smaller-batch review"),
+  "Failed large batches must retry in smaller groups before using slower individual-page recovery");
 assert(source.includes('action: "Local source unresolved"'),
   "Pages that fail individual recovery must be recorded for later or manual review");
 assert(!source.includes("while (history.children.length > 80)"),
@@ -56,10 +64,27 @@ assert(source.includes("function promptDuplicateSpecSourceAction(fileName, exist
   "Duplicate specification sources must ask the user how to proceed");
 assert(source.includes("function runSpecDetailedEquipmentPass(units, record, sourceName)"),
   "Equipment-producing pages must receive a targeted detail enrichment pass");
+assert(!source.includes('showSpecTab("suggestions");\n  recordSpecLocalAiMessage') &&
+  source.includes("Source Review will update after each completed batch"),
+  "Local AI analysis must leave the current step open while explaining that Source Review updates progressively");
+assert(source.includes('if (tab === "suggestions") { renderSpecComponents();'),
+  "Opening Source Review must immediately render progressively extracted equipment");
+assert(source.includes('classList.add("is-updating")') && source.includes('classList.remove("is-updating")'),
+  "Source Review must show and clear its live updating indicator with the analysis lifecycle");
+assert(source.includes("function getSpecSourceReviewAvailabilityMessage") &&
+  source.includes("available in Source Review"),
+  "Completed batches with findings must tell users that results are available in Source Review");
+assert(source.includes("function getSpecAiEquipmentSignalScore(text)") &&
+  source.includes("Equipment Completion Check") &&
+  source.includes(".slice(0, 12)"),
+  "High-signal pages with missed equipment must receive a bounded equipment-only completion check");
 assert(source.includes("useSystemFonts: true") && source.includes("disableFontFace: false"),
   "Specification PDF reading must use available system-font fallbacks");
 assert(source.includes("const selectedUnits = units.slice(0, 24)"),
   "The Detailed Equipment Pass must remain bounded on very large sources");
+assert(source.includes('document.querySelector("[data-spec-tab].active")') &&
+  source.includes('if (activeTab === "sources") renderSpecDocuments()'),
+  "Long analysis runs must not repeatedly rebuild hidden result tabs");
 assert(source.includes("existingDetailPages") && source.includes("!item.detailedAt"),
   "Previously completed sources must be enrichable without repeating their full analysis");
 assert(source.includes("equipmentListCandidate: true"),
@@ -114,9 +139,15 @@ assert(source.includes('sort.value = "confidence"'),
   '"equipment"',
   '"status"',
   '"page"',
-  '"page-descending"'
+  '"page-descending"',
+  '"ai-first"',
+  '"built-in-first"'
 ].forEach(sortMode => assert(source.includes(`sortMode === ${sortMode}`),
   `Source Review is missing comparator logic for ${sortMode}`));
+assert(source.includes("function isSpecAiExtractedFinding(item)") &&
+  source.includes('"AI Extracted" : "Built-in Extracted"') &&
+  source.includes("specSuggestionMethod"),
+  "Every Source Review result must identify and filter its extraction method");
 assert(source.includes("View Source Page"),
   "Visible findings must link to their source-page preview");
 const stylesheet = fs.readFileSync(path.resolve(__dirname, "..", "style.css"), "utf8");

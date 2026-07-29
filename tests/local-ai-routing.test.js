@@ -22,6 +22,8 @@ assert(
 );
 assert(localAiServer.includes("worker-src 'self' blob: https://cdnjs.cloudflare.com"),
   "The local gateway CSP must allow the configured PDF.js worker.");
+assert(localAiServer.includes('req.method === "DELETE"') && localAiServer.includes("activeOllamaControllers"),
+  "Canceling Local AI must abort the active Ollama request on the local gateway.");
 assert(html.includes('pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js?v=3.11.174"'),
   "Specification PDF.js must use the same-origin worker to avoid CSP blob-worker failures.");
 assert(fs.existsSync(path.join(root, "vendor-pdf.worker.min.js")),

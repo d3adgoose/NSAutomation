@@ -58,24 +58,24 @@
     </section>
 
     <details class="card spec-how-to">
-      <summary><strong>How to Use Spec Automation</strong></summary>
+      <summary><strong>How to Build a Specification</strong></summary>
       <div class="instructions-box spec-how-to-content">
         <div class="spec-guidance-callout">
           <strong>Part 1 is the N/S standard general-requirements section.</strong>
           <p>Start with the built-in N/S wording and review every project-specific fill-in before issuing the specification. Save a named template only when you intentionally create an approved reusable variation.</p>
         </div>
 
-        <h3>Recommended four-step workflow</h3>
+        <h3>Four-step workflow</h3>
         <ol>
-          <li><strong>1. Project.</strong> Enter project information and complete the bracketed fields in Part 1, Part 2, and Part 3. Each Part has an <strong>Improve with AI</strong> button for reviewed writing assistance.</li>
-          <li><strong>2. Sources.</strong> Add the manuals, drawings, submittals, specifications, datasheets, Word files, or text files that support this specification. Use <strong>Analyze</strong> for fast text extraction or <strong>Analyze with AI</strong> when visual review is needed.</li>
-          <li><strong>3. Source Review.</strong> Verify every equipment item, fill-in, clause, source citation, and suggested destination. Accept only information confirmed against the source.</li>
-          <li><strong>4. Review &amp; Export.</strong> Resolve missing fill-ins and review warnings, confirm the complete Part 1–3 specification, and export the automatically numbered Word or PDF file.</li>
+          <li><strong>1. Project.</strong> Enter the project information and complete the bracketed fields in Parts 1, 2, and 3.</li>
+          <li><strong>2. Sources.</strong> Add the manuals, drawings, submittals, and other supporting files. Files receive an automatic text review. Use <strong>Analyze with AI</strong> when a source also needs visual and detailed engineering review. You can stay on your current step while analysis runs.</li>
+          <li><strong>3. Source Review.</strong> The green <strong>Updating</strong> marker pulses while new findings are arriving. Activity messages say when results are available, so you can open Source Review and begin checking them before the complete document finishes. Compare each finding with its source page, then accept, edit, or reject it.</li>
+          <li><strong>4. Review &amp; Export.</strong> Resolve remaining fill-ins and warnings, read the complete specification, and create the Word or PDF file.</li>
         </ol>
 
         <div class="spec-guidance-callout is-note">
-          <strong>Using Improve with AI</strong>
-          <p>Describe the writing change in the chat-style request box and select the arrow or press Enter. Shift+Enter adds a new line. Review the GitHub-style red and green comparison, choose Accept or Revert for each change, then select Accept Changes. The three most recent revisions remain in Writing History.</p>
+          <strong>Revising the wording</strong>
+          <p>Select <strong>Improve with AI</strong>, describe the change, and press Enter. Review each proposed line, choose Accept or Revert, and then select Accept Changes. Nothing is applied without review. The three most recent revisions remain in Writing History.</p>
         </div>
 
         <div class="spec-guidance-callout">
@@ -84,13 +84,13 @@
         </div>
 
         <div class="spec-guidance-callout is-note">
-          <strong>What Local AI does</strong>
-          <p>Qwen3-VL reads each selected source page for mechanical, electrical, plumbing, controls, equipment, part numbers, ratings, dimensions, utilities, and specification wording. Results are marked for review and never enter the issued specification until a user accepts them.</p>
+          <strong>Document analysis</strong>
+          <p>The local document reader checks text and visual pages for equipment, part numbers, ratings, dimensions, utilities, responsibilities, warranty terms, and specification requirements. Results are saved after each completed batch. The activity message adds <strong>Available in Source Review</strong> whenever that batch finds something, and every result remains pending until a user accepts it.</p>
         </div>
 
         <div class="spec-guidance-callout">
-          <strong>Set up Local AI once on each computer</strong>
-          <p>You do not need programming experience. Complete these steps once on the Windows computer that will use Local AI.</p>
+          <strong>One-time computer setup</strong>
+          <p>Complete these steps once on each Windows computer that will analyze documents.</p>
           <ol class="spec-local-ai-setup-steps">
             <li>Install <a href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">Ollama for Windows</a>. Use its normal Windows installer.</li>
             <li>Install the <strong>LTS</strong> version from the <a href="https://nodejs.org/en/download" target="_blank" rel="noopener noreferrer">Node.js download page</a>. Keep the normal installation choices.</li>
@@ -215,7 +215,7 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
     <nav class="spec-tabs" aria-label="Specification workflow">
       <button class="active" data-spec-tab="project">1. Project</button>
       <button data-spec-tab="sources">2. Sources</button>
-      <button data-spec-tab="suggestions">3. Source Review</button>
+      <button data-spec-tab="suggestions"><span>3. Source Review</span><span class="spec-tab-live-indicator" aria-hidden="true">Updating</span></button>
       <button data-spec-tab="review">4. Review &amp; Export</button>
     </nav>
 
@@ -307,7 +307,8 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
       <div class="spec-review-toolbar">
         <label><span>Search</span><input id="specSuggestionSearch" type="search" placeholder="Equipment, wording, source, or article" oninput="renderSpecSourceSuggestions()"></label>
         <label><span>Show</span><select id="specSuggestionStatus" onchange="renderSpecSourceSuggestions()"><option value="">All review items</option><option value="pending">Awaiting review</option><option value="accepted">Accepted</option></select></label>
-        <label><span>Sort</span><select id="specSuggestionSort" onchange="renderSpecSourceSuggestions()"><option value="confidence" selected>Confidence: high to low</option><option value="confidence-ascending">Confidence: low to high</option><option value="destination">Destination article</option><option value="source">Original extraction order</option><option value="source-name">Source filename A-Z</option><option value="equipment">Equipment A-Z</option><option value="status">Review status</option><option value="page">Source page: low to high</option><option value="page-descending">Source page: high to low</option></select></label>
+        <label><span>Method</span><select id="specSuggestionMethod" onchange="renderSpecSourceReviewResults()"><option value="">AI and built-in</option><option value="ai">AI Extracted only</option><option value="built-in">Built-in Extracted only</option></select></label>
+        <label><span>Sort</span><select id="specSuggestionSort" onchange="renderSpecSourceReviewResults()"><option value="confidence" selected>Confidence: high to low</option><option value="confidence-ascending">Confidence: low to high</option><option value="ai-first">AI Extracted first</option><option value="built-in-first">Built-in Extracted first</option><option value="destination">Destination article</option><option value="source">Original extraction order</option><option value="source-name">Source filename A-Z</option><option value="equipment">Equipment A-Z</option><option value="status">Review status</option><option value="page">Source page: low to high</option><option value="page-descending">Source page: high to low</option></select></label>
         <button type="button" class="secondary" onclick="clearSpecSuggestionFilters()">Clear Filters</button>
       </div>
       <div id="specEquipmentApprovalPanel" class="spec-direct-fill-panel">
@@ -384,10 +385,10 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
 
   <script src="common.js"></script>
   <script src="supabaseClient.js"></script>
-  <script src="specification-ai.js?v=20260728-detailed-equipment-pass"></script>
+  <script src="specification-ai.js?v=20260729-fast-cancel"></script>
   <script src="specification-utils.js?v=20260724-refactor"></script>
   <script src="specification-company-library.js?v=20260727-company-knowledge-title-prefill"></script>
-  <script src="specification.js?v=20260728-same-tab-navigation"></script>
+  <script src="specification.js?v=20260729-source-review-messages"></script>
   <script src="global-auth.js?v=20260722-database-login-style"></script>
   <script src="navigation.js?v=20260728-spec-status-done"></script>
 </body>
