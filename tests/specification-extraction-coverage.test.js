@@ -16,11 +16,11 @@ assert(source.includes("Number(item.confidence || 0) >= 0.5"),
   "Reviewable AI equipment and clauses must not be discarded too aggressively");
 assert(source.includes("function startSpecBuiltInAnalysisTimer()"),
   "Built-in Analyze must show its own elapsed progress");
-assert(source.includes("const SPEC_AI_VISUAL_BATCH_SIZE = 3"),
+assert(source.includes("const SPEC_AI_VISUAL_BATCH_SIZE = 4"),
   "Visual Local AI analysis must group pages to avoid one model request per scanned page");
-assert(source.includes("const SPEC_AI_TEXT_BATCH_SIZE = 6"),
-  "Text batches must remain small enough for reliable complete structured responses");
-assert(source.includes("const SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT = 16000") &&
+assert(source.includes("const SPEC_AI_TEXT_BATCH_SIZE = 8"),
+  "Text batches must balance higher throughput with complete structured responses");
+assert(source.includes("const SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT = 24000") &&
   source.includes("batchTextCharacters + unitTextCharacters > SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT"),
   "Dense text pages must be split by content size before they overflow a large batch");
 assert(source.includes("const deferredUnits = []"),

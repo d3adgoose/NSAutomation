@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Peer Review</title>
+  <link rel="stylesheet" href="style.css?v=20260729-peer-review" />
+  <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js";</script>
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <div class="hamburger-container">
+    <button id="hamburgerBtn" class="hamburger" aria-label="Open navigation" aria-expanded="false">☰</button>
+    <nav id="sideMenu" class="side-menu">
+      <a href="index.html">Home</a><a href="database.html">Database</a><a href="parts-library.html">Parts Library</a>
+      <a href="converter.html">Converter</a><a href="peer-review.html">Peer Review</a><a href="submittal.html">Submittal</a>
+      <a href="om.html">O&amp;M</a><a href="specification.html">Spec</a>
+      <a href="https://www.getesr.com/?sort=project_number_asc" target="_blank" rel="noopener">ESR</a>
+    </nav>
+  </div>
+  <header><h1>Peer Review</h1><p>Find potential drawing-package inconsistencies with local, rule-based checks.</p></header>
+  <main class="peer-review-main">
+    <section class="card" id="peerReviewLanding">
+      <div class="peer-section-heading"><div><h2>Choose a Review Type</h2><p>Reviews support consistency checking and correction tracking; they do not determine whether a design is correct.</p></div></div>
+      <div class="peer-type-grid">
+        <button class="peer-type-card" type="button" onclick="startPeerReview('initial')"><span class="peer-card-icon">I</span><strong>Initial Review</strong><small>Drawing quality and completeness</small></button>
+        <button class="peer-type-card" type="button" onclick="startPeerReview('equipment')"><span class="peer-card-icon">E</span><strong>Equipment Review</strong><small>Equipment schedules and values</small></button>
+        <button class="peer-type-card is-disabled" type="button" disabled><span class="peer-badge">Coming Soon</span><strong>Electrical Review</strong><small>Future rule set</small></button>
+        <button class="peer-type-card is-disabled" type="button" disabled><span class="peer-badge">Coming Soon</span><strong>Plumbing Review</strong><small>Future rule set</small></button>
+      </div>
+      <div class="peer-saved-heading"><h3>Saved Reviews</h3><button class="secondary" type="button" onclick="renderPeerSavedReviews()">Refresh</button></div>
+      <div id="peerSavedReviews" class="peer-saved-list"><p>No saved reviews yet.</p></div>
+    </section>
+
+    <div id="peerWorkspace" class="hidden">
+      <section class="card peer-review-summary">
+        <div><span id="peerReviewTypeBadge" class="peer-badge"></span><h2 id="peerReviewTitle">New Review</h2><p id="peerReviewMeta"></p></div>
+        <button class="secondary" type="button" onclick="closePeerReview()">Back to Reviews</button>
+      </section>
+      <nav class="peer-step-nav" aria-label="Review workflow">
+        <button data-peer-step="setup" onclick="showPeerStep('setup')">1. Setup</button><button data-peer-step="pages" onclick="showPeerStep('pages')">2. Pages</button>
+        <button data-peer-step="equipment" onclick="showPeerStep('equipment')">3. Equipment</button><button data-peer-step="findings" onclick="showPeerStep('findings')">4. Findings</button>
+        <button data-peer-step="checklist" onclick="showPeerStep('checklist')">5. Checklist</button><button data-peer-step="fixes" onclick="showPeerStep('fixes')">6. Fix List</button>
+      </nav>
+
+      <section id="peerStep-setup" class="card peer-step-panel">
+        <h2>Review Setup</h2><div class="peer-form-grid"><label>Existing project (optional)<select id="peerProjectSelect"><option value="">No project selected</option></select></label>
+        <label>Engineering PDF<input id="peerPdfUpload" type="file" accept="application/pdf,.pdf" /></label></div>
+        <div id="peerDropZone" class="drop-zone upload-drop-zone"><p><strong>Drag &amp; Drop One Engineering PDF Here</strong></p><p>Processing and storage stay in this browser.</p></div>
+        <p id="peerUploadStatus" class="warranty-status" role="status" aria-live="polite">Choose a PDF to begin.</p>
+      </section>
+
+      <section id="peerStep-pages" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Pages &amp; Categories</h2><p>Every page defaults to Drawing. Change categories before running checks.</p></div><button type="button" onclick="runPeerChecks()">Run Automatic Checks</button></div><div id="peerPageGrid" class="peer-page-grid"></div></section>
+      <section id="peerStep-equipment" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Extracted Equipment Table</h2><p>Review and edit extracted values before validation. Only detected columns are checked.</p></div><div class="button-row"><button class="secondary" onclick="addPeerEquipmentRow()">Add Row</button><button onclick="runPeerChecks()">Validate</button></div></div><div class="table-scroll"><table class="peer-equipment-table"><thead id="peerEquipmentHead"></thead><tbody id="peerEquipmentBody"></tbody></table></div><p id="peerEquipmentHint" class="peer-hint"></p></section>
+      <section id="peerStep-findings" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Findings <span id="peerFindingCount">(0)</span></h2><p>Automatic results are possible inconsistencies for reviewer confirmation.</p></div><button class="secondary" onclick="addPeerManualFinding()">Add General Comment</button></div><div class="table-scroll"><table><thead><tr><th>Severity</th><th>Equipment Tag</th><th>Issue</th><th>Equipment List Value</th><th>Compared Value</th><th>Page</th><th>Status</th><th>Comments</th></tr></thead><tbody id="peerFindingsBody"></tbody></table></div></section>
+      <section id="peerStep-checklist" class="card peer-step-panel hidden"><h2>Manual Checklist</h2><div id="peerChecklist"></div></section>
+      <section id="peerStep-fixes" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Fix List</h2><p>Completed items remain visible in review history.</p></div></div><div class="peer-filter-row"><input id="peerFixSearch" type="search" placeholder="Search fixes" oninput="renderPeerFixList()" /><select id="peerFixFilter" onchange="renderPeerFixList()"><option value="all">All statuses</option></select><select id="peerFixSort" onchange="renderPeerFixList()"><option value="page">Sort by page</option><option value="severity">Sort by severity</option><option value="status">Sort by status</option></select></div><div id="peerFixList" class="peer-fix-list"></div></section>
+      <section class="card peer-actions"><button onclick="savePeerReview()">Save Review</button><button class="secondary" onclick="showPeerStep('fixes')">View Fix List</button><button onclick="completePeerReview()">Mark Review Complete</button><button class="secondary" onclick="openPeerExportModal()">Export Report</button></section>
+    </div>
+  </main>
+  <div id="peerCommentModal" class="modal hidden"><div class="modal-content peer-modal-content" role="dialog" aria-modal="true"><h2 id="peerCommentTitle">Comments</h2><div id="peerCommentThread"></div><label>New comment<textarea id="peerCommentText" rows="3"></textarea></label><label>Resolution note<textarea id="peerResolutionText" rows="2"></textarea></label><div class="button-row"><button onclick="savePeerComment()">Save</button><button class="secondary" onclick="closePeerModal('peerCommentModal')">Cancel</button></div></div></div>
+  <div id="peerExportModal" class="modal hidden"><div class="modal-content peer-modal-content" role="dialog" aria-modal="true"><h2>Export Review Report</h2><p>Exporting is optional. Choose a local file format.</p><div class="button-row"><button onclick="exportPeerPDF()">Export PDF</button><button onclick="exportPeerExcel()">Export Excel</button><button class="secondary" onclick="closePeerModal('peerExportModal')">Cancel</button></div></div></div>
+  <div id="peerToast" class="peer-toast hidden" role="status" aria-live="polite"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabaseClient.js"></script><script src="global-auth.js?v=20260722-database-login-style"></script>
+  <script src="navigation.js?v=20260729-peer-review"></script><script src="ghostAutocomplete.js?v=20260713-library-data"></script><script src="peer-review-utils.js?v=20260729"></script><script src="peer-review.js?v=20260729"></script>
+</body></html>

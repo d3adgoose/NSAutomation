@@ -19,6 +19,9 @@ const SPEC_SOURCE_COMPONENT_METHODS = new Set([
 let specDocumentFiles = new Map();
 let specAiAuthenticatedUser = null;
 let specState = createEmptySpecificationState();
+const specReviewUndoStack = [];
+const specReviewRedoStack = [];
+const SPEC_REVIEW_HISTORY_LIMIT = 20;
 let specAutosaveTimer = null;
 let specLocalAiStartedAt = 0;
 let specLocalAiTimer = null;
@@ -34,10 +37,11 @@ let specBuiltInAnalysisTimer = null;
 const specProjectFieldTimers = new Map();
 const SPEC_AUTOSAVE_DELAY = 900;
 const SPEC_OPTIONAL_EQUIPMENT_WORKFLOW_ENABLED = false;
-const SPEC_AI_TEXT_BATCH_SIZE = 6;
-const SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT = 16000;
+const SPEC_AI_TEXT_BATCH_SIZE = 8;
+const SPEC_AI_TEXT_BATCH_CHARACTER_LIMIT = 24000;
 const SPEC_AI_TEXT_PAGE_CHARACTER_LIMIT = 8000;
-const SPEC_AI_VISUAL_BATCH_SIZE = 3;
+const SPEC_AI_VISUAL_BATCH_SIZE = 4;
+const SPEC_AI_DETAIL_BATCH_SIZE = 3;
 
 function getPart1StarterTemplate() {
   return `1.1 SUMMARY
@@ -355,6 +359,8 @@ function normalizeSpecificationCollections(state) {
 document.addEventListener("DOMContentLoaded", () => {
   bindSpecificationUI();
   loadSpecificationProject();
+  restoreSpecReviewPanelStates();
+  updateSpecReviewHistoryButtons();
   restoreSpecificationSourceFiles();
   updateSpecAiDownloadGuidanceVisibility();
   window.addEventListener("ns-auth-session-changed", updateSpecAiDownloadGuidanceVisibility);
@@ -2363,6 +2369,76 @@ async function openSpecFindingSourcePage(kind, id) {
 // Source review and equipment approval
 // ---------------------------------------------------------------------------
 
+function toggleSpecReviewPanel(bodyId, button) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  const willOpen = body.classList.contains("hidden");
+  body.classList.toggle("hidden", !willOpen);
+  if (button) {
+    button.textContent = willOpen ? "Collapse" : "Expand";
+    button.setAttribute("aria-expanded", String(willOpen));
+  }
+  try { localStorage.setItem(`ns-spec-review-panel:${bodyId}`, willOpen ? "open" : "closed"); } catch {}
+}
+
+function restoreSpecReviewPanelStates() {
+  [["specEquipmentApprovalPanel", "specEquipmentApprovalBody"], ["specExtractedFillPanel", "specExtractedFillBody"]].forEach(([panelId, legacyBodyId]) => {
+    let closed = false;
+    try { closed = localStorage.getItem(`ns-spec-review-panel:${panelId}`) === "closed" || localStorage.getItem(`ns-spec-review-panel:${legacyBodyId}`) === "closed"; } catch {}
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    panel.open = !closed;
+    panel.addEventListener("toggle", () => {
+      try { localStorage.setItem(`ns-spec-review-panel:${panelId}`, panel.open ? "open" : "closed"); } catch {}
+    });
+  });
+}
+
+function getSpecReviewSnapshot(label = "Review change") {
+  return { label, state: JSON.stringify(specState) };
+}
+
+function recordSpecReviewAction(label) {
+  specReviewUndoStack.push(getSpecReviewSnapshot(label));
+  if (specReviewUndoStack.length > SPEC_REVIEW_HISTORY_LIMIT) specReviewUndoStack.shift();
+  specReviewRedoStack.length = 0;
+  updateSpecReviewHistoryButtons();
+}
+
+function restoreSpecReviewSnapshot(snapshot) {
+  if (!snapshot?.state) return false;
+  const saved = JSON.parse(snapshot.state);
+  specState = normalizeSpecificationCollections({ ...createEmptySpecificationState(), ...saved, project: { ...createEmptySpecificationState().project, ...(saved.project || {}) } });
+  applySpecificationStateToUI();
+  renderSpecSourceReviewResults();
+  saveSpecificationProject(false);
+  return true;
+}
+
+function undoSpecReviewAction() {
+  const snapshot = specReviewUndoStack.pop();
+  if (!snapshot) return;
+  specReviewRedoStack.push(getSpecReviewSnapshot(snapshot.label));
+  restoreSpecReviewSnapshot(snapshot);
+  updateSpecReviewHistoryButtons();
+  showSpecMessage("Review Change Undone", `${snapshot.label} was undone. Use Redo to apply it again.`);
+}
+
+function redoSpecReviewAction() {
+  const snapshot = specReviewRedoStack.pop();
+  if (!snapshot) return;
+  specReviewUndoStack.push(getSpecReviewSnapshot(snapshot.label));
+  restoreSpecReviewSnapshot(snapshot);
+  updateSpecReviewHistoryButtons();
+  showSpecMessage("Review Change Redone", `${snapshot.label} was reapplied.`);
+}
+
+function updateSpecReviewHistoryButtons() {
+  const undo = document.getElementById("specReviewUndoButton"), redo = document.getElementById("specReviewRedoButton");
+  if (undo) { undo.disabled = !specReviewUndoStack.length; undo.title = specReviewUndoStack.length ? `Undo: ${specReviewUndoStack.at(-1).label}` : "Nothing to undo"; }
+  if (redo) { redo.disabled = !specReviewRedoStack.length; redo.title = specReviewRedoStack.length ? `Redo: ${specReviewRedoStack.at(-1).label}` : "Nothing to redo"; }
+}
+
 function renderSpecSourceSuggestions() {
   const list = document.getElementById("specSuggestionList");
   const summary = document.getElementById("specSuggestionSummary");
@@ -2472,6 +2548,23 @@ function getTocEquipmentCandidates() {
   );
 }
 
+function normalizeSpecExactEquipmentName(value = "") {
+  // Approval deduplication is intentionally narrow: ignore only capitalization,
+  // whitespace, and hyphens. Any additional or different word stays distinct.
+  return String(value).toLowerCase().replace(/[\s-]+/g, "");
+}
+
+function hideApprovedExactEquipmentDuplicates(candidates = []) {
+  const approvedNames = new Set(candidates
+    .filter(item => item.verificationStatus === "Engineer Approved")
+    .map(item => normalizeSpecExactEquipmentName(item.description))
+    .filter(Boolean));
+  return candidates.filter(item =>
+    item.verificationStatus === "Engineer Approved" ||
+    !approvedNames.has(normalizeSpecExactEquipmentName(item.description))
+  );
+}
+
 function getApprovedTocEquipmentNames() {
   return Array.from(new Set(getTocEquipmentCandidates().filter(item => item.verificationStatus === "Engineer Approved").map(item => String(item.description || "").trim()).filter(Boolean)));
 }
@@ -2501,7 +2594,7 @@ function renderSpecEquipmentApprovals() {
   const summary = document.getElementById("specEquipmentApprovalSummary");
   if (!list || !summary) return;
   const sortMode = document.getElementById("specSuggestionSort")?.value || "confidence";
-  const candidates = getTocEquipmentCandidates().filter(matchesSpecExtractionMethod).sort((a, b) =>
+  const candidates = hideApprovedExactEquipmentDuplicates(getTocEquipmentCandidates()).filter(matchesSpecExtractionMethod).sort((a, b) =>
     compareSpecExtractionMethod(a, b, sortMode) ||
     (["ai-first", "built-in-first"].includes(sortMode) ? getSpecFindingConfidenceScore(b) - getSpecFindingConfidenceScore(a) : 0)
   );
@@ -2567,6 +2660,7 @@ function approveTocEquipment(id) {
   const item = specState.components.find(row => row.id === id);
   if (!item || !item.description.trim()) return;
 
+  recordSpecReviewAction(`Approve equipment: ${item.description}`);
   item.verificationStatus = "Engineer Approved";
   item.approvedBy = specState.project.engineer || "Engineer";
   syncApprovedEquipmentListToPart2();
@@ -2579,6 +2673,7 @@ function undoTocEquipmentApproval(id) {
   const item = specState.components.find(row => row.id === id);
   if (!item) return;
 
+  recordSpecReviewAction(`Undo equipment approval: ${item.description}`);
   item.verificationStatus = "Needs Review";
   item.approvedBy = "";
   syncApprovedEquipmentListToPart2();
@@ -2591,6 +2686,7 @@ function rejectTocEquipment(id) {
   const item = specState.components.find(row => row.id === id);
   if (!item) return;
 
+  recordSpecReviewAction(`Reject equipment: ${item.description}`);
   item.verificationStatus = "Rejected";
   item.include = false;
   syncApprovedEquipmentListToPart2();
@@ -2603,7 +2699,11 @@ function addAcceptedSuggestionToEquipmentApproval(suggestion, destination) {
   if (destination.article !== "2.5") return;
   const description = String(suggestion.equipmentContext || identifySpecEquipmentContext(suggestion.text) || "").replace(/:$/, "").trim();
   if (!description) return;
-  const existing = (specState.components || []).find(item => (item.equipmentListCandidate || item.detectionMethod === "Table of contents product list") && String(item.description || "").trim().toLowerCase() === description.toLowerCase());
+  const descriptionKey = normalizeSpecExactEquipmentName(description);
+  const existing = (specState.components || []).find(item =>
+    (item.equipmentListCandidate || item.detectionMethod === "Table of contents product list") &&
+    normalizeSpecExactEquipmentName(item.description) === descriptionKey
+  );
   if (existing) return;
   specState.components.push(createSpecComponent({
     description,
@@ -2806,6 +2906,7 @@ function reconcileAcceptedSpecFillAlternatives() {
 function applyExtractedSpecFillIn(id, silent = false) {
   const candidate = (specState.fillInSuggestions || []).find(item => item.id === id);
   if (!candidate || candidate.status !== "pending") return false;
+  if (!silent) recordSpecReviewAction(`Apply extracted value: ${candidate.label || candidate.placeholder}`);
   candidate.undoSnapshot = { project: { part1: specState.project.part1, part2: specState.project.part2, part3: specState.project.part3 }, projectFields: {}, projectFieldBindings: { ...(specState.projectFieldBindings || {}) }, fillInValues: { ...(specState.fillInValues || {}) } };
   const projectKey = Object.keys(SPEC_PROJECT_PLACEHOLDERS).find(key => SPEC_PROJECT_PLACEHOLDERS[key].includes(candidate.placeholder));
   if (projectKey) {
@@ -2858,6 +2959,7 @@ function undoExtractedSpecFillIn(id) {
   const candidate = (specState.fillInSuggestions || []).find(item => item.id === id);
   const snapshot = candidate?.undoSnapshot;
   if (!candidate || candidate.status !== "accepted") return;
+  recordSpecReviewAction(`Undo extracted value: ${candidate.label || candidate.placeholder}`);
   const restoreAutoRejectedSiblings = () => {
     const siblingIds = new Set(candidate.autoRejectedSiblingIds || []);
     (specState.fillInSuggestions || []).forEach(item => {
@@ -2925,6 +3027,7 @@ function undoExtractedSpecFillIn(id) {
 function rejectExtractedSpecFillIn(id) {
   const candidate = (specState.fillInSuggestions || []).find(item => item.id === id);
   if (!candidate || candidate.status !== "pending") return;
+  recordSpecReviewAction(`Reject extracted value: ${candidate.label || candidate.placeholder}`);
   candidate.status = "rejected";
   candidate.reviewedAt = new Date().toISOString();
   renderExtractedSpecFillIns();
@@ -2934,6 +3037,7 @@ function rejectExtractedSpecFillIn(id) {
 function applyAllExtractedSpecFillIns() {
   const seen = new Set();
   let applied = 0;
+  if ((specState.fillInSuggestions || []).some(item => item.status === "pending")) recordSpecReviewAction("Apply all pending extracted values");
   const confidenceRank = { High: 0, Medium: 1, Low: 2 };
   (specState.fillInSuggestions || []).filter(item => item.status === "pending").sort((a, b) => (confidenceRank[a.confidence] ?? 9) - (confidenceRank[b.confidence] ?? 9)).forEach(candidate => {
     const key = `${candidate.part}|${candidate.placeholder}`;
@@ -3163,6 +3267,7 @@ function previewSpecSourceSuggestion(id) {
 function acceptSpecSourceSuggestion(id, silent = false) {
   const suggestion = specState.sourceSuggestions.find(item => item.id === id);
   if (!suggestion || suggestion.status !== "pending") return;
+  if (!silent) recordSpecReviewAction(`Accept source suggestion: ${suggestion.equipmentContext || suggestion.sourcePage || "item"}`);
   const destination = getSpecSuggestionDestination(suggestion);
   const key = destination.key;
   const cleanSuggestionText = formatSpecSuggestionForDestination(suggestion, destination);
@@ -3184,6 +3289,7 @@ function acceptSpecSourceSuggestion(id, silent = false) {
 function undoSpecSourceSuggestion(id) {
   const suggestion = specState.sourceSuggestions.find(item => item.id === id);
   if (!suggestion || suggestion.status !== "accepted") return;
+  recordSpecReviewAction(`Undo source suggestion: ${suggestion.equipmentContext || suggestion.sourcePage || "item"}`);
   const snapshot = suggestion.undoSnapshot;
   const key = snapshot?.key || (suggestion.targetPart === "part3" ? "part3" : "part2");
   if (snapshot && specState.project[key] === snapshot.textAfter) {
@@ -3207,6 +3313,7 @@ function undoSpecSourceSuggestion(id) {
 function rejectSpecSourceSuggestion(id) {
   const suggestion = specState.sourceSuggestions.find(item => item.id === id);
   if (!suggestion || suggestion.status !== "pending") return;
+  recordSpecReviewAction(`Reject source suggestion: ${suggestion.equipmentContext || suggestion.sourcePage || "item"}`);
   specState.sourceSuggestions = specState.sourceSuggestions.filter(item => item.id !== id);
   touchSpecificationProject();
   renderSpecSourceSuggestions();
@@ -3250,11 +3357,14 @@ function refreshSpecSourceReview() {
 }
 
 function acceptAllSpecSuggestions() {
-  (specState.sourceSuggestions || []).filter(item => item.status === "pending" && isSpecSuggestionVisible(item)).forEach(item => acceptSpecSourceSuggestion(item.id, true));
+  const visible = (specState.sourceSuggestions || []).filter(item => item.status === "pending" && isSpecSuggestionVisible(item));
+  if (visible.length) recordSpecReviewAction("Accept all visible source suggestions");
+  visible.forEach(item => acceptSpecSourceSuggestion(item.id, true));
   renderSpecSourceSuggestions();
 }
 
 function rejectAllSpecSuggestions() {
+  if ((specState.sourceSuggestions || []).some(item => item.status === "pending" && isSpecSuggestionVisible(item))) recordSpecReviewAction("Reject all visible source suggestions");
   specState.sourceSuggestions = (specState.sourceSuggestions || []).filter(item => item.status !== "pending" || !isSpecSuggestionVisible(item));
   touchSpecificationProject();
   renderSpecSourceSuggestions();
@@ -3664,6 +3774,12 @@ async function analyzeSpecDocumentWithLocalAI(id) {
       saveSpecificationProject(false);
       renderSpecLocalAiSavedResults();
     }
+    const primaryCounts = getSpecLocalAiSavedCounts(record.id);
+    record.importSummary = `${completedPages.size} of ${source.total} primary page(s) completed; ${primaryCounts.equipment} AI equipment item(s), ${primaryCounts.fills} fill-in(s), and ${primaryCounts.clauses} clause(s) ready in Source Review; equipment refinement continuing`;
+    saveSpecificationProject(false);
+    renderSpecLocalAiSavedResults();
+    setSpecSourceStatus(`Primary analysis is ready in Source Review: ${primaryCounts.equipment} equipment, ${primaryCounts.fills} fill-in, and ${primaryCounts.clauses} clause result(s). Finishing equipment completion and detail refinement now.`, "is-loading");
+    recordSpecLocalAiMessage(`Primary results checkpoint saved after ${formatSpecLocalAiElapsed(performance.now() - specLocalAiStartedAt)}.${getSpecSourceReviewAvailabilityMessage(primaryCounts.equipment, primaryCounts.fills, primaryCounts.clauses)} Refinement continues without hiding these results.`);
     const completionCandidates = Array.from(equipmentCompletionUnits.values())
       .sort((left, right) => right.priority - left.priority)
       .slice(0, 12)
@@ -3736,6 +3852,98 @@ function renderSpecLocalAiSavedResults() {
 }
 
 async function runSpecDetailedEquipmentPass(units, record, sourceName) {
+  if (!window.SpecificationLocalAI?.analyzeEquipmentDetailsBatch || !Array.isArray(units) || !units.length) {
+    return runSpecDetailedEquipmentPassLegacy(units, record, sourceName);
+  }
+  const selectedUnits = units.slice(0, 24);
+  let enriched = 0;
+  recordSpecLocalAiMessage(`Starting Detailed Equipment Pass on ${selectedUnits.length} page${selectedUnits.length === 1 ? "" : "s"} that produced equipment findings. Pages are grouped in batches of up to ${SPEC_AI_DETAIL_BATCH_SIZE} to remove the long one-page-at-a-time tail.${units.length > selectedUnits.length ? ` Limited from ${units.length} candidate pages to keep the second pass bounded.` : ""}`);
+  for (let offset = 0; offset < selectedUnits.length; offset += SPEC_AI_DETAIL_BATCH_SIZE) {
+    const group = selectedUnits.slice(offset, offset + SPEC_AI_DETAIL_BATCH_SIZE).map(unit => ({
+      ...unit,
+      equipmentNames: Array.from(new Set((specState.components || [])
+        .filter(item => item.sourceDocumentId === record.id && item.sourcePage === unit.sourcePage && item.aiInvolved)
+        .map(item => String(item.description || "").trim()).filter(Boolean)))
+    })).filter(unit => unit.equipmentNames.length);
+    if (!group.length) continue;
+    const groupLabel = group.map(unit => unit.sourcePage).join(", ");
+    setSpecSourceStatus(`Detailed Equipment Pass ${offset + 1}-${offset + group.length} of ${selectedUnits.length} | ${groupLabel}`, "is-loading");
+    let results;
+    try {
+      results = await SpecificationLocalAI.analyzeEquipmentDetailsBatch({ units: group, sourceName });
+    } catch (batchError) {
+      recordSpecLocalAiMessage(`Detailed batch ${groupLabel} could not complete (${batchError.message || batchError}). Retrying those pages individually so no detail coverage is lost.`);
+      results = [];
+      for (const unit of group) {
+        try {
+          const result = await SpecificationLocalAI.analyzeEquipmentDetails({ ...unit, sourceName, equipmentNames: unit.equipmentNames });
+          results.push({ sourcePage: unit.sourcePage, ...result });
+        } catch (error) {
+          recordSpecLocalAiMessage(`Detailed Equipment Pass skipped ${unit.sourcePage} after an error: ${error.message || error}. Normal extraction results were preserved.`);
+        }
+      }
+    }
+    let groupEnriched = 0;
+    group.forEach(unit => {
+      const result = results.find(item => item.sourcePage === unit.sourcePage);
+      if (!result) return;
+      groupEnriched += applySpecDetailedEquipmentResult(result, unit, record);
+    });
+    enriched += groupEnriched;
+    recordSpecLocalAiMessage(`Detailed Equipment Pass completed ${groupLabel}: ${groupEnriched} equipment record${groupEnriched === 1 ? "" : "s"} enriched and available in Source Review.`);
+    saveSpecificationProject(false);
+    renderSpecLocalAiSavedResults();
+  }
+  return enriched;
+}
+
+function applySpecDetailedEquipmentResult(result, unit, record) {
+  const pageComponents = (specState.components || []).filter(item => item.sourceDocumentId === record.id && item.sourcePage === unit.sourcePage && item.aiInvolved);
+  let enriched = 0;
+  (result.equipmentDetails || []).forEach(detail => {
+    const detailName = String(detail.equipmentName || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const component = pageComponents.find(item => String(item.description || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === detailName)
+      || pageComponents.find(item => {
+        const name = String(item.description || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        return name && detailName && (name.includes(detailName) || detailName.includes(name));
+      });
+    if (!component || !String(detail.evidence || "").trim() || Number(detail.confidence || 0) < 0.5) return;
+    let changed = false;
+    [["manufacturer", "manufacturer"], ["model", "model"], ["partNumber", "partNumber"]].forEach(([target, source]) => {
+      const value = String(detail[source] || "").trim();
+      if (value && !String(component[target] || "").trim()) { component[target] = value; changed = true; }
+    });
+    if (Number(detail.quantity) > 0 && Number(component.quantity || 0) !== Number(detail.quantity)) {
+      component.quantity = Number(detail.quantity);
+      component.quantityExplanation = `Detailed Equipment Pass found quantity ${detail.quantity} on ${unit.sourcePage}.`;
+      changed = true;
+    }
+    const detailFields = {
+      Voltage: detail.voltage, Phase: detail.phase, Amperage: detail.amperage,
+      Horsepower: detail.horsepower, Flow: detail.flow, Pressure: detail.pressure,
+      Dimensions: detail.dimensions, Materials: detail.materials, Controls: detail.controls,
+      "Included Components": detail.includedComponents,
+      "Installation Requirements": detail.installationRequirements,
+      "Performance Requirements": detail.performanceRequirements,
+      Warranty: detail.warranty
+    };
+    component.extractedFields = component.extractedFields && typeof component.extractedFields === "object" ? component.extractedFields : {};
+    Object.entries(detailFields).forEach(([label, rawValue]) => {
+      const values = (Array.isArray(rawValue) ? rawValue : [rawValue]).map(value => String(value || "").trim()).filter(Boolean);
+      if (!values.length) return;
+      const existing = Array.isArray(component.extractedFields[label]) ? component.extractedFields[label] : component.extractedFields[label] ? [component.extractedFields[label]] : [];
+      const combined = Array.from(new Set([...existing, ...values]));
+      if (combined.length !== existing.length) { component.extractedFields[label] = combined; changed = true; }
+    });
+    component.detailEvidence = Array.from(new Set([...(component.detailEvidence || []), String(detail.evidence).trim()]));
+    component.numericConfidence = Math.max(Number(component.numericConfidence || 0), Number(detail.confidence || 0));
+    component.detailedAt = new Date().toISOString();
+    if (changed) enriched += 1;
+  });
+  return enriched;
+}
+
+async function runSpecDetailedEquipmentPassLegacy(units, record, sourceName) {
   if (!window.SpecificationLocalAI?.analyzeEquipmentDetails || !Array.isArray(units) || !units.length) return 0;
   const selectedUnits = units.slice(0, 24);
   let enriched = 0;
@@ -4406,7 +4614,7 @@ function importSpecLocalAiResult(result, record, sourcePage) {
   const count = { equipment: 0, fills: 0, clauses: 0 };
   const confidenceLabel = value => Number(value || 0) >= 0.85 ? "High" : Number(value || 0) >= 0.65 ? "Medium" : "Low";
   (result.equipment || []).filter(item => item.description && String(item.evidence || "").trim() && Number(item.confidence || 0) >= 0.5).slice(0, 8).forEach(item => {
-    const duplicate = specState.components.some(existing => existing.sourceDocumentId === record.id && existing.description.toLowerCase() === String(item.description).toLowerCase() && existing.sourcePage === sourcePage);
+    const duplicate = specState.components.some(existing => existing.sourceDocumentId === record.id && normalizeSpecExactEquipmentName(existing.description) === normalizeSpecExactEquipmentName(item.description) && existing.sourcePage === sourcePage);
     if (duplicate) return;
     specState.components.push(createSpecComponent({ partNumber: item.partNumber || "", description: item.description, manufacturer: item.manufacturer || "", model: item.model || "", quantity: Number(item.quantity) || 1, unit: item.unit || "ea", assembly: item.assembly || "", notes: item.technicalDetails || "", sourceDocument: record.name, sourceDocumentId: record.id, sourcePage, detectionMethod: "Local Qwen3-VL extraction", equipmentListCandidate: true, verificationStatus: "Needs Review", quantityExplanation: `AI extraction from ${sourcePage}; verify against source. Evidence: ${item.evidence}`, aiInvolved: true, extractionConfidence: confidenceLabel(item.confidence), numericConfidence: Number(item.confidence || 0), extractionEvidence: item.evidence }));
     count.equipment += 1;

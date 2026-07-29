@@ -29,9 +29,11 @@
       <a href="database.html">Database</a>
       <a href="parts-library.html">Parts Library</a>
       <a href="converter.html">Converter</a>
+      <a href="peer-review.html">Peer Review</a>
       <a href="submittal.html">Submittal</a>
       <a href="om.html">O&amp;M</a>
       <a href="specification.html">Spec</a>
+      <a href="https://www.getesr.com/?sort=project_number_asc" target="_blank" rel="noopener">ESR</a>
     </nav>
   </div>
 
@@ -302,7 +304,7 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
     <section id="specTab-suggestions" class="card spec-tab-panel hidden">
       <div class="spec-section-heading">
         <div><h2>Source Review</h2><p class="converter-muted">Review wording found in searchable PDFs and Word files. Each card identifies what equipment the description appears to cover. Change its destination, edit it, then accept or reject it.</p></div>
-        <div class="button-row spec-review-header-actions"><button type="button" class="secondary" onclick="refreshSpecSourceReview()">Refresh Review</button><button type="button" class="secondary" onclick="acceptAllSpecSuggestions()">Accept All Visible</button><button type="button" class="delete-btn" onclick="rejectAllSpecSuggestions()">Reject All Visible</button></div>
+        <div class="button-row spec-review-header-actions"><button id="specReviewUndoButton" type="button" class="secondary" onclick="undoSpecReviewAction()" disabled>Undo</button><button id="specReviewRedoButton" type="button" class="secondary" onclick="redoSpecReviewAction()" disabled>Redo</button><button type="button" class="secondary" onclick="refreshSpecSourceReview()">Refresh Review</button><button type="button" class="secondary" onclick="acceptAllSpecSuggestions()">Accept All Visible</button><button type="button" class="delete-btn" onclick="rejectAllSpecSuggestions()">Reject All Visible</button></div>
       </div>
       <div class="spec-review-toolbar">
         <label><span>Search</span><input id="specSuggestionSearch" type="search" placeholder="Equipment, wording, source, or article" oninput="renderSpecSourceSuggestions()"></label>
@@ -311,22 +313,24 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
         <label><span>Sort</span><select id="specSuggestionSort" onchange="renderSpecSourceReviewResults()"><option value="confidence" selected>Confidence: high to low</option><option value="confidence-ascending">Confidence: low to high</option><option value="ai-first">AI Extracted first</option><option value="built-in-first">Built-in Extracted first</option><option value="destination">Destination article</option><option value="source">Original extraction order</option><option value="source-name">Source filename A-Z</option><option value="equipment">Equipment A-Z</option><option value="status">Review status</option><option value="page">Source page: low to high</option><option value="page-descending">Source page: high to low</option></select></label>
         <button type="button" class="secondary" onclick="clearSpecSuggestionFilters()">Clear Filters</button>
       </div>
-      <div id="specEquipmentApprovalPanel" class="spec-direct-fill-panel">
+      <details id="specEquipmentApprovalPanel" class="spec-direct-fill-panel spec-review-dropdown" open>
+        <summary><span><strong>Equipment List Approval</strong><small>Approve extracted equipment for Articles 2.2 and 2.5.</small></span></summary>
         <div class="spec-section-heading">
           <div><h3>Equipment List Approval</h3><p class="converter-muted">Approve equipment found in an O&amp;M manual or submittal table of contents before it is added to 2.2 and used for “Description applies to” in 2.5.</p></div>
           <button type="button" class="secondary" onclick="openManualTocEquipmentEntry()">Add Equipment</button>
         </div>
-        <div id="specEquipmentApprovalSummary" class="spec-load-status">No equipment records extracted yet.</div>
-        <div id="specEquipmentApprovalList" class="spec-equipment-approval-list"></div>
-      </div>
-      <div class="spec-direct-fill-panel">
+        <div id="specEquipmentApprovalBody"><div id="specEquipmentApprovalSummary" class="spec-load-status">No equipment records extracted yet.</div>
+        <div id="specEquipmentApprovalList" class="spec-equipment-approval-list"></div></div>
+      </details>
+      <details id="specExtractedFillPanel" class="spec-direct-fill-panel spec-review-dropdown" open>
+        <summary><span><strong>Extracted Template Values</strong><small>Review and apply values found in project sources.</small></span></summary>
         <div class="spec-section-heading">
           <div><h3>Extracted Template Values</h3><p class="converter-muted">Review design values found in specifications and submittals. O&amp;M manuals are limited to clearly identified system model and sequence-of-operation information so maintenance instructions are not mistaken for design requirements.</p></div>
           <button type="button" class="secondary" onclick="applyAllExtractedSpecFillIns()">Apply All Pending Values</button>
         </div>
-        <div id="specExtractedFillSummary" class="spec-load-status">No template values extracted yet.</div>
-        <div id="specExtractedFillList" class="spec-extracted-fill-list"></div>
-      </div>
+        <div id="specExtractedFillBody"><div id="specExtractedFillSummary" class="spec-load-status">No template values extracted yet.</div>
+        <div id="specExtractedFillList" class="spec-extracted-fill-list"></div></div>
+      </details>
       <div id="specSuggestionSummary" class="spec-load-status">No source suggestions yet.</div>
       <div id="specSuggestionList" class="spec-suggestion-list"></div>
     </section>

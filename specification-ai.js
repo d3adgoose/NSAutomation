@@ -49,6 +49,17 @@
     },
     required: ["equipmentDetails"]
   };
+  const EQUIPMENT_DETAIL_BATCH_SCHEMA = {
+    type: "object",
+    properties: {
+      pages: { type: "array", items: {
+        type: "object",
+        properties: { sourcePage: { type: "string" }, equipmentDetails: EQUIPMENT_DETAIL_SCHEMA.properties.equipmentDetails },
+        required: ["sourcePage", "equipmentDetails"]
+      } }
+    },
+    required: ["pages"]
+  };
   const EQUIPMENT_DISCOVERY_SCHEMA = {
     type: "object",
     properties: {
@@ -231,8 +242,8 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     const images = units.map(unit => unit.imageBase64).filter(Boolean);
     if (images.length) message.images = images;
     const messages = [{ role: "system", content: getConfiguredSystemPrompt() }, message];
-    const numCtx = images.length > 1 ? 12288 : images.length ? 8192 : 16384;
-    const maxTokens = images.length > 1 ? Math.min(4096, 1536 + images.length * 768) : images.length ? 2048 : 6144;
+    const numCtx = images.length > 2 ? 16384 : images.length > 1 ? 12288 : images.length ? 8192 : 16384;
+    const maxTokens = images.length > 2 ? 6144 : images.length > 1 ? 4096 : images.length ? 2048 : 6144;
     const timeoutMs = images.length ? 90000 : 0;
     let response = await requestAnalysis({ messages, format: BATCH_SCHEMA, numCtx, maxTokens }, timeoutMs);
     let parsed = parseStructuredContent(response.content);
@@ -278,6 +289,41 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     const parsed = parseStructuredContent(response.content);
     if (!Array.isArray(parsed?.equipmentDetails)) throw new Error(`Detailed equipment extraction did not return usable structured data for ${sourcePage}.`);
     return { ...parsed, model: response.model, user: response.user };
+  }
+
+  async function analyzeEquipmentDetailsBatch({ units, sourceName }) {
+    cancelRequested = false;
+    const selectedUnits = (Array.isArray(units) ? units : []).slice(0, 3).map(unit => ({
+      ...unit,
+      equipmentNames: Array.from(new Set((unit.equipmentNames || []).map(value => String(value || "").trim()).filter(Boolean))).slice(0, 12)
+    })).filter(unit => unit.equipmentNames.length);
+    if (!selectedUnits.length) return [];
+    if (selectedUnits.length === 1) return [{
+      sourcePage: selectedUnits[0].sourcePage,
+      ...(await analyzeEquipmentDetails({ ...selectedUnits[0], sourceName }))
+    }];
+    let imageNumber = 0;
+    const sections = selectedUnits.map(unit => {
+      const visualLabel = unit.imageBase64 ? `Visual image ${++imageNumber} belongs to this page.\n` : "";
+      return `${unit.sourcePage}:\n${visualLabel}Only extract details for: ${unit.equipmentNames.join("; ")}\nSearchable source text:\n${String(unit.text || "").slice(0, 12000)}`;
+    }).join("\n\n");
+    const prompt = `Perform the same detailed-equipment extraction for this ordered batch from ${sourceName}. Keep every result grounded to its own page and only to that page's listed equipment names. Extract every explicitly supported manufacturer, model, part number, quantity, voltage, phase, amperage, horsepower, flow, pressure, dimension, material, control, included component, installation requirement, performance requirement, and warranty fact. Never infer missing facts. Return one pages entry for every supplied sourcePage, preserving its label exactly, even when equipmentDetails is empty. Evidence must be a short exact phrase from the matching page.\n\n${sections}`;
+    const message = { role: "user", content: prompt };
+    const images = selectedUnits.map(unit => unit.imageBase64).filter(Boolean);
+    if (images.length) message.images = images;
+    const response = await requestAnalysis({
+      messages: [{ role: "system", content: "You are a precise engineering equipment-data extractor. Never combine evidence between pages, never infer missing values, and return only JSON matching the schema." }, message],
+      format: EQUIPMENT_DETAIL_BATCH_SCHEMA,
+      numCtx: images.length ? 16384 : 24576,
+      maxTokens: 6144
+    }, images.length ? 90000 : 60000);
+    const parsed = parseStructuredContent(response.content);
+    const complete = Array.isArray(parsed?.pages) && selectedUnits.every(unit => parsed.pages.some(page => page.sourcePage === unit.sourcePage));
+    if (!complete) throw new Error(`Detailed equipment batch did not return every requested page: ${selectedUnits.map(unit => unit.sourcePage).join(", ")}.`);
+    return selectedUnits.map(unit => {
+      const page = parsed.pages.find(item => item.sourcePage === unit.sourcePage);
+      return { sourcePage: unit.sourcePage, equipmentDetails: Array.isArray(page?.equipmentDetails) ? page.equipmentDetails : [], model: response.model, user: response.user };
+    });
   }
 
   async function analyzeEquipmentDiscovery({ units, sourceName }) {
@@ -351,5 +397,5 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
     emitAnalysisMessage("Stop requested. Canceling the active Local AI page safely.");
   }
 
-  window.SpecificationLocalAI = { status, analyze, analyzeBatch, analyzeEquipmentDiscovery, analyzeEquipmentDetails, improveSpecificationPart, cancel, model: "qwen3-vl:8b-instruct" };
+  window.SpecificationLocalAI = { status, analyze, analyzeBatch, analyzeEquipmentDiscovery, analyzeEquipmentDetails, analyzeEquipmentDetailsBatch, improveSpecificationPart, cancel, model: "qwen3-vl:8b-instruct" };
 })();

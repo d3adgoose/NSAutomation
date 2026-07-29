@@ -13,6 +13,7 @@ build step.
 | Submittals | `submittal.html` | `submittal.js` |
 | O&M manuals | `om.html` | `om.js`, shared submittal behavior |
 | Converter | `converter.html` | `converter.js` |
+| Peer Review | `peer-review.html` | `peer-review-utils.js`, `peer-review.js` |
 | PDF database | `database.html` | `database.js` |
 | Parts library | `parts-library.html` | `partsLibrary.js` |
 | Specifications | `specification.html` | `specification.js`, `specification-ai.js` |

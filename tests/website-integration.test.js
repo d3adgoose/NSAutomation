@@ -5,7 +5,11 @@ const path = require("path");
 const root = path.join(__dirname, "..");
 const tabs = [
   "index.html", "database.html", "parts-library.html", "converter.html",
-  "submittal.html", "om.html", "specification.html"
+  "submittal.html", "om.html", "specification.html", "peer-review.html"
+];
+const primaryNavigation = [
+  "index.html", "database.html", "parts-library.html", "converter.html",
+  "peer-review.html", "submittal.html", "om.html", "specification.html"
 ];
 const packetScripts = [
   "submittal.js", "submittal-state-ui.js", "submittal-build.js",
@@ -37,11 +41,11 @@ for (const htmlFile of tabs) {
     [...html.matchAll(/<a\b[^>]*\bhref=["']([^"'#?]+\.html)["']/gi)]
       .map(match => match[1])
   );
-  assert.deepStrictEqual(
-    tabs.filter(tab => !linkedTabs.has(tab)),
-    [],
-    `${htmlFile} does not link to every website tab.`
-  );
+  if (htmlFile === "index.html") {
+    assert.deepStrictEqual(tabs.filter(tab => !linkedTabs.has(tab)), [], "index.html does not link to every website tab.");
+  } else {
+    assert.deepStrictEqual(primaryNavigation.filter(tab => !linkedTabs.has(tab)), [], `${htmlFile} is missing a primary navigation link.`);
+  }
 
   const declarations = new Map();
   scripts.filter(script => !/^https?:/i.test(script)).forEach(script => {
