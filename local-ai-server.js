@@ -34,7 +34,7 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": "default-src 'self' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://yidinujmeuztqohwxfxs.supabase.co; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob: https://cdnjs.cloudflare.com; connect-src 'self' https://yidinujmeuztqohwxfxs.supabase.co"
+    "Content-Security-Policy": "default-src 'self' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://yidinujmeuztqohwxfxs.supabase.co; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob: https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net; connect-src 'self' data: blob: https://unpkg.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com https://yidinujmeuztqohwxfxs.supabase.co"
   });
   res.end(type.startsWith("application/json") ? JSON.stringify(body) : body);
 }

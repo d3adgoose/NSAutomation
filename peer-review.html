@@ -4,10 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Peer Review</title>
-  <link rel="stylesheet" href="style.css?v=20260729-peer-review" />
+  <link rel="stylesheet" href="style.css?v=20260730-table-rules-reliability" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js";</script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@v5.0.0/dist/tesseract.min.js"></script>
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 </head>
@@ -21,18 +22,60 @@
       <a href="https://www.getesr.com/?sort=project_number_asc" target="_blank" rel="noopener">ESR</a>
     </nav>
   </div>
-  <header><h1>Peer Review</h1><p>Find potential drawing-package inconsistencies with local, rule-based checks.</p></header>
+  <header><h1>Peer Review</h1><p>Find potential drawing-package inconsistencies with local visual AI, OCR, and rule checks.</p></header>
   <main class="peer-review-main">
+    <section class="card">
+      <details>
+        <summary><strong>How to Use Peer Review</strong></summary>
+
+        <div class="instructions-box">
+          <ol>
+            <li>Sign in through <strong>Database</strong>. Peer Review uses the same company login and Local AI connection as Specification.</li>
+            <li>Check the <strong>Local AI</strong> indicator. If it is offline, open it and select <strong>Try Reconnecting</strong>.</li>
+            <li>Select <strong>Start Overall Peer Review</strong>. The review independently checks the clean original for drawing quality, naming, title blocks, equipment quantities and callouts, dimensions, and visible coordination issues.</li>
+            <li>Drop in or choose one engineering PDF. OCR reads image-only title blocks, and Local AI visually reviews enlarged drawing regions.</li>
+            <li>Select <strong>Run Automatic Checks</strong> or <strong>Validate</strong>. Keep this page open while the timer and activity messages show the current step.</li>
+            <li>Review every finding using its confidence or Rule Check label, page preview, comments, and status.</li>
+            <li>Use the Fix List to track unresolved work, then save or export the review. Local History keeps the latest five reviews when browser storage allows.</li>
+          </ol>
+
+          <div class="spec-guidance-callout">
+            <strong>One-time computer setup</strong>
+            <p>Complete these steps once on each Windows computer that will analyze drawings.</p>
+            <ol class="spec-local-ai-setup-steps">
+              <li>Install <a href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">Ollama for Windows</a>. Use its normal Windows installer.</li>
+              <li>Install the <strong>LTS</strong> version from the <a href="https://nodejs.org/en/download" target="_blank" rel="noopener noreferrer">Node.js download page</a>. Keep the normal installation choices.</li>
+              <li>Open <a href="https://github.com/d3adgoose/NSAutomation" target="_blank" rel="noopener noreferrer">d3adgoose/NSAutomation on GitHub</a>. Select the green <strong>Code</strong> button, then <strong>Download ZIP</strong>.</li>
+              <li>Open the downloaded ZIP file, select <strong>Extract all</strong>, and save the extracted folder somewhere permanent, such as Documents. Local AI needs this folder to stay in that location.</li>
+              <li>Open the extracted <strong>NSAutomation</strong> folder and double-click <strong>Set Up NS Local AI.cmd</strong>. If Windows asks for confirmation, confirm only after checking that the file came from the repository linked above. Setup will try to approve the N/S website automatically; on managed computers it safely continues with manual Chrome permission instead.</li>
+              <li>Leave the setup window open while it downloads the approved Qwen model. The first download is large and may take a while. Wait until it says <strong>Local AI setup is complete</strong>.</li>
+              <li>Close and reopen Chrome, open this website, and select <strong>Log in</strong>. Sign in with your normal company account.</li>
+              <li>Open the Local AI popup and select <strong>Try Reconnecting</strong>. If a Chrome permission question still appears, select <strong>Allow</strong>. Drawing files remain local.</li>
+            </ol>
+            <p><strong>After setup:</strong> select the Local AI status button. A green circle means the service and model are ready. You do not need to run the setup file again each day.</p>
+            <p><strong>Local AI popup:</strong> follow the displayed <strong>Your next step</strong> message. Use <strong>Try Reconnecting</strong> after correcting an issue, or <strong>Close</strong> to return to Peer Review.</p>
+          </div>
+
+          <div class="spec-guidance-callout">
+            <strong>Using Local AI for Peer Review</strong>
+            <p>Upload the clean original engineering PDF and select <strong>Run Automatic Checks</strong> or <strong>Validate</strong>. OCR reads image-only title blocks, while the approved local Qwen model independently reviews enlarged drawing regions, equipment tables, quantities, callouts, dimensions, and notes. Existing reviewer annotations are not required. Keep the page open until the activity message says the automatic review is complete.</p>
+            <p>Every result remains pending until you review it. Confidence shows the model's certainty, while <strong>Rule Check</strong> identifies a direct comparison performed without AI judgment.</p>
+          </div>
+
+          <p><strong>Important:</strong> Peer Review identifies potential visible inconsistencies. It does not certify the design or replace an engineer's final review.</p>
+        </div>
+      </details>
+    </section>
     <section class="card" id="peerReviewLanding">
-      <div class="peer-section-heading"><div><h2>Choose a Review Type</h2><p>Reviews support consistency checking and correction tracking; they do not determine whether a design is correct.</p></div></div>
+      <div class="peer-section-heading"><div><h2>Start an Overall Peer Review</h2><p>Upload the clean original drawing. The review creates proposed findings by checking drawing quality, quantities, dimensions, title blocks, equipment tables, callouts, and visible coordination issues.</p></div><div class="button-row"><button type="button" class="secondary" onclick="openPeerSourceLibrary()">Peer Review Knowledge Library</button><button id="peerAiHeaderButton" type="button" class="spec-ai-header-button is-checking" onclick="openPeerAiStatus()"><span class="spec-ai-header-status-dot" aria-hidden="true"></span><span class="spec-ai-header-status-label">Checking Local AI</span></button></div></div>
       <div class="peer-type-grid">
-        <button class="peer-type-card" type="button" onclick="startPeerReview('initial')"><span class="peer-card-icon">I</span><strong>Initial Review</strong><small>Drawing quality and completeness</small></button>
-        <button class="peer-type-card" type="button" onclick="startPeerReview('equipment')"><span class="peer-card-icon">E</span><strong>Equipment Review</strong><small>Equipment schedules and values</small></button>
-        <button class="peer-type-card is-disabled" type="button" disabled><span class="peer-badge">Coming Soon</span><strong>Electrical Review</strong><small>Future rule set</small></button>
-        <button class="peer-type-card is-disabled" type="button" disabled><span class="peer-badge">Coming Soon</span><strong>Plumbing Review</strong><small>Future rule set</small></button>
+        <button class="peer-type-card peer-overall-review-card" type="button" onclick="startPeerReview('overall')"><strong>Start Overall Peer Review</strong><small>Upload one drawing package and run every available review check together.</small></button>
       </div>
-      <div class="peer-saved-heading"><h3>Saved Reviews</h3><button class="secondary" type="button" onclick="renderPeerSavedReviews()">Refresh</button></div>
-      <div id="peerSavedReviews" class="peer-saved-list"><p>No saved reviews yet.</p></div>
+      <details class="peer-how-to"><summary><strong>How to Use Peer Review</strong></summary><div class="instructions-box peer-how-to-content"><ol><li><strong>Sign in through Database.</strong> Peer Review uses the same company login and Local AI connection as Specification.</li><li><strong>Confirm Local AI Ready.</strong> Select the Local AI indicator to check the background service and model. Use Try Reconnecting if needed.</li><li><strong>Choose a review type.</strong> Initial Review checks the drawing package broadly. Equipment Review also compares the formal equipment list and drawing callouts.</li><li><strong>Upload one engineering PDF.</strong> Pages are read locally. OCR handles image-only title blocks, and Local AI visually reviews enlarged drawing regions.</li><li><strong>Run the automatic checks.</strong> Keep the page open while the timer and activity messages show what is being reviewed.</li><li><strong>Confirm every finding.</strong> Use confidence, page preview, comments, and status controls to accept, correct, or mark false positives.</li><li><strong>Save or export.</strong> The latest five reviews remain in Local History when browser storage allows.</li></ol><p><strong>Important:</strong> Peer Review identifies potential visible inconsistencies. It does not certify engineering design or replace an engineer’s final review.</p></div></details>
+      <div class="history-card-header peer-history-header"><div><h2>Local History</h2><p class="card-intro">Last 5 peer reviews saved on this device.</p></div><div class="button-row history-header-actions"><button class="secondary" type="button" onclick="clearPeerReviewHistory()">Clear History</button><button class="secondary" type="button" onclick="renderPeerSavedReviews()">Refresh</button></div></div>
+      <div id="peerSavedReviews" class="packet-history-list"><p>No local peer review history yet.</p></div>
+      <p id="peerHistoryStatus" class="warranty-status" aria-live="polite"></p>
+      <div id="peerStorageUsage" class="storage-usage-card" aria-live="polite"><div class="storage-usage-label"><strong>Browser Storage</strong><span>Checking...</span></div><div class="storage-usage-bar" aria-hidden="true"><span></span></div><p>Local peer review history</p></div>
     </section>
 
     <div id="peerWorkspace" class="hidden">
@@ -42,28 +85,63 @@
       </section>
       <nav class="peer-step-nav" aria-label="Review workflow">
         <button data-peer-step="setup" onclick="showPeerStep('setup')">1. Setup</button><button data-peer-step="pages" onclick="showPeerStep('pages')">2. Pages</button>
-        <button data-peer-step="equipment" onclick="showPeerStep('equipment')">3. Equipment</button><button data-peer-step="findings" onclick="showPeerStep('findings')">4. Findings</button>
-        <button data-peer-step="checklist" onclick="showPeerStep('checklist')">5. Checklist</button><button data-peer-step="fixes" onclick="showPeerStep('fixes')">6. Fix List</button>
+        <button data-peer-step="equipment" onclick="showPeerStep('equipment')">3. Equipment Table</button><button data-peer-step="findings" onclick="showPeerStep('findings')">4. Findings</button>
+        <button data-peer-step="fixes" onclick="showPeerStep('fixes')">5. Fix List</button>
       </nav>
+      <div id="peerAnalysisProgress" class="packet-build-progress spec-ai-progress peer-analysis-progress hidden" aria-live="polite">
+        <div class="packet-build-current">
+          <div id="peerAnalysisStatus" class="spec-load-status" role="status">Waiting to run automatic checks.</div>
+          <div class="spec-ai-progress-controls"><strong id="peerAnalysisElapsed" class="packet-build-elapsed">0:00</strong></div>
+        </div>
+        <details class="packet-build-messages"><summary id="peerAnalysisMessagesSummary">Show messages</summary><ol id="peerAnalysisMessageHistory"></ol></details>
+      </div>
 
       <section id="peerStep-setup" class="card peer-step-panel">
-        <h2>Review Setup</h2><div class="peer-form-grid"><label>Existing project (optional)<select id="peerProjectSelect"><option value="">No project selected</option></select></label>
-        <label>Engineering PDF<input id="peerPdfUpload" type="file" accept="application/pdf,.pdf" /></label></div>
-        <div id="peerDropZone" class="drop-zone upload-drop-zone"><p><strong>Drag &amp; Drop One Engineering PDF Here</strong></p><p>Processing and storage stay in this browser.</p></div>
+        <h2>Review Setup</h2>
+        <div id="peerDropZone" class="drop-zone upload-drop-zone">
+          <p><strong>Drag &amp; Drop One Engineering PDF Here</strong></p>
+          <p>Processing and storage stay in this browser.</p>
+          <label class="attach-pdf-btn">
+            Choose PDF
+            <input id="peerPdfUpload" type="file" accept="application/pdf,.pdf" hidden />
+          </label>
+        </div>
         <p id="peerUploadStatus" class="warranty-status" role="status" aria-live="polite">Choose a PDF to begin.</p>
       </section>
 
-      <section id="peerStep-pages" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Pages &amp; Categories</h2><p>Every page defaults to Drawing. Change categories before running checks.</p></div><button type="button" onclick="runPeerChecks()">Run Automatic Checks</button></div><div id="peerPageGrid" class="peer-page-grid"></div></section>
+      <section id="peerStep-pages" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Pages &amp; Categories</h2><p>Every page defaults to Drawing. Naming checks compare filename project numbers, title blocks, drawing numbers, sheet titles, and page counts.</p></div><button type="button" onclick="runPeerChecks()">Run Automatic Checks</button></div><div id="peerPageGrid" class="peer-page-grid"></div></section>
       <section id="peerStep-equipment" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Extracted Equipment Table</h2><p>Review and edit extracted values before validation. Only detected columns are checked.</p></div><div class="button-row"><button class="secondary" onclick="addPeerEquipmentRow()">Add Row</button><button onclick="runPeerChecks()">Validate</button></div></div><div class="table-scroll"><table class="peer-equipment-table"><thead id="peerEquipmentHead"></thead><tbody id="peerEquipmentBody"></tbody></table></div><p id="peerEquipmentHint" class="peer-hint"></p></section>
-      <section id="peerStep-findings" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Findings <span id="peerFindingCount">(0)</span></h2><p>Automatic results are possible inconsistencies for reviewer confirmation.</p></div><button class="secondary" onclick="addPeerManualFinding()">Add General Comment</button></div><div class="table-scroll"><table><thead><tr><th>Severity</th><th>Equipment Tag</th><th>Issue</th><th>Equipment List Value</th><th>Compared Value</th><th>Page</th><th>Status</th><th>Comments</th></tr></thead><tbody id="peerFindingsBody"></tbody></table></div></section>
-      <section id="peerStep-checklist" class="card peer-step-panel hidden"><h2>Manual Checklist</h2><div id="peerChecklist"></div></section>
-      <section id="peerStep-fixes" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Fix List</h2><p>Completed items remain visible in review history.</p></div></div><div class="peer-filter-row"><input id="peerFixSearch" type="search" placeholder="Search fixes" oninput="renderPeerFixList()" /><select id="peerFixFilter" onchange="renderPeerFixList()"><option value="all">All statuses</option></select><select id="peerFixSort" onchange="renderPeerFixList()"><option value="page">Sort by page</option><option value="severity">Sort by severity</option><option value="status">Sort by status</option></select></div><div id="peerFixList" class="peer-fix-list"></div></section>
+      <section id="peerStep-findings" class="card peer-step-panel hidden">
+        <div class="peer-section-heading"><div><h2>Findings <span id="peerFindingCount">(0)</span></h2><p>Review every potential inconsistency, compare the two values, add context, and set its review status.</p></div><button class="secondary" onclick="addPeerManualFinding()">Add General Comment</button></div>
+        <div id="peerFindingSummary" class="peer-finding-summary"></div>
+        <div class="peer-filter-row peer-finding-filters"><input id="peerFindingSearch" type="search" placeholder="Search issue, equipment tag, value, or page" oninput="renderPeerFindings()"><select id="peerFindingSeverity" onchange="renderPeerFindings()"><option value="all">All severities</option><option>Error</option><option>Warning</option><option>Manual Review</option></select><select id="peerFindingStatus" onchange="renderPeerFindings()"><option value="all">All statuses</option></select></div>
+        <div id="peerFindingsBody" class="peer-findings-list"></div>
+      </section>
+      <section id="peerStep-fixes" class="card peer-step-panel hidden"><div class="peer-section-heading"><div><h2>Fix List</h2><p>This is the action view of Findings. It includes only unresolved work, plus completed items retained for history. Updating a Finding controls whether it appears here.</p></div></div><div class="peer-filter-row"><input id="peerFixSearch" type="search" placeholder="Search fixes" oninput="renderPeerFixList()" /><select id="peerFixFilter" onchange="renderPeerFixList()"><option value="all">All statuses</option></select><select id="peerFixSort" onchange="renderPeerFixList()"><option value="page">Sort by page</option><option value="severity">Sort by severity</option><option value="status">Sort by status</option></select></div><div id="peerFixList" class="peer-fix-list"></div></section>
       <section class="card peer-actions"><button onclick="savePeerReview()">Save Review</button><button class="secondary" onclick="showPeerStep('fixes')">View Fix List</button><button onclick="completePeerReview()">Mark Review Complete</button><button class="secondary" onclick="openPeerExportModal()">Export Report</button></section>
     </div>
   </main>
   <div id="peerCommentModal" class="modal hidden"><div class="modal-content peer-modal-content" role="dialog" aria-modal="true"><h2 id="peerCommentTitle">Comments</h2><div id="peerCommentThread"></div><label>New comment<textarea id="peerCommentText" rows="3"></textarea></label><label>Resolution note<textarea id="peerResolutionText" rows="2"></textarea></label><div class="button-row"><button onclick="savePeerComment()">Save</button><button class="secondary" onclick="closePeerModal('peerCommentModal')">Cancel</button></div></div></div>
+  <div id="peerGeneralCommentModal" class="modal hidden"><div class="modal-content peer-modal-content" role="dialog" aria-modal="true" aria-labelledby="peerGeneralCommentTitle"><h2 id="peerGeneralCommentTitle">Add General Comment</h2><p class="converter-muted">Add an issue or note that should appear with the automatic findings.</p><label>Comment<textarea id="peerGeneralCommentText" rows="5" spellcheck="true" placeholder="Describe the issue or review note."></textarea></label><div class="peer-knowledge-upload-grid"><label>Severity<select id="peerGeneralCommentSeverity"><option>Manual Review</option><option>Warning</option><option>Error</option></select></label><label>Page number (optional)<input id="peerGeneralCommentPage" type="number" min="1" step="1" placeholder="Example: 2"></label></div><div class="button-row peer-ai-status-actions"><button type="button" class="secondary" onclick="closePeerModal('peerGeneralCommentModal')">Cancel</button><button type="button" onclick="savePeerGeneralComment()">Add Comment</button></div></div></div>
+  <div id="peerPagePreviewModal" class="modal hidden"><div class="modal-content peer-page-preview-modal" role="dialog" aria-modal="true" aria-labelledby="peerPagePreviewTitle"><div class="peer-preview-heading"><h2 id="peerPagePreviewTitle">Page preview</h2><button class="secondary" type="button" onclick="closePeerModal('peerPagePreviewModal')" aria-label="Close page preview">Close</button></div><div id="peerPagePreviewCanvas" class="peer-page-preview-canvas"><p>Loading page preview...</p></div></div></div>
+  <div id="peerAiStatusModal" class="modal hidden"><div class="modal-content peer-ai-status-modal" role="dialog" aria-modal="true" aria-labelledby="peerAiStatusTitle"><h2 id="peerAiStatusTitle">Local AI Control Center</h2><div id="peerAiStatusBody" class="spec-ai-status-dashboard"></div><div class="button-row peer-ai-status-actions"><button type="button" class="secondary" onclick="closePeerModal('peerAiStatusModal');openPeerSourceLibrary()">Company Knowledge Library</button><button id="peerAiReconnectButton" type="button" onclick="reconnectPeerAi()">Try Reconnecting</button><button class="secondary" type="button" onclick="closePeerModal('peerAiStatusModal')">Close</button></div></div></div>
+  <div id="peerKnowledgeModal" class="modal hidden"><div class="modal-content peer-knowledge-modal" role="dialog" aria-modal="true" aria-labelledby="peerKnowledgeTitle"><h2 id="peerKnowledgeTitle">Peer Review Knowledge Library</h2><div class="spec-ai-example-editor"><div class="spec-ai-example-default"><strong>Built-in peer-review examples</strong><span>These examples teach organization and judgment only. Their project facts are never copied into another drawing.</span><details><summary>View built-in reference</summary><pre id="peerBuiltInKnowledge"></pre></details></div><label>Optional examples for this browser<textarea id="peerKnowledgeExamples" rows="14" spellcheck="true" placeholder="Add SOURCE EXAMPLE → EXPECTED FINDING → EVIDENCE, or IGNORE EXAMPLE → REASON."></textarea></label><div class="spec-ai-example-help"><strong>Useful example types</strong><span>Show a genuine missing callout, naming mismatch, unresolved placeholder, or reviewer correction.</span><span>Add IGNORE EXAMPLE entries for valid drawing conventions or recurring false positives.</span></div><p class="converter-muted">Keep examples concise and approved. They stay in this browser and guide future Overall Peer Reviews.</p></div><div class="button-row peer-ai-status-actions"><button type="button" onclick="savePeerKnowledgeLibrary()">Save Examples</button><button class="secondary" type="button" onclick="closePeerModal('peerKnowledgeModal')">Cancel</button></div></div></div>
+  <div id="peerSourceLibraryModal" class="modal hidden">
+    <div class="modal-content peer-knowledge-hub-modal" role="dialog" aria-modal="true" aria-labelledby="peerSourceLibraryTitle"><h2 id="peerSourceLibraryTitle">Company Knowledge Library</h2><p class="converter-muted">Choose what you want to manage. Knowledge is shared with Specification and Peer Review on this browser.</p><div class="peer-knowledge-hub-grid"><button type="button" onclick="openPeerAcceptedKnowledge()"><span class="peer-card-icon">✦</span><strong>Teach Company Knowledge</strong><small>Tell Local AI a term, rule, relationship, or exception and review whether it should be saved.</small></button><button type="button" onclick="openPeerReferenceLibrary()"><span class="peer-card-icon">PDF</span><strong>Reference PDF Library</strong><small>Add and manage approved specifications, peer reviews, standards, and engineering resources.</small></button></div><div class="button-row peer-ai-status-actions"><button type="button" class="secondary" onclick="closePeerModal('peerSourceLibraryModal');openPeerAiStatus()">Close</button></div></div>
+  </div>
+  <div id="peerAcceptedKnowledgeModal" class="modal hidden"><div class="modal-content peer-source-library-modal" role="dialog" aria-modal="true" aria-labelledby="peerAcceptedKnowledgeTitle"><h2 id="peerAcceptedKnowledgeTitle">Teach Company Knowledge</h2><p class="converter-muted">Write naturally. Local AI will classify the statement and either save it or warn that it needs clarification.</p><section class="company-terms-chat"><div class="company-guidance-heading"><div><strong>Conversation</strong><span>Only entries marked Saved are used during Specification and Peer Review analysis.</span></div><button class="secondary compact" type="button" onclick="clearPeerAcceptedTerms()">Clear history</button></div><div class="company-term-compose"><textarea id="peerAcceptedTermInput" rows="4" spellcheck="true" placeholder="Example: Reclaim pump and reclaim water pump are accepted names for the same equipment type."></textarea><button id="peerAcceptedTermSend" type="button" class="company-term-send" onclick="addPeerAcceptedTerm()" title="Ask Local AI to review this knowledge" aria-label="Ask Local AI to review this knowledge">✦</button></div><div id="peerAcceptedTermsHistory" class="company-terms-history"></div></section><div class="button-row peer-ai-status-actions"><button type="button" class="secondary" onclick="closePeerModal('peerAcceptedKnowledgeModal');openPeerSourceLibrary()">Close</button></div></div>
+  </div>
+  <div id="peerReferenceLibraryModal" class="modal hidden"><div class="modal-content peer-source-library-modal" role="dialog" aria-modal="true" aria-labelledby="peerReferenceLibraryTitle"><h2 id="peerReferenceLibraryTitle">Reference PDF Library</h2><p class="converter-muted">Add approved source files. Files become available to Local AI as soon as they finish processing.</p>
+      <div class="peer-knowledge-upload-grid"><label>Source category<select id="peerKnowledgeCategory"><option>System Fundamentals</option><option>Equipment and Components</option><option>Plumbing and Flow</option><option>Electrical and Controls</option><option>Drawing Conventions</option><option>Installation and Coordination</option><option>Specification Requirements</option><option>Known Exceptions</option><option>Approved Peer Review</option><option>Approved Specification</option></select></label></div>
+      <div id="peerKnowledgeDropZone" class="drop-zone peer-knowledge-drop-zone"><p><strong>Drag and drop approved files here</strong></p><p>PDF, TXT, MD, or CSV. Text is extracted and stored locally.</p><label class="attach-pdf-btn">Choose Knowledge Files<input id="peerKnowledgeFiles" type="file" accept="application/pdf,.pdf,.txt,.md,.csv" multiple hidden onchange="handlePeerKnowledgeFiles(this.files)"></label></div>
+      <p id="peerKnowledgeStatus" class="warranty-status" aria-live="polite"></p>
+      <div id="peerKnowledgeSourceList" class="peer-knowledge-source-list"><p>No knowledge sources added yet.</p></div>
+      <div class="company-library-note"><strong>Save reviewed examples as files</strong><span>Choose <em>Approved Peer Review</em> for reviewed drawing PDFs and <em>Approved Specification</em> for specification PDFs.</span></div><div class="button-row peer-ai-status-actions"><button type="button" class="secondary" onclick="closePeerModal('peerReferenceLibraryModal');openPeerSourceLibrary()">Close</button></div>
+    </div>
+  </div>
+  <div id="peerClearKnowledgeModal" class="modal hidden"><div class="modal-content peer-modal-content peer-warning-modal" role="alertdialog" aria-modal="true" aria-labelledby="peerClearKnowledgeTitle"><div class="peer-warning-icon" aria-hidden="true">!</div><h2 id="peerClearKnowledgeTitle">Clear company knowledge history?</h2><p>This permanently removes every saved term, system fundamental, company rule, exception, and warning from this browser. Uploaded reference files are not removed.</p><div class="button-row peer-ai-status-actions"><button type="button" class="secondary" onclick="closePeerModal('peerClearKnowledgeModal')">Cancel</button><button type="button" class="delete-btn" onclick="confirmClearPeerAcceptedTerms()">Clear History</button></div></div></div>
   <div id="peerExportModal" class="modal hidden"><div class="modal-content peer-modal-content" role="dialog" aria-modal="true"><h2>Export Review Report</h2><p>Exporting is optional. Choose a local file format.</p><div class="button-row"><button onclick="exportPeerPDF()">Export PDF</button><button onclick="exportPeerExcel()">Export Excel</button><button class="secondary" onclick="closePeerModal('peerExportModal')">Cancel</button></div></div></div>
   <div id="peerToast" class="peer-toast hidden" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabaseClient.js"></script><script src="global-auth.js?v=20260722-database-login-style"></script>
-  <script src="navigation.js?v=20260729-peer-review"></script><script src="ghostAutocomplete.js?v=20260713-library-data"></script><script src="peer-review-utils.js?v=20260729"></script><script src="peer-review.js?v=20260729"></script>
+  <script src="navigation.js?v=20260729-peer-review"></script><script src="ghostAutocomplete.js?v=20260713-library-data"></script><script src="peer-review-utils.js?v=20260730-combined-page-review"></script><script src="peer-review.js?v=20260730-combined-page-review"></script>
 </body></html>

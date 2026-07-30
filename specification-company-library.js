@@ -4,6 +4,8 @@ const SPEC_COMPANY_DOCUMENTS_TABLE = "documents";
 const SPEC_COMPANY_DOCUMENTS_BUCKET = "document-library";
 const SPEC_COMPANY_DOCUMENT_TYPE = "Company Knowledge";
 const SPEC_COMPANY_MAX_FILE_BYTES = 50 * 1024 * 1024;
+const SPEC_COMPANY_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
+const SPEC_COMPANY_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
 let specCompanyKnowledgeItems = [];
 let specPendingCompanyKnowledgeFiles = [];
 
@@ -22,13 +24,14 @@ function getSpecCompanyKnowledgeModalMarkup() {
         <button type="button" class="secondary" onclick="loadSpecCompanyKnowledge()">Refresh</button>
       </div>
     </div>
-    <div class="spec-company-library-guidance"><strong>Keep this library specification-focused.</strong><span>Add approved specifications, company standards, standard clauses, and writing examples. Project datasheets belong outside this shared library.</span></div>
+    <div class="spec-company-library-guidance"><strong>Shared engineering knowledge for Specification and Peer Review.</strong><span>Add approved standards, car-wash system fundamentals, specifications, manuals, drawing conventions, known exceptions, and reviewed examples. Keep project-only facts clearly labeled.</span></div>
+    ${getSpecCompanyGuidanceBuilderMarkup()}
     <div class="spec-company-library-layout">
       <aside class="spec-company-library-add">
         <div><strong>Add company reference</strong><p>Upload a reusable specification, standard, manual, or approved example.</p></div>
         <div class="spec-company-library-form">
           <label><span>Title</span><input id="specCompanyKnowledgeTitle" placeholder="Example: BCTA Bus Wash Equipment Specification"></label>
-          <label><span>Category</span><select id="specCompanyKnowledgeCategory"><option>Approved Specification</option><option>Company Standard</option><option>Standard Clause</option><option>Writing Example</option><option>Other</option></select></label>
+          <label><span>Category</span><select id="specCompanyKnowledgeCategory"><option>Approved Specification</option><option>Approved Peer Review</option><option>Company Standard</option><option>Standard Clause</option><option>Other</option></select></label>
           <label><span>Description</span><textarea id="specCompanyKnowledgeNotes" rows="4" placeholder="What this document should support"></textarea></label>
           <label id="specCompanyKnowledgeDrop" class="spec-company-library-upload"><strong>Drop a specification here</strong><span>or choose a PDF, Word, or Text file</span><input id="specCompanyKnowledgeInput" type="file" accept=".pdf,.docx,.txt" multiple hidden></label>
           <div id="specCompanyKnowledgePending" class="spec-company-upload-pending">No files selected.</div>
@@ -40,7 +43,7 @@ function getSpecCompanyKnowledgeModalMarkup() {
         <div class="spec-company-library-toolbar">
           <input id="specCompanyKnowledgeSearch" type="search" placeholder="Search titles, filenames, descriptions, or categories" oninput="renderSpecCompanyKnowledge()">
           <select id="specCompanyKnowledgeFilter" aria-label="Filter company knowledge by category" onchange="renderSpecCompanyKnowledge()">
-            <option value="">All categories</option><option>Approved Specification</option><option>Company Standard</option><option>Standard Clause</option><option>Writing Example</option><option>Other</option>
+            <option value="">All categories</option><option>Approved Specification</option><option>Approved Peer Review</option><option>Company Standard</option><option>Standard Clause</option><option>Other</option>
           </select>
         </div>
         <span id="specCompanyKnowledgeStatus" class="spec-load-status" role="status" aria-live="polite">Loading shared company knowledge...</span>
@@ -48,6 +51,36 @@ function getSpecCompanyKnowledgeModalMarkup() {
       </div>
     </div>
   </section>`;
+}
+
+function getSpecCompanyGuidanceSection(value, heading) {
+  const match = String(value || "").match(new RegExp(`(?:^|\\n)${heading}:\\n([\\s\\S]*?)(?=\\n(?:SYSTEM FUNDAMENTALS|REQUIRED COMPANY RULES|STANDARD TERMINOLOGY|KNOWN EXCEPTIONS):\\n|$)`, "i"));
+  return match ? match[1].trim() : "";
+}
+
+function getSpecCompanyGuidanceBuilderMarkup() {
+  return `<section class="company-terms-chat"><div class="company-guidance-heading"><div><strong>Accepted company knowledge</strong><span>Add one approved term, rule, relationship, or exception at a time. It is shared with Specification and Peer Review on this browser.</span></div><button class="secondary compact" type="button" onclick="clearSpecAcceptedTerms()">Clear history</button></div><label class="company-term-category">Entry type<select id="specAcceptedTermType"><option>Accepted Term</option><option>System Fundamental</option><option>Required Company Rule</option><option>Known Exception</option></select></label><div class="company-term-compose"><textarea id="specAcceptedTermInput" rows="4" spellcheck="true" placeholder="Example: Reclaim pump and reclaim water pump are accepted names for the same equipment type."></textarea><button type="button" class="company-term-send" onclick="addSpecAcceptedTerm()" title="Add to accepted company knowledge" aria-label="Add to accepted company knowledge">✦</button></div><small>Enter the complete approved statement. The AI will use it only when relevant to the current source.</small><div id="specAcceptedTermsHistory" class="company-terms-history">${renderSpecAcceptedTermsMarkup()}</div></section>`;
+}
+
+function getSpecAcceptedTerms() { try { const value = JSON.parse(localStorage.getItem(SPEC_COMPANY_ACCEPTED_TERMS_KEY) || "[]"); if (Array.isArray(value) && value.length) return value; const legacy = String(localStorage.getItem(SPEC_COMPANY_GENERAL_GUIDANCE_KEY) || "").trim(); return legacy ? [{ id: "legacy-guidance", type: "Company Guidance", text: legacy, createdAt: new Date().toISOString() }] : []; } catch { return []; } }
+function renderSpecAcceptedTermsMarkup() { const entries = getSpecAcceptedTerms(); return entries.length ? entries.map(item => `<article class="company-term-message"><div><span>${escapeSpecCompanyKnowledge(item.type || "Accepted Term")}</span><small>${escapeSpecCompanyKnowledge(new Date(item.createdAt).toLocaleString())}</small></div><p>${escapeSpecCompanyKnowledge(item.text || "")}</p><button class="secondary compact" type="button" onclick="deleteSpecAcceptedTerm('${escapeSpecCompanyKnowledge(item.id)}')">Delete</button></article>`).join("") : `<p class="company-terms-empty">No accepted company knowledge has been added yet.</p>`; }
+function refreshSpecAcceptedTerms() { const wrap = document.getElementById("specAcceptedTermsHistory"); if (wrap) wrap.innerHTML = renderSpecAcceptedTermsMarkup(); }
+function addSpecAcceptedTerm() { const input = document.getElementById("specAcceptedTermInput"); const text = String(input?.value || "").trim(); if (!text) return setSpecCompanyKnowledgeStatus("Enter an approved statement before adding it."); const entries = getSpecAcceptedTerms(); entries.unshift({ id: crypto.randomUUID(), type: document.getElementById("specAcceptedTermType")?.value || "Accepted Term", text: text.slice(0, 4000), createdAt: new Date().toISOString() }); localStorage.setItem(SPEC_COMPANY_ACCEPTED_TERMS_KEY, JSON.stringify(entries.slice(0, 200))); input.value = ""; refreshSpecAcceptedTerms(); setSpecCompanyKnowledgeStatus("Accepted company knowledge added."); }
+function deleteSpecAcceptedTerm(id) { if (id === "legacy-guidance") localStorage.removeItem(SPEC_COMPANY_GENERAL_GUIDANCE_KEY); localStorage.setItem(SPEC_COMPANY_ACCEPTED_TERMS_KEY, JSON.stringify(getSpecAcceptedTerms().filter(item => item.id !== id))); refreshSpecAcceptedTerms(); }
+async function clearSpecAcceptedTerms() { if (!(await showSpecConfirm("Clear Accepted Knowledge", "Delete every accepted term, rule, fundamental, and exception saved on this browser?", "Clear History"))) return; localStorage.removeItem(SPEC_COMPANY_ACCEPTED_TERMS_KEY); localStorage.removeItem(SPEC_COMPANY_GENERAL_GUIDANCE_KEY); refreshSpecAcceptedTerms(); }
+
+function escapeSpecCompanyKnowledge(value = "") {
+  return String(value).replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+}
+
+function saveSpecCompanyGeneralGuidance() {
+  const value = [["SYSTEM FUNDAMENTALS", "specGuidanceFundamentals"], ["REQUIRED COMPANY RULES", "specGuidanceRules"], ["STANDARD TERMINOLOGY", "specGuidanceTerminology"], ["KNOWN EXCEPTIONS", "specGuidanceExceptions"]]
+    .map(([heading, id]) => [heading, String(document.getElementById(id)?.value || "").trim()]).filter(([, text]) => text).map(([heading, text]) => `${heading}:\n${text}`).join("\n\n").slice(0, 50000);
+  try {
+    if (value) localStorage.setItem(SPEC_COMPANY_GENERAL_GUIDANCE_KEY, value); else localStorage.removeItem(SPEC_COMPANY_GENERAL_GUIDANCE_KEY);
+    const status = document.getElementById("specCompanyGuidanceStatus"); if (status) status.textContent = "Saved. Both AI tools will use this guidance when relevant.";
+    setSpecCompanyKnowledgeStatus("Shared company AI guidance saved for Specification and Peer Review on this browser.");
+  } catch { setSpecCompanyKnowledgeStatus("Shared guidance could not be saved because browser storage is unavailable."); }
 }
 
 function openSpecCompanyKnowledgeModal() {
@@ -59,9 +92,14 @@ function openSpecCompanyKnowledgeModal() {
   const closeButton = document.createElement("button");
   closeButton.type = "button";
   closeButton.className = "secondary";
-  closeButton.textContent = "Close";
+  closeButton.textContent = "Cancel";
   closeButton.onclick = openSpecLocalAiStatusModal;
   actions.append(closeButton);
+  const finishButton = document.createElement("button");
+  finishButton.type = "button";
+  finishButton.textContent = "Close";
+  finishButton.onclick = openSpecLocalAiStatusModal;
+  actions.append(finishButton);
   setupSpecCompanyKnowledgeDropZone();
   modal.classList.remove("hidden");
   loadSpecCompanyKnowledge();

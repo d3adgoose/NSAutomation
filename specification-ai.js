@@ -101,7 +101,11 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
 
   function getConfiguredSystemPrompt() {
     const examples = String(localStorage.getItem("ns-spec-local-ai-examples-v1") || "").trim().slice(0, 12000);
-    return examples ? `${SYSTEM_PROMPT}\n\nCompany-approved examples follow. Use them only as extraction and placement patterns; facts must still come from the current source page.\n\n${examples}` : SYSTEM_PROMPT;
+    const generalGuidance = String(localStorage.getItem("ns-company-ai-general-guidance-v1") || "").trim().slice(0, 16000);
+    let terms = [];
+    try { terms = JSON.parse(localStorage.getItem("ns-company-ai-accepted-terms-v1") || "[]"); } catch {}
+    const acceptedTerms = Array.isArray(terms) ? terms.filter(item => item.status !== "Warning").map(item => `${item.type || "Company Knowledge"}: ${item.text || ""}`).join("\n").slice(0, 16000) : "";
+    return `${SYSTEM_PROMPT}${generalGuidance ? `\n\nGENERAL COMPANY AI GUIDANCE SHARED WITH PEER REVIEW:\n${generalGuidance}\n\nUse this guidance only when applicable. Never copy project-specific facts into the current source, and never override visible source evidence.` : ""}${acceptedTerms ? `\n\nACCEPTED COMPANY KNOWLEDGE SHARED WITH PEER REVIEW:\n${acceptedTerms}\n\nApply only relevant approved entries and never override visible source evidence.` : ""}${examples ? `\n\nCompany-approved Specification examples follow. Use them only as extraction and placement patterns; facts must still come from the current source page.\n\n${examples}` : ""}`;
   }
 
   async function sessionToken() {
