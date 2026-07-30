@@ -74,6 +74,8 @@ assert.strictEqual(rules.peerEquipmentNamesEquivalent("BRUSH SYSTEM PACKAGE", "B
 assert.strictEqual(rules.peerEquipmentNamesEquivalent("5HP RECLAIM SYSTEM", "5HP RECLAIM PUMP"), true);
 assert.strictEqual(rules.peerEquipmentNamesEquivalent("RO CONSOLE", "RO CONSOLE"), true);
 assert.strictEqual(rules.peerEquipmentNamesEquivalent("ANTI-SCALANT", "CARBON FILTER"), false);
+assert.strictEqual(rules.peerEquipmentNamesEquivalent("ANTI-SCALANT: AXEON XP4-30 (MFG. PN# 205600)", "ANTI-SCALANT"), true);
+assert.strictEqual(rules.peerEquipmentNamesEquivalent("ANTI-SCALANT: AXEON XP4-30 (MFG. PN# 205600)", "ANTI-SCALANT CONSOLE"), true);
 assert.strictEqual(rules.isPeerMarkupColor(236, 45, 160), true);
 assert.strictEqual(rules.isPeerMarkupColor(220, 35, 35), true);
 assert.strictEqual(rules.isPeerMarkupColor(40, 40, 40), false);
@@ -87,6 +89,9 @@ assert(peerReviewSource.includes("if (claimsMissingCallout) return false"));
 assert(peerReviewSource.includes("PART / ITEM DESCRIPTION"));
 assert(peerReviewSource.includes("Reviewing both halves of page"));
 assert(peerReviewSource.includes("confidence 0.35 or higher"));
+assert(peerReviewSource.includes("openPeerRedlinePreview"));
+assert(peerReviewSource.includes("exportAcceptedPeerRedlines"));
+assert(!peerReviewSource.includes("Add review note"));
 assert(!peerReviewSource.includes('issue: "Drawing callout has no matching main equipment-list item"'));
 assert(peerReviewSource.includes("Rule check · confirm source"));
 console.log("Peer Review rule tests passed.");

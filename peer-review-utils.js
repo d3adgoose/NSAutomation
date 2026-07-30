@@ -74,6 +74,8 @@ function createPeerFinding(data = {}) {
     page: Number(data.page || 0), status: data.status || "Open",
     comments: Array.isArray(data.comments) ? data.comments : [],
     resolutionNote: data.resolutionNote || "", history: Array.isArray(data.history) ? data.history : [],
+    annotationText: data.annotationText || "", annotationX: Number.isFinite(Number(data.annotationX)) ? Number(data.annotationX) : 0.08,
+    annotationY: Number.isFinite(Number(data.annotationY)) ? Number(data.annotationY) : 0.1, annotationAccepted: Boolean(data.annotationAccepted),
     source: data.source || "automatic", confidence: Number.isFinite(Number(data.confidence)) ? Math.max(0, Math.min(1, Number(data.confidence))) : null,
     createdAt: data.createdAt || new Date().toISOString()
   };
@@ -100,6 +102,7 @@ function normalizePeerEquipmentName(value = "") {
 
 function getPeerEquipmentShortDescription(value = "") {
   return String(value || "")
+    .split(/\s*:\s*/)[0]
     .split(/\s*:\s*(?:INCLUDES?|CONSISTS?|PROVIDES?|PUMPS?|STORES?|ACTIVATES?|INJECTS?)\b/i)[0]
     .replace(/\s*\((?:DIMENSIONS?|INCLUDES?)[^)]*\)\s*$/i, "")
     .replace(/\s+/g, " ")
