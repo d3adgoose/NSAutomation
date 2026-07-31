@@ -48,6 +48,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   initializeSpecAnalysisMenuStatus(menu);
+  initializePeerReviewMenuTag(menu);
+  initializeWorkInProgressMenuTags(menu);
 });
 
 const RECENT_TOOL_HISTORY_KEY = "ns-recent-tool-history-v1";
@@ -105,6 +107,28 @@ function initializeSpecAnalysisMenuStatus(menu) {
   setInterval(render, 1000);
   window.addEventListener("storage", event => {
     if (event.key === SPEC_ANALYSIS_STATUS_KEY) render();
+  });
+}
+
+function initializePeerReviewMenuTag(menu) {
+  const link = Array.from(menu.querySelectorAll("a")).find(item => (item.getAttribute("href") || "").split("?")[0] === "peer-review.html");
+  if (!link || link.querySelector(".menu-ai-tag")) return;
+  const badge = document.createElement("small");
+  badge.className = "menu-ai-tag";
+  badge.textContent = "AI";
+  badge.setAttribute("aria-label", "Uses Local AI");
+  link.appendChild(badge);
+}
+
+function initializeWorkInProgressMenuTags(menu) {
+  ["peer-review.html", "specification.html"].forEach(page => {
+    const link = Array.from(menu.querySelectorAll("a")).find(item => (item.getAttribute("href") || "").split("?")[0] === page);
+    if (!link || link.querySelector(".menu-wip-tag")) return;
+    const badge = document.createElement("small");
+    badge.className = "menu-wip-tag";
+    badge.textContent = "WIP";
+    badge.setAttribute("aria-label", "Work in progress");
+    link.appendChild(badge);
   });
 }
 

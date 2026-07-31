@@ -21,6 +21,10 @@ const PEER_EQUIPMENT_FIELDS = Object.freeze([
   ["amperage", "Amperage"], ["flowRate", "Flow Rate"], ["pressure", "Pressure"],
   ["pipeSize", "Pipe Size"], ["connectionSize", "Connection Size"]
 ]);
+const PEER_ENGINEER_FINDING_CATEGORIES = Object.freeze([
+  "Tank coordination", "Service clearance", "Valve or union", "Drain or overflow",
+  "Linework", "Dimension or label"
+]);
 
 function peerId(prefix = "item") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -77,6 +81,10 @@ function createPeerFinding(data = {}) {
     annotationText: data.annotationText || "", annotationX: Number.isFinite(Number(data.annotationX)) ? Number(data.annotationX) : 0.08,
     annotationY: Number.isFinite(Number(data.annotationY)) ? Number(data.annotationY) : 0.1, annotationAccepted: Boolean(data.annotationAccepted),
     source: data.source || "automatic", confidence: Number.isFinite(Number(data.confidence)) ? Math.max(0, Math.min(1, Number(data.confidence))) : null,
+    verificationStatus: data.verificationStatus || "", verificationReason: data.verificationReason || "",
+    category: data.category || "", affectedObject: data.affectedObject || "",
+    evidence: data.evidence || "", requirement: data.requirement || "", location: data.location || "",
+    evidenceType: data.evidenceType || "", relatedPages: Array.isArray(data.relatedPages) ? data.relatedPages.map(Number).filter(Boolean) : [],
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
@@ -90,6 +98,234 @@ function findDuplicatePeerValues(values, normalizer = value => normalizePeerValu
     groups.get(key).push(index);
   });
   return Array.from(groups.values()).filter(indices => indices.length > 1);
+}
+
+function inferPeerEngineerFindingCategory(item = {}) {
+  const declared = String(item.category || "").trim();
+  const supported = PEER_ENGINEER_FINDING_CATEGORIES.find(category => category.toLowerCase() === declared.toLowerCase());
+  if (supported) return supported;
+  const combined = `${item.issue || ""} ${item.evidence || ""} ${item.requirement || ""}`;
+  if (/\bTANKS?\b/i.test(combined) && /SEPARATE|COMBINED|SINGLE|TWO|BOTH FUNCTIONS/i.test(combined)) return "Tank coordination";
+  if (/\bCLEARANCE\b|\bACCESS SPACE\b|\bWORKING SPACE\b/i.test(combined)) return "Service clearance";
+  if (/\bBALL VALVE\b|\bSHUT[ -]?OFF VALVE\b|\bVALVE AND UNION\b|\bUNION\b/i.test(combined)) return "Valve or union";
+  if (/\bDRAIN(?: LINE)?\b|\bOVERFLOW\b|\bRECOVERY ROUTE\b/i.test(combined)) return "Drain or overflow";
+  if (/\bLINE ?WEIGHT\b|TOO LIGHT|BROKEN LINE|OBSCURED LINE/i.test(combined)) return "Linework";
+  if (/\bDIMENSION\b|\bLABEL\b|\bCALLOUT\b/i.test(combined)) return "Dimension or label";
+  return "";
+}
+
+function getPeerEngineerAffectedObject(item = {}) {
+  const provided = String(item.affectedObject || "").replace(/\s+/g, " ").trim();
+  if (provided) return provided;
+  const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
+  const patterns = [
+    /\bRO (?:CONTROL PANEL|CONSOLE)\b/i,
+    /\bRECLAIM (?:PUMP )?CONTROL PANEL\b/i,
+    /\bRECLAIM TANK\s+(?:TO|AND)\s+SUMP PIT\b/i,
+    /\bSUMP PIT\s+(?:TO|AND)\s+RECLAIM TANK\b/i,
+    /\bRO CONSOLE\s+(?:TO|AND)\s+RECLAIM TANK\b/i,
+    /\b(?:RO|RECLAIM)(?: WATER| STORAGE)? TANK\b/i
+  ];
+  return patterns.map(pattern => combined.match(pattern)?.[0]).find(Boolean) || String(item.location || "drawing location").trim();
+}
+
+function isPeerEngineerFindingSupported(item = {}, category = inferPeerEngineerFindingCategory(item)) {
+  const combined = `${item.issue || ""} ${item.evidence || ""} ${item.requirement || ""} ${item.location || ""}`;
+  if (!String(item.location || "").trim() || !String(item.evidence || "").trim()) return false;
+  if (category === "Tank coordination") return /\bTANKS?\b/i.test(combined) && /SEPARATE|COMBINED|SINGLE|TWO|BOTH FUNCTIONS/i.test(combined);
+  if (category === "Service clearance") return /\bCLEARANCE\b|\bACCESS SPACE\b|\bWORKING SPACE\b/i.test(combined) && /PANEL|CONSOLE/i.test(combined);
+  if (category === "Valve or union") return /\bBALL VALVE\b|\bSHUT[ -]?OFF VALVE\b|\bVALVE AND UNION\b|\bUNION\b/i.test(combined) && /CONNECTION|INLET|OUTLET|\bTO\b|\bBETWEEN\b/i.test(combined);
+  if (category === "Drain or overflow") return /\bDRAIN(?: LINE)?\b|\bOVERFLOW\b|\bRECOVERY ROUTE\b/i.test(combined);
+  if (category === "Linework") return /\bLINE ?WEIGHT\b|TOO LIGHT|BROKEN LINE|OBSCURED LINE/i.test(combined);
+  if (category === "Dimension or label") return /\bDIMENSION\b|\bLABEL\b|\bCALLOUT\b/i.test(combined) && /CONFLICT|DIFFER|MISMATCH|INCORRECT|MISSING|CORRECT|REVISE/i.test(combined);
+  return false;
+}
+
+function getPeerEngineerRedlineIssue(item = {}, category = inferPeerEngineerFindingCategory(item)) {
+  const issue = String(item.issue || "").replace(/\s+/g, " ").trim().replace(/[.]+$/, "");
+  if (/^(?:ADD|SHOW|PROVIDE|CORRECT|REVISE|INCREASE|CLARIFY|VERIFY|IDENTIFY|SEPARATE)\b/i.test(issue)) return issue;
+  const affected = getPeerEngineerAffectedObject(item);
+  if (category === "Tank coordination") return "Show and label separate RO and reclaim water tanks";
+  if (category === "Service clearance") return `Provide 3'-0\" service clearance in front of the ${affected}`;
+  if (category === "Valve or union") return `Add the required shutoff valve and union at the ${affected}`;
+  if (category === "Drain or overflow") return `Add and identify the required drain or overflow route for the ${affected}`;
+  if (category === "Linework") return `Increase the line weight at the ${affected}`;
+  if (category === "Dimension or label") return `Correct the conflicting dimension or label at the ${affected}`;
+  return issue;
+}
+
+function selectPeerEngineerFindings(items = []) {
+  const limits = new Map([
+    ["Tank coordination", 1], ["Service clearance", 2], ["Valve or union", 1],
+    ["Drain or overflow", 1], ["Linework", 1], ["Dimension or label", 1]
+  ]);
+  const prepared = items.map((item, index) => {
+    const category = inferPeerEngineerFindingCategory(item);
+    const affectedObject = getPeerEngineerAffectedObject(item);
+    let confidence = Math.max(0, Math.min(1, Number(item.confidence) || 0));
+    const requirement = String(item.requirement || "");
+    if (category === "Service clearance" && !/(?:3\s*(?:FEET|FOOT|FT)|3\s*['\u2019]|THREE[- ]FOOT)/i.test(requirement)) confidence = Math.min(confidence, 0.55);
+    if (category === "Drain or overflow" && !/\bDRAIN(?: LINE)?\b|\bOVERFLOW\b|\bRECOVERY ROUTE\b/i.test(requirement)) confidence = Math.min(confidence, 0.55);
+    return { ...item, category, affectedObject, confidence, _peerIndex: index };
+  }).filter(item => limits.has(item.category) && isPeerEngineerFindingSupported(item, item.category));
+
+  const selected = [];
+  PEER_ENGINEER_FINDING_CATEGORIES.forEach(category => {
+    const seenObjects = new Set();
+    prepared.filter(item => item.category === category)
+      .sort((left, right) => right.confidence - left.confidence || String(right.evidence || "").length - String(left.evidence || "").length)
+      .some(item => {
+        const objectKey = normalizePeerValue(item.affectedObject).replace(/[^A-Z0-9]/g, "");
+        if (seenObjects.has(objectKey)) return false;
+        seenObjects.add(objectKey);
+        selected.push({ ...item, issue: getPeerEngineerRedlineIssue(item, category) });
+        return selected.filter(entry => entry.category === category).length >= limits.get(category);
+      });
+  });
+  return selected.sort((left, right) => left._peerIndex - right._peerIndex).map(item => {
+    const cleaned = { ...item };
+    delete cleaned._peerIndex;
+    return cleaned;
+  });
+}
+
+function getPeerMissingEngineerReviewSlots(items = []) {
+  const selected = selectPeerEngineerFindings(items);
+  const counts = new Map(PEER_ENGINEER_FINDING_CATEGORIES.map(category => [category, selected.filter(item => item.category === category).length]));
+  return PEER_ENGINEER_FINDING_CATEGORIES.map(category => ({
+    category,
+    remaining: Math.max(0, (category === "Service clearance" ? 2 : 1) - (counts.get(category) || 0))
+  })).filter(item => item.remaining > 0);
+}
+
+function applyPeerEngineerVerifications(candidates = [], verifications = [], options = {}) {
+  const retainUnsupported = Boolean(options.retainUnsupported);
+  const byIndex = new Map(verifications.map(item => [Number(item.candidateIndex), item]));
+  return candidates.map((candidate, candidateIndex) => {
+    const verification = byIndex.get(candidateIndex);
+    if (!verification?.supported) {
+      if (!retainUnsupported) return null;
+      const category = inferPeerEngineerFindingCategory(candidate);
+      const affectedObject = getPeerEngineerAffectedObject(candidate);
+      const instruction = getPeerEngineerRedlineIssue(candidate, category);
+      return {
+        ...candidate,
+        issue: `Verify - ${instruction}`,
+        evidence: `Visible observation: ${String(candidate.evidence || `a possible ${category.toLowerCase()} concern involving ${affectedObject}`).trim()} Source verification could not confirm the required correction.`,
+        requirement: "Engineer confirmation required",
+        confidence: Math.min(Number(candidate.confidence) || 0, 0.35),
+        verificationStatus: "possible",
+        verificationReason: String(verification?.reason || "The source verifier did not return enough evidence for this candidate.").trim()
+      };
+    }
+    const verifiedConfidence = Math.max(0, Math.min(1, Number(verification.confidence) || 0));
+    const verifiedRequirement = String(verification.requirement || candidate.requirement || "").trim();
+    const reliesOnEngineerStandard = /^Engineer standard - confirm$/i.test(verifiedRequirement);
+    return {
+      ...candidate,
+      page: Number(verification.page || candidate.page || 0),
+      issue: String(verification.issue || candidate.issue || "").trim(),
+      evidence: String(verification.evidence || candidate.evidence || "").trim(),
+      requirement: verifiedRequirement,
+      location: String(verification.location || candidate.location || "").trim(),
+      confidence: reliesOnEngineerStandard ? Math.min(verifiedConfidence || 0.55, 0.55) : Math.max(0.65, verifiedConfidence),
+      verificationStatus: reliesOnEngineerStandard ? "possible" : "verified",
+      verificationReason: String(verification.reason || "Source verification confirmed this finding.").trim()
+    };
+  }).filter(Boolean);
+}
+
+function normalizePeerFindingPhrase(value = "") {
+  const ignored = new Set(["A", "AN", "AND", "AT", "FOR", "IN", "OF", "ON", "THE", "THIS", "TO", "WITH", "VERIFY", "POSSIBLE"]);
+  return String(value || "").toUpperCase().replace(/[â€“â€”]/g, "-").match(/[A-Z0-9]+/g)?.filter(token => token.length > 1 && !ignored.has(token)) || [];
+}
+
+function peerFindingTokenSimilarity(left = "", right = "") {
+  const leftTokens = new Set(normalizePeerFindingPhrase(left)), rightTokens = new Set(normalizePeerFindingPhrase(right));
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  const shared = [...leftTokens].filter(token => rightTokens.has(token)).length;
+  return shared / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function getPeerFindingAffectedObject(item = {}) {
+  return String(item.affectedObject || item.equipmentTag || item.listValue || item.comparedValue || "").replace(/\s+/g, " ").trim();
+}
+
+function getPeerFindingLocation(item = {}) {
+  if (String(item.location || "").trim()) return String(item.location).replace(/\s+/g, " ").trim();
+  return String(item.details || "").match(/\bLocation:\s*([^.]*)/i)?.[1]?.trim() || "";
+}
+
+function getPeerFindingEvidence(item = {}) {
+  if (String(item.evidence || "").trim()) return String(item.evidence).replace(/\s+/g, " ").trim();
+  return String(item.details || "").split(/\b(?:Required reference|Location|Verification note|Evidence):/i)[0].replace(/\s+/g, " ").trim();
+}
+
+function getPeerFindingCategoryKey(item = {}) {
+  const engineerCategory = inferPeerEngineerFindingCategory(item);
+  if (engineerCategory) return engineerCategory;
+  const combined = `${item.issue || ""} ${item.details || ""}`;
+  if (/PLACEHOLDER|\bTBD\b|\bTBC\b|UNKNOWN/i.test(combined)) return "Placeholder";
+  if (/PROJECT NUMBER|DRAWING NUMBER|SHEET NUMBER|TITLE BLOCK/i.test(combined)) return "Title block";
+  if (/EQUIPMENT.*(?:CALLOUT|LIST)|CALLOUT.*EQUIPMENT/i.test(combined)) return "Equipment coordination";
+  if (/QUANTITY|\bQTY\b|COUNT MISMATCH/i.test(combined)) return "Quantity";
+  return normalizePeerFindingPhrase(item.issue).slice(0, 5).join(" ");
+}
+
+function isPeerFindingGrounded(item = {}) {
+  if (item.source === "manual" || item.confidence === null || item.confidence === undefined) return true;
+  if (item.source !== "visual-ai") return Boolean(Number(item.page || 0) && String(item.issue || "").trim() && (getPeerFindingEvidence(item) || item.listValue || item.comparedValue));
+  return Boolean(Number(item.page || 0) && getPeerFindingAffectedObject(item) && getPeerFindingLocation(item) && getPeerFindingEvidence(item));
+}
+
+function arePeerFindingsSameCorrection(left = {}, right = {}) {
+  const leftCategory = getPeerFindingCategoryKey(left), rightCategory = getPeerFindingCategoryKey(right);
+  if (!leftCategory || leftCategory !== rightCategory) return false;
+  const sameValues = normalizePeerValue(left.listValue || "") === normalizePeerValue(right.listValue || "")
+    && normalizePeerValue(left.comparedValue || "") === normalizePeerValue(right.comparedValue || "")
+    && Boolean(left.listValue || left.comparedValue || right.listValue || right.comparedValue);
+  const issueSimilarity = peerFindingTokenSimilarity(left.issue, right.issue);
+  const leftObject = getPeerFindingAffectedObject(left), rightObject = getPeerFindingAffectedObject(right);
+  const objectSimilarity = peerFindingTokenSimilarity(leftObject, rightObject);
+  const locationSimilarity = peerFindingTokenSimilarity(getPeerFindingLocation(left), getPeerFindingLocation(right));
+  if (sameValues && issueSimilarity >= 0.6) return true;
+  if (leftObject && rightObject && objectSimilarity >= 0.6 && issueSimilarity >= 0.45) return true;
+  return Number(left.page || 0) === Number(right.page || 0) && locationSimilarity >= 0.65 && issueSimilarity >= 0.55;
+}
+
+function getPeerFindingStrength(item = {}) {
+  const confidence = Number(item.confidence || 0);
+  const statusWeight = item.verificationStatus === "verified" ? 5 : item.verificationStatus === "possible" ? 1 : item.source === "visual-ai" ? 2 : 4;
+  const severityWeight = item.severity === "Error" ? 0.3 : item.severity === "Warning" ? 0.2 : 0;
+  return statusWeight + confidence + severityWeight + Math.min(0.25, getPeerFindingEvidence(item).length / 1000);
+}
+
+function mergePeerDuplicateFindings(items = []) {
+  const groups = [];
+  items.forEach(item => {
+    const group = groups.find(entries => arePeerFindingsSameCorrection(entries[0], item));
+    if (group) group.push(item); else groups.push([item]);
+  });
+  return groups.map(entries => {
+    const ranked = [...entries].sort((left, right) => getPeerFindingStrength(right) - getPeerFindingStrength(left));
+    const primary = { ...ranked[0] };
+    const pages = Array.from(new Set(entries.flatMap(item => [Number(item.page || 0), ...(item.relatedPages || [])]).filter(Boolean))).sort((a, b) => a - b);
+    primary.relatedPages = pages.filter(page => page !== Number(primary.page || 0));
+    if (primary.relatedPages.length && !/Also observed on page/i.test(primary.details || "")) {
+      primary.details = `${String(primary.details || "").trim()} Also observed on page${primary.relatedPages.length === 1 ? "" : "s"} ${primary.relatedPages.join(", ")}.`.trim();
+    }
+    return primary;
+  });
+}
+
+function prioritizePeerFindings(items = [], targetMax = 12) {
+  const merged = mergePeerDuplicateFindings(items.filter(isPeerFindingGrounded));
+  if (merged.length <= targetMax) return merged;
+  const confirmed = merged.filter(item => item.verificationStatus !== "possible");
+  const possible = merged.filter(item => item.verificationStatus === "possible")
+    .sort((left, right) => getPeerFindingStrength(right) - getPeerFindingStrength(left));
+  if (confirmed.length >= targetMax) return confirmed;
+  return [...confirmed, ...possible.slice(0, targetMax - confirmed.length)];
 }
 
 function normalizePeerDrawingIdentifier(value = "") {
@@ -259,4 +495,4 @@ function runPeerEquipmentRules(rows = []) {
   return findings;
 }
 
-if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };
+if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, selectPeerEngineerFindings, getPeerMissingEngineerReviewSlots, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };

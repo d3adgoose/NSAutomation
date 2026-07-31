@@ -5,6 +5,7 @@ const PEER_PDF_STORE = "reviewPdfs";
 const PEER_KNOWLEDGE_STORE = "knowledgeSources";
 const PEER_HISTORY_LIMIT = 5;
 const PEER_KNOWLEDGE_KEY = "ns-peer-review-knowledge-v1";
+const PEER_FINDING_FEEDBACK_KEY = "ns-peer-review-finding-feedback-v1";
 const COMPANY_AI_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
 const COMPANY_AI_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
 const PEER_BUILT_IN_KNOWLEDGE = `BUILT-IN PEER REVIEW REFERENCE
@@ -30,6 +31,9 @@ EXPECTED FINDING: Ask whether two tanks should be shown and separately labeled. 
 SOURCE EXAMPLE: A control panel or console face is shown against adjacent equipment without the required or explicitly noted working/access clearance.
 EXPECTED FINDING: Request the visible required clearance in front of the panel. Cite the applicable note or dimension when visible; otherwise keep confidence low and request engineer confirmation.
 
+SOURCE EXAMPLE: Two separately named control panels or consoles are shown in different equipment areas, but the review only checks access at one of them.
+EXPECTED FINDING: Review each named panel independently. Return a separate low-confidence prompt for the second panel when its working face is visible but the required clearance cannot be confirmed.
+
 SOURCE EXAMPLE: A readable general flow note requires a shutoff valve and union before a connection to supplied equipment, but the traced connection visibly omits one.
 EXPECTED FINDING: Identify the connection and the missing valve or union. Do not report this unless the note and the affected connection are both readable.
 
@@ -38,6 +42,9 @@ EXPECTED FINDING: Request the missing route and cite the tank label plus the app
 
 SOURCE EXAMPLE: A major equipment outline, dimension extension, leader, or flow line is materially lighter, broken, or obscured compared with adjacent drawing geometry.
 EXPECTED FINDING: Request a line-weight or legibility correction and identify the exact object or dimension. Ignore ordinary construction-line hierarchy.
+
+SOURCE EXAMPLE: A critical overall dimension, equipment label, or tank designation is repeated in plan and elevation but the visible values or meanings disagree.
+EXPECTED FINDING: Quote both visible values or labels and identify both view locations. When the difference cannot be read confidently, retain it only as a possible review prompt.
 
 IMPORTANT: These are reusable review patterns, not project answers. Report them only when the current clean drawing supplies the stated visible evidence.`;
 const PEER_VISUAL_REVIEW_SCHEMA = {
@@ -49,7 +56,7 @@ const PEER_VISUAL_REVIEW_SCHEMA = {
     callouts: { type: "array", items: { type: "object", additionalProperties: false, properties: { tag: { type: "string" }, name: { type: "string" } }, required: ["tag", "name"] } },
     unresolvedLabels: { type: "array", items: { type: "string" } },
     equipmentRows: { type: "array", items: { type: "object", additionalProperties: false, properties: { tag: { type: "string" }, description: { type: "string" }, sourceTable: { type: "string", enum: ["Main Equipment List", "Other Table"] }, tableTitle: { type: "string" } }, required: ["tag", "description", "sourceTable", "tableTitle"] } },
-    findings: { type: "array", items: { type: "object", additionalProperties: false, properties: { severity: { type: "string", enum: ["Error", "Warning", "Manual Review"] }, issue: { type: "string" }, evidence: { type: "string" }, location: { type: "string" }, confidence: { type: "number" }, evidenceType: { type: "string", enum: ["Explicit reviewer correction", "Unresolved placeholder", "Objective visible mismatch", "Required reference missing"] }, existingCommentVisible: { type: "boolean" } }, required: ["severity", "issue", "evidence", "location", "confidence", "evidenceType", "existingCommentVisible"] } }
+    findings: { type: "array", items: { type: "object", additionalProperties: false, properties: { severity: { type: "string", enum: ["Error", "Warning", "Manual Review"] }, affectedObject: { type: "string" }, issue: { type: "string" }, evidence: { type: "string" }, requirement: { type: "string" }, location: { type: "string" }, confidence: { type: "number" }, evidenceType: { type: "string", enum: ["Explicit reviewer correction", "Unresolved placeholder", "Objective visible mismatch", "Required reference missing"] }, existingCommentVisible: { type: "boolean" } }, required: ["severity", "affectedObject", "issue", "evidence", "requirement", "location", "confidence", "evidenceType", "existingCommentVisible"] } }
   }, required: ["drawingNumber", "projectNumber", "sheetNumber", "sheetTotal", "titleBlockConfidence", "pageType", "equipmentRows", "findings"]
 };
 const PEER_COORDINATION_REVIEW_SCHEMA = {
@@ -57,9 +64,9 @@ const PEER_COORDINATION_REVIEW_SCHEMA = {
   properties: {
     findings: { type: "array", maxItems: 6, items: { type: "object", additionalProperties: false, properties: {
       severity: { type: "string", enum: ["Error", "Warning", "Manual Review"] },
-      issue: { type: "string" }, evidence: { type: "string" }, location: { type: "string" },
+      affectedObject: { type: "string" }, issue: { type: "string" }, evidence: { type: "string" }, requirement: { type: "string" }, location: { type: "string" },
       confidence: { type: "number" }, evidenceType: { type: "string", enum: ["Unresolved placeholder", "Objective visible mismatch", "Required reference missing"] }
-    }, required: ["severity", "issue", "evidence", "location", "confidence", "evidenceType"] } }
+    }, required: ["severity", "affectedObject", "issue", "evidence", "requirement", "location", "confidence", "evidenceType"] } }
   }, required: ["findings"]
 };
 const PEER_EQUIPMENT_EXTRACTION_SCHEMA = {
@@ -75,6 +82,44 @@ const PEER_EQUIPMENT_EXTRACTION_SCHEMA = {
     }
   },
   required: ["equipmentRows"]
+};
+const PEER_ENGINEER_PATTERN_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    findings: {
+      type: "array", maxItems: 8,
+      items: {
+        type: "object", additionalProperties: false,
+        properties: {
+          page: { type: "integer" }, severity: { type: "string", enum: ["Warning", "Manual Review"] },
+          category: { type: "string", enum: ["Tank coordination", "Service clearance", "Valve or union", "Drain or overflow", "Linework", "Dimension or label"] },
+          affectedObject: { type: "string" }, requirement: { type: "string" },
+          issue: { type: "string" }, evidence: { type: "string" }, location: { type: "string" },
+          confidence: { type: "number" }, evidenceType: { type: "string", enum: ["Objective visible mismatch", "Required reference missing"] }
+        },
+        required: ["page", "severity", "category", "affectedObject", "requirement", "issue", "evidence", "location", "confidence", "evidenceType"]
+      }
+    }
+  },
+  required: ["findings"]
+};
+const PEER_ENGINEER_VERIFICATION_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    verifications: {
+      type: "array", maxItems: 7,
+      items: {
+        type: "object", additionalProperties: false,
+        properties: {
+          candidateIndex: { type: "integer" }, supported: { type: "boolean" }, page: { type: "integer" },
+          issue: { type: "string" }, evidence: { type: "string" }, requirement: { type: "string" },
+          location: { type: "string" }, confidence: { type: "number" }, reason: { type: "string" }
+        },
+        required: ["candidateIndex", "supported", "page", "issue", "evidence", "requirement", "location", "confidence", "reason"]
+      }
+    }
+  },
+  required: ["verifications"]
 };
 let peerReview = null;
 let peerPdfDocument = null;
@@ -174,6 +219,44 @@ function savePeerKnowledgeLibrary() {
   }
 }
 
+function readPeerFindingFeedback() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(PEER_FINDING_FEEDBACK_KEY) || "[]");
+    return Array.isArray(entries) ? entries : [];
+  } catch { return []; }
+}
+
+function getPeerFindingLearningKey(item = {}) {
+  return [getPeerFindingCategoryKey(item), getPeerFindingAffectedObject(item), item.issue]
+    .map(value => normalizePeerFindingPhrase(value).slice(0, 12).join("-"))
+    .filter(Boolean).join("|");
+}
+
+function recordPeerFindingFeedback(item = {}, status = item.status) {
+  if (!item || item.source === "manual") return;
+  const outcome = status === "Accepted" ? "accepted" : ["False Positive", "Not Applicable"].includes(status) ? "rejected" : "";
+  if (!outcome) return;
+  const key = getPeerFindingLearningKey(item); if (!key) return;
+  const note = String(item.resolutionNote || item.comments?.at(-1)?.text || "").trim();
+  const entry = {
+    key, outcome, category: getPeerFindingCategoryKey(item), affectedObject: getPeerFindingAffectedObject(item),
+    issue: String(item.annotationText || item.issue || "").trim(), evidence: getPeerFindingEvidence(item),
+    location: getPeerFindingLocation(item), reason: note || (outcome === "rejected" ? "Engineer rejected this proposed finding." : "Engineer accepted this finding."),
+    updatedAt: new Date().toISOString()
+  };
+  try {
+    const entries = readPeerFindingFeedback().filter(existing => existing.key !== key);
+    entries.unshift(entry);
+    localStorage.setItem(PEER_FINDING_FEEDBACK_KEY, JSON.stringify(entries.slice(0, 80)));
+  } catch {}
+}
+
+function getPeerFindingFeedbackPrompt() {
+  const entries = readPeerFindingFeedback().slice(0, 24);
+  if (!entries.length) return "";
+  return entries.map(item => `${item.outcome === "accepted" ? "ENGINEER-ACCEPTED EXAMPLE" : "ENGINEER-REJECTED EXAMPLE"}\nCATEGORY: ${item.category || "General"}\nAFFECTED OBJECT: ${item.affectedObject || "Not recorded"}\nFINDING: ${item.issue || ""}\nVISIBLE EVIDENCE: ${item.evidence || "Not recorded"}\nLOCATION PATTERN: ${item.location || "Not recorded"}\nENGINEER DECISION: ${item.reason || ""}`).join("\n\n").slice(0, 14000);
+}
+
 function getPeerKnowledgePrompt() {
   let optional = "";
   try { optional = localStorage.getItem(PEER_KNOWLEDGE_KEY) || ""; } catch {}
@@ -182,7 +265,8 @@ function getPeerKnowledgePrompt() {
   let acceptedTerms = [];
   try { acceptedTerms = JSON.parse(localStorage.getItem(COMPANY_AI_ACCEPTED_TERMS_KEY) || "[]"); } catch {}
   const acceptedText = Array.isArray(acceptedTerms) ? acceptedTerms.filter(item => item.status !== "Warning").map(item => `${item.type || "Company Knowledge"}: ${item.text || ""}`).join("\n").slice(0, 16000) : "";
-  return `${PEER_BUILT_IN_KNOWLEDGE}${general.trim() ? `\n\nGENERAL COMPANY AI GUIDANCE SHARED WITH SPECIFICATION:\n${general.trim().slice(0, 16000)}` : ""}${acceptedText ? `\n\nACCEPTED COMPANY KNOWLEDGE SHARED WITH SPECIFICATION:\n${acceptedText}` : ""}${optional.trim() ? `\n\nAPPROVED PEER REVIEW EXAMPLES:\n${optional.trim().slice(0, 12000)}` : ""}`;
+  const feedbackText = getPeerFindingFeedbackPrompt();
+  return `${PEER_BUILT_IN_KNOWLEDGE}${general.trim() ? `\n\nGENERAL COMPANY AI GUIDANCE SHARED WITH SPECIFICATION:\n${general.trim().slice(0, 16000)}` : ""}${acceptedText ? `\n\nACCEPTED COMPANY KNOWLEDGE SHARED WITH SPECIFICATION:\n${acceptedText}` : ""}${optional.trim() ? `\n\nAPPROVED PEER REVIEW EXAMPLES:\n${optional.trim().slice(0, 12000)}` : ""}${feedbackText ? `\n\nENGINEER DECISION EXAMPLES FROM PRIOR REVIEWS:\n${feedbackText}\n\nUse accepted examples only when the current drawing shows comparable evidence. Treat rejected examples as explicit false-positive guidance. Never copy project-specific facts.` : ""}`;
 }
 
 async function openPeerSourceLibrary() {
@@ -417,6 +501,14 @@ async function buildPeerKnowledgeContext(pageNumber) {
   return excerpts.length ? excerpts.join("\n\n") : "Approved sources exist, but no readable excerpts were available.";
 }
 
+async function buildPeerDocumentKnowledgeContext(pageNumbers = [1, 2]) {
+  const contexts = await Promise.all(pageNumbers.map(pageNumber => buildPeerKnowledgeContext(pageNumber)));
+  const useful = contexts.filter(text => text && !/^No approved|^Approved sources exist/i.test(text));
+  if (!useful.length) return "No approved company knowledge excerpts were available for this document-level review.";
+  const sections = useful.flatMap(text => text.split(/\n\n(?=\[Source:)/)).map(text => text.trim()).filter(Boolean);
+  return Array.from(new Set(sections)).join("\n\n").slice(0, 12000);
+}
+
 function newPeerReview(type) {
   const now = new Date().toISOString();
   return { id: peerId("review"), type, project: "", filename: "", reviewer: peerCurrentUser, createdAt: now, updatedAt: now, status: "In Progress", pages: [], equipmentRows: [], findings: [], checklist: [], fixStates: {}, history: [{ action: "Review created", user: peerCurrentUser, date: now }] };
@@ -509,7 +601,8 @@ function analyzePeerPage(number, text, totalPages = 0) {
   const sheetMatch = flattened.match(/\b([0-9IO]{1,3})\s+(?:OF|\/)\s+([0-9IO]{1,3})\b/i);
   const titleMatch = flattened.match(/\bTITLE\s*:\s*([A-Z0-9][A-Z0-9 &/().,'-]{2,70}?)(?=\s+(?:PROJECT|DRAWING|REV(?:ISION)?|SCALE|DATE)\b|$)/i);
   const pageRegex = new RegExp(`(?:PAGE|SHEET)\\s*(?:NO\\.?|NUMBER|#)?\\s*[:#-]?\\s*${number}\\b|\\b${number}\\s*(?:OF|/)\\s*${totalPages || "\\d+"}\\b`, "i");
-  return { number, category: "Drawing", text, tableTypes: detectPeerTableTypes(flattened), blank: text.length < 8, drawingNumber: normalizePeerOcrIdentifier(drawingMatch?.[1] || ""), projectNumber: normalizePeerOcrDigits(projectMatch?.[1] || ""), sheetNumber: Number(normalizePeerOcrDigits(sheetMatch?.[1] || "0")), sheetTotal: Number(normalizePeerOcrDigits(sheetMatch?.[2] || "0")), sheetTitle: titleMatch?.[1]?.trim() || "", pageNumberDetected: pageRegex.test(flattened) || Boolean(sheetMatch), fingerprint: normalizePeerValue(text.slice(0, 1200)).slice(0, 500) };
+  const projectNumber = normalizePeerOcrDigits(projectMatch?.[1] || "");
+  return { number, category: "Drawing", text, tableTypes: detectPeerTableTypes(flattened), blank: text.length < 8, drawingNumber: normalizePeerOcrIdentifier(drawingMatch?.[1] || ""), projectNumber, textProjectNumber: projectNumber, sheetNumber: Number(normalizePeerOcrDigits(sheetMatch?.[1] || "0")), sheetTotal: Number(normalizePeerOcrDigits(sheetMatch?.[2] || "0")), sheetTitle: titleMatch?.[1]?.trim() || "", pageNumberDetected: pageRegex.test(flattened) || Boolean(sheetMatch), fingerprint: normalizePeerValue(text.slice(0, 1200)).slice(0, 500) };
 }
 
 function detectPeerTableTypes(text = "") { const value = String(text).toUpperCase(), types = []; if (/EQUIPMENT LIST[^\n]{0,80}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/.test(value)) types.push("Main Equipment List"); if (/POWER REQUIREMENT/.test(value)) types.push("Power Requirement"); if (/CONNECTIONS? TABLE/.test(value)) types.push("Connections"); if (/FITTINGS?.{0,20}VALVES?.{0,20}COMPONENTS?/.test(value)) types.push("Fittings Valves Components"); if (/NOZZLE SCHEDULE/.test(value)) types.push("Nozzle Schedule"); if (/GENERAL NOTES?/.test(value)) types.push("General Notes"); return types.length ? types : ["Other"]; }
@@ -621,7 +714,7 @@ async function runPeerChecks() {
     const automatic = peerIncludesEquipmentReview()
       ? [...runPeerInitialRules(peerReview.pages), ...runPeerEquipmentRules(ruleEquipmentRows), ...runPeerEquipmentNamingRules(ruleEquipmentRows), ...naming, ...equipmentReadiness, ...completeness, ...visualFindings]
       : [...runPeerInitialRules(peerReview.pages), ...naming, ...completeness, ...visualFindings];
-    const uniqueAutomatic = Array.from(new Map(automatic.map(item => [`${item.issue}|${item.page}|${item.equipmentTag}|${item.listValue}|${item.comparedValue}|${item.details}`, item])).values());
+    const uniqueAutomatic = prioritizePeerFindings(automatic, 12);
     peerReview.findings = [...uniqueAutomatic, ...manual]; peerReview.history.push({ action: "Automatic checks run", user: peerCurrentUser, date: new Date().toISOString() });
     renderPeerFindings(); renderPeerFixList(); savePeerReview(false); showPeerStep("findings");
     const recognized = peerReview.pages.filter(page => page.ocrApplied).length;
@@ -725,13 +818,14 @@ function reconcilePeerTitleBlockMetadata() {
 }
 
 async function runPeerVisualReview() {
-  const findings = [];
+  const findings = [], engineerPatternImages = [];
   peerReview.equipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
   for (let index = 0; index < peerReview.pages.length; index += 1) {
     const info = peerReview.pages[index];
     setPeerAnalysisProgress("running", `Visually reviewing page ${info.number} (${index + 1} of ${peerReview.pages.length}). Independently checking drawing notes, callouts, schedules, dimensions, quantities, and coordination issues.`);
     try {
       const detailedRegions = await renderPeerAnalysisRegions(info.number), regionResults = [], incompleteRegions = [];
+      if (info.number <= 2) engineerPatternImages.push(...detailedRegions.map(image => ({ page: info.number, image })));
       setPeerAnalysisProgress("running", `Reviewing both halves of page ${info.number} together. Comparing tables, plan views, elevations, dimensions, and equipment counts across the page.`);
       try {
         regionResults.push(await requestPeerVisualAnalysis(info.number, detailedRegions));
@@ -750,15 +844,6 @@ async function runPeerVisualReview() {
       }
       if (!regionResults.length) throw new Error("Local visual AI returned incomplete review information.");
       let result = mergePeerVisualRegionResults(regionResults);
-      if (!filterPeerVisualFindings(result.findings || []).length) {
-        try {
-          setPeerAnalysisProgress("running", `Page ${info.number} returned no findings. Rechecking once with the committed review logic.`);
-          regionResults.push(await requestPeerVisualAnalysis(info.number, detailedRegions, 1));
-          result = mergePeerVisualRegionResults(regionResults);
-        } catch (emptyRetryError) {
-          recordPeerAnalysisMessage(`The zero-finding recheck could not finish on page ${info.number}; the completed first pass was retained.`, true);
-        }
-      }
       result.equipmentRows = [];
       result.pageType = "Drawing";
       try {
@@ -794,7 +879,8 @@ async function runPeerVisualReview() {
       const titleConfidence = Math.max(0, Math.min(1, Number(result.titleBlockConfidence) || 0));
       const visualProjectNumber = normalizePeerOcrDigits(result.projectNumber);
       if (titleConfidence >= 0.72 && result.drawingNumber) info.drawingNumber = normalizePeerOcrIdentifier(result.drawingNumber);
-      if (titleConfidence >= 0.72 && /^\d{4}$/.test(visualProjectNumber)) info.projectNumber = visualProjectNumber;
+      const textProjectNumber = normalizePeerOcrDigits(info.textProjectNumber || info.projectNumber);
+      if (titleConfidence >= 0.72 && /^\d{4}$/.test(visualProjectNumber) && (!textProjectNumber || visualProjectNumber === textProjectNumber)) info.projectNumber = visualProjectNumber;
       if (titleConfidence >= 0.72 && result.sheetNumber) info.sheetNumber = Number(result.sheetNumber);
       if (titleConfidence >= 0.72 && result.sheetTotal) info.sheetTotal = Number(result.sheetTotal);
       if (titleConfidence >= 0.72) info.metadataConfidence = titleConfidence;
@@ -820,7 +906,9 @@ async function runPeerVisualReview() {
           : `${item.evidence}${item.location ? ` Location: ${item.location}.` : ""} Evidence: ${item.evidenceType}.`,
         page: info.number,
         source: "visual-ai",
-        confidence: item.confidence
+        confidence: item.confidence,
+        category: inferPeerEngineerFindingCategory(item), affectedObject: item.affectedObject,
+        evidence: item.evidence, requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
       })));
       const acceptedCount = filterPeerVisualFindings(result.findings || []).length;
       recordPeerAnalysisMessage(`Page ${info.number} visual review ${incompleteRegions.length ? "partially completed" : "completed"} with ${acceptedCount} potential item${acceptedCount === 1 ? "" : "s"} across all confidence levels.`);
@@ -828,6 +916,51 @@ async function runPeerVisualReview() {
       console.warn(`Visual review failed for page ${info.number}:`, error);
       recordPeerAnalysisMessage(`Page ${info.number} visual review could not finish: ${error.message}`, true);
       findings.push(createPeerFinding({ severity: "Manual Review", issue: "Visual drawing review could not be completed for this page", details: error.message, page: info.number, source: "visual-ai" }));
+    }
+  }
+  if (engineerPatternImages.length) {
+    try {
+      setPeerAnalysisProgress("running", "Running the document-level engineer coordination check across pages 1 and 2.");
+      let patternCandidates = filterPeerVisualFindings(await requestPeerEngineerPatternAnalysis(engineerPatternImages));
+      let proposedFindings = selectPeerEngineerFindings(patternCandidates);
+      const missingReviewSlots = getPeerMissingEngineerReviewSlots(proposedFindings);
+      if (missingReviewSlots.length) {
+        try {
+          setPeerAnalysisProgress("running", `Expanding review detail for ${missingReviewSlots.map(item => item.category).join(", ")}. Looking for additional specific locations without duplicating existing findings.`);
+          const detailCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(engineerPatternImages, proposedFindings, missingReviewSlots));
+          patternCandidates = [...patternCandidates, ...detailCandidates];
+          proposedFindings = selectPeerEngineerFindings(patternCandidates);
+          recordPeerAnalysisMessage(`Detail expansion added ${detailCandidates.length} candidate${detailCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+        } catch (detailError) {
+          recordPeerAnalysisMessage(`The extra-detail sweep could not finish, so the completed coordination findings were retained. ${detailError.message}`, true);
+        }
+      }
+      let patternFindings = proposedFindings;
+      if (proposedFindings.length) {
+        try {
+          setPeerAnalysisProgress("running", `Source-verifying ${proposedFindings.length} proposed finding${proposedFindings.length === 1 ? "" : "s"} against the exact pages, labels, notes, and locations.`);
+          const verifications = await requestPeerEngineerFindingVerification(engineerPatternImages, proposedFindings);
+          patternFindings = selectPeerEngineerFindings(applyPeerEngineerVerifications(proposedFindings, verifications, { retainUnsupported: true }));
+          const verifiedCount = patternFindings.filter(item => item.verificationStatus === "verified").length;
+          const possibleCount = patternFindings.filter(item => item.verificationStatus === "possible").length;
+          recordPeerAnalysisMessage(`Source verification confirmed ${verifiedCount} of ${proposedFindings.length} proposed finding${proposedFindings.length === 1 ? "" : "s"}; ${possibleCount} unconfirmed item${possibleCount === 1 ? " remains" : "s remain"} as low-confidence review prompts.`);
+        } catch (verificationError) {
+          patternFindings = proposedFindings.map(item => ({ ...item, confidence: Math.min(Number(item.confidence) || 0, .55) }));
+          recordPeerAnalysisMessage(`Source verification could not finish, so the first-pass findings were retained at low confidence. ${verificationError.message}`, true);
+        }
+      }
+      patternFindings.forEach(item => findings.push(createPeerFinding({
+        severity: item.confidence < .78 ? "Manual Review" : item.severity,
+        issue: item.issue,
+        details: `${item.evidence}${item.requirement ? ` Required reference: ${item.requirement}.` : ""}${item.location ? ` Location: ${item.location}.` : ""}${item.verificationStatus === "possible" ? ` Verification note: ${item.verificationReason} Treat this as a review idea, not a confirmed defect.` : ""} Evidence: ${item.evidenceType}.`,
+        page: item.page, source: "visual-ai", confidence: item.confidence,
+        verificationStatus: item.verificationStatus || "unverified", verificationReason: item.verificationReason || "",
+        category: item.category, affectedObject: item.affectedObject, evidence: item.evidence,
+        requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
+      })));
+      recordPeerAnalysisMessage(`Document-level engineer coordination found ${patternCandidates.length} candidate${patternCandidates.length === 1 ? "" : "s"}; ${patternFindings.length} distinct source-checked item${patternFindings.length === 1 ? " was" : "s were"} retained.`);
+    } catch (patternError) {
+      recordPeerAnalysisMessage(`The document-level engineer coordination check could not finish; completed page findings were retained. ${patternError.message}`, true);
     }
   }
   return findings;
@@ -895,6 +1028,8 @@ function filterPeerVisualFindings(items) {
   const allowedTypes = new Set(["Unresolved placeholder", "Objective visible mismatch", "Required reference missing"]);
   return items.filter(item => {
     if (!item || !String(item.issue || "").trim()) return false;
+    if (!String(item.affectedObject || "").trim() || !String(item.location || "").trim() || !String(item.evidence || "").trim()) return false;
+    if (!String(item.requirement || "").trim()) item.requirement = "Engineer confirmation required";
     item.confidence = Math.max(0, Math.min(1, Number(item.confidence) || 0));
     if (item.evidenceType === "Explicit reviewer correction" || item.existingCommentVisible) return false;
     if (!allowedTypes.has(item.evidenceType)) item.evidenceType = "Objective visible mismatch";
@@ -903,6 +1038,7 @@ function filterPeerVisualFindings(items) {
     // Regional requests cannot prove document-wide absence. The deterministic
     // completeness pass evaluates merged main-list rows and callouts instead.
     if (claimsMissingCallout) return false;
+    if (/TANK BULKHEAD FITTING|SIPHON BREAKER|\bTBF\d|\bSBA\d/i.test(combined) && /not visible|no visible|no explicit callout|not drawn|missing/i.test(combined)) return false;
     if (/DRAWING STATUS.*FOR PROPOSAL|FOR PROPOSAL.*REVISION|proposal status/i.test(combined) && /\bdate\b|no longer|potential confusion/i.test(combined)) return false;
     if (/\bPARTS LIST\b/i.test(combined) && /not called out|no corresponding callout|missing equipment|equipment item is listed/i.test(combined)) return false;
     if (/ANCHOR BOLT REQUIREMENTS|CONDUIT\s*\/?\s*CABLE SCHEDULE|EXISTING\s*\/\s*BUYOUT EQUIPMENT|POWER REQUIREMENT|FITTINGS?\s*\/\s*VALVES?\s*\/\s*COMPONENTS?|NOZZLE SCHEDULE|CONNECTIONS? TABLE|PARTS LIST/i.test(combined) && /not called out|no corresponding callout|missing equipment/i.test(combined)) return false;
@@ -976,11 +1112,11 @@ Perform the review independently. No reviewer comments, redlines, corrected revi
 
 Systematic original-drawing checks: compare quantities and distinct equipment shown across the formal equipment list, plan, elevation, and detail views; compare repeated dimensions and elevations wherever they describe the same object; check that labeled tanks, pumps, panels, and other major equipment are represented consistently across views; check whether readable installation/access notes require a clearance or dimension that is not shown; and identify leaders, labels, or callouts that point ambiguously or contradict another visible value. Do not invent a requirement merely because a drawing could contain more detail.
 
-Response priorities: return at most six findings, ranked by visible evidence strength. Prefer a smaller set with exact quoted values, object names, and locations over a long list. Every finding must explain (1) what is visibly wrong, (2) the two conflicting values or the explicit requirement and missing reference, (3) where each piece of evidence appears, and (4) the concise annotation a reviewer should place on the drawing. Include evidence-based coordination concerns at confidence 0.35 or higher as Manual Review when the conflict is visible but its intended correction is uncertain. Do not default to an empty findings array merely because an issue is not certain; use honest lower confidence. Still exclude hypothetical requirements and all schedule-row missing-callout claims.
+Response priorities: return at most six findings, ranked by visible evidence strength. Prefer a smaller set with exact quoted values, object names, and locations over a long list. Every finding must name affectedObject, the exact page location/view, the visible supporting evidence, and the applicable visible requirement or "Engineer confirmation required." Every finding must explain (1) what is visibly wrong, (2) the two conflicting values or the explicit requirement and missing reference, (3) where each piece of evidence appears, and (4) the concise annotation a reviewer should place on the drawing. Include evidence-based coordination concerns at confidence 0.35 or higher as Manual Review when the conflict is visible but its intended correction is uncertain. Do not default to an empty findings array merely because an issue is not certain; use honest lower confidence. Still exclude hypothetical requirements and all schedule-row missing-callout claims.
 
 Extract every legible formal main-equipment row and numbered main-equipment callout, but do not turn either extraction into a missing-equipment finding. Return every other genuinely visible potential issue even when confidence is low; assign an honest confidence from 0.01 to 1 so the user can decide, and never omit an issue solely because confidence is below a threshold. Do not report capitalization, spacing, alignment, wording style, or table formatting unless a supplied written convention is visibly violated. A circled flow-line number refers to its Connections Table row and does not need to repeat the pipe or tube size beside the circle. Anchor-bolt requirements, conduit/cable schedules, parts lists, fittings/valves/components tables, power tables, legends, and general notes do not require every row or referenced item to have an independent layout callout. General responsibility notes do not require every referenced connection, fitting, conduit, J-box, or termination to be drawn on the same sheet. A model number or part number is valid supporting text, not evidence that the equipment name is missing. Do not infer design correctness, code compliance, hidden connections, or conflicts between unrelated tables. Extracted equipment rows and callouts are data, not findings.
 
-Finding quality rules: Return each underlying issue exactly once. Never return a finding that says the table is hypothetical, not present, would need to be checked, cannot be verified, or would only be an issue if something existed. When the formal main equipment list is not visibly present in the supplied page images, do not invent its rows or create missing-equipment findings for that page. Evidence for each equipment item must come from that item's own visible row and its own callout search; never reuse a note about one item as evidence for a different item. A parts-list fastener, washer, screw, shaft, or other assembly component does not require an independent equipment callout. Do not report parts-list rows as missing equipment. Low confidence means uncertain visible evidence, not hypothetical evidence.
+Finding quality rules: Return each underlying issue exactly once. Allow only one finding for the same affected object and location unless the corrections belong to genuinely different categories, such as a tank-label conflict and a separate drain-routing problem. Merge findings that request the same correction even when their wording or supporting view differs. Never return a finding that says the table is hypothetical, not present, would need to be checked, cannot be verified, or would only be an issue if something existed. When the formal main equipment list is not visibly present in the supplied page images, do not invent its rows or create missing-equipment findings for that page. Evidence for each equipment item must come from that item's own visible row and its own callout search; never reuse a note about one item as evidence for a different item. A parts-list fastener, washer, screw, shaft, or other assembly component does not require an independent equipment callout. Do not report parts-list rows as missing equipment. Low confidence means uncertain visible evidence, not hypothetical evidence.
 
 Legend and note safeguards: A Plumbing Legend defines available symbols and does not require every symbol type to appear in the current drawing. Never report a missing reference merely because a legend entry has no visible use. Flow Notes and General Notes may describe operation or installation without requiring a separately tagged object on the same sheet. Report a note-related missing reference only when the note explicitly commands that a specific detail, connection, or item must be shown on this drawing.
 
@@ -1058,6 +1194,169 @@ Tank bulkhead fittings are components, not separate tanks. Never use TBF1, TBFI,
   const parsed = parsePeerJsonObject(payload.content);
   if (!parsed || !Array.isArray(parsed.findings)) throw new Error("Focused coordination review returned incomplete information.");
   return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
+}
+
+async function requestPeerEngineerPatternAnalysis(pageImages = []) {
+  const { data, error } = await window.supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to run engineer coordination checks.");
+  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const orderedPages = pageImages.map(entry => entry.page).join(", ");
+  const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
+  const prompt = `Review the supplied clean, unannotated engineering drawing regions as one document. Image page order is: ${orderedPages}. Each page has a left and right overlapping region.
+
+Evaluate each of these engineer coordination checks independently. The complete review aims for roughly 6-12 distinct findings across all passes, but never invent or repeat a finding to reach a count. Return four to seven findings here only when that many distinct issues have visible support. Use the exact category names shown below:
+1. If the formal equipment list separately identifies an RO water/storage tank and a reclaim water tank, verify that plan and elevation views show and separately label two tanks. A single combined RO STORAGE / RECLAIM TANK label is a potential coordination issue.
+2. Check the working face of each visible control panel or console separately for explicitly required or standard 3-foot access clearance. Return up to two Service clearance findings only when they concern different named panels. If the requirement is not printed on the drawing, keep confidence at or below 0.55 and request engineer confirmation.
+3. Trace readable flow connections where a general note explicitly requires a shutoff/ball valve and union before supplied equipment. Return no more than one Valve or union finding: choose only the clearest affected equipment boundary. A general note does not justify repeating the same warning for every unvalved flow line.
+4. Check each visible storage/reclaim tank for a coordinated drain, overflow, or recovery route when a connection-table row or flow note requires it.
+5. Identify a major equipment outline, dimension extension, leader, or flow line that is materially too light, broken, or obscured compared with adjacent final drawing linework.
+6. Compare repeated critical dimensions and equipment labels between plan and elevation views.
+
+Use these categories exactly: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label. Do not return two findings that restate the same correction, even when they use different wording or cite different views. Allow one finding per affected object and location unless the required corrections are genuinely different. Keep the valve and drain checks separate. For every finding:
+- issue must be a short imperative redline such as SHOW, PROVIDE, ADD, CORRECT, REVISE, or INCREASE;
+- affectedObject must name the exact tank, panel, connection, dimension, or linework;
+- evidence must quote the visible drawing labels or describe the visible mismatch;
+- requirement must quote the visible note or schedule language supporting the correction, or say "Engineer standard - confirm" when it is an engineering judgment;
+- page is the page where the redline should be placed, not the page where a supporting schedule happens to appear;
+- location must identify a specific view and nearby label.
+
+APPROVED GENERAL REVIEW PATTERNS:
+${PEER_ENGINEER_REVIEW_PATTERNS}
+
+APPROVED USER EXAMPLES:
+${getPeerKnowledgePrompt()}
+
+APPROVED DOCUMENT EXCERPTS:
+${sourceKnowledge}
+
+Use approved examples and excerpts only as a checklist and source of company requirements. Never copy their project numbers, tags, quantities, dimensions, or locations unless the current drawing independently shows the same facts. Never invent equipment-list item numbers or page references. Do not report hypothetical missing equipment. Do not create findings from parts lists, fittings/valves/components-table rows, tank bulkhead fittings, siphon breakers, conduit schedules, or a schedule row lacking its own callout. Do not treat TBF or SBA component tags as major equipment. Return an empty result for any category without visible support. Return JSON only.`;
+  let response;
+  try {
+    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
+      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: "You are an engineering peer reviewer performing a focused cross-page coordination check. Use only visible evidence, produce concise redline-ready findings, and never invent missing component callouts." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 16384, maxTokens: 3200, retryAttempt: 2
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error("Document-level engineer coordination exceeded 120 seconds.");
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Document-level engineer coordination returned ${response.status}.`);
+  const parsed = parsePeerJsonObject(payload.content);
+  if (!parsed || !Array.isArray(parsed.findings)) throw new Error("Document-level engineer coordination returned incomplete information.");
+  return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
+}
+
+async function requestPeerEngineerDetailExpansion(pageImages = [], existingFindings = [], missingSlots = []) {
+  const { data, error } = await window.supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to expand review detail.");
+  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
+  const requestedSlots = missingSlots.map(item => `${item.category}: up to ${item.remaining}`).join("; ");
+  const existing = existingFindings.map(item => `${item.category} | ${item.affectedObject} | ${item.issue} | ${item.location}`).join("\n") || "None";
+  const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
+  const prompt = `Perform a second, more detailed engineering review sweep of the supplied clean drawing regions.
+
+IMAGE MAP: ${imageMap}
+
+The first pass already found these items. Treat wording variations, nearby views, and synonymous equipment names as duplicates when they request the same correction. Do not repeat them:
+${existing}
+
+Inspect only these missing review slots: ${requestedSlots}.
+
+For Service clearance, inspect separately named control panels and consoles one by one; a second panel is a distinct review prompt. For Linework, zoom attention to equipment outlines, leaders, dimension extensions, and process lines and identify the exact nearby label or dimension. For Dimension or label, compare repeated dimensions, tank descriptions, equipment names, and plan/elevation labels and quote both visible values. For valve, drain, or tank coordination, identify the exact affected connection or equipment rather than citing only a table heading.
+
+Return a candidate when there is a specific visible object, exact location, and visible observation worth engineer review even if the requirement is uncertain. Use confidence 0.25-0.55 and requirement "Engineer standard - confirm" for these possible review prompts. Do not return a generic instruction to check an entire page. Do not invent a mismatch, quote, dimension, or connection. Return no more candidates than the requested slots allow, and return fewer when distinct evidence is unavailable.
+
+Use exactly these categories: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label. Every candidate must name affectedObject, page, view/location, and the visible observation that prompted the check. Write issue as an imperative engineer comment.
+
+APPROVED GENERAL REVIEW PATTERNS:
+${PEER_ENGINEER_REVIEW_PATTERNS}
+
+APPROVED DOCUMENT EXCERPTS:
+${sourceKnowledge}
+
+Approved documents provide review patterns and requirements only. Never copy project-specific facts unless the current drawing visibly confirms them. Return JSON only.`;
+  let response;
+  try {
+    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
+      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: "You are an engineering review detail specialist. Find additional specific review locations missed by the first pass, retain uncertainty as low confidence, and never duplicate or invent evidence." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 20480, maxTokens: 3200, retryAttempt: 2
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error("Extra-detail review exceeded 120 seconds.");
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Extra-detail review returned ${response.status}.`);
+  const parsed = parsePeerJsonObject(payload.content);
+  if (!parsed || !Array.isArray(parsed.findings)) throw new Error("Extra-detail review returned incomplete information.");
+  const allowedCategories = new Set(missingSlots.map(item => item.category));
+  return parsed.findings.filter(item => allowedCategories.has(item.category)).map(item => ({ ...item, existingCommentVisible: false }));
+}
+
+async function requestPeerEngineerFindingVerification(pageImages = [], candidates = []) {
+  const { data, error } = await window.supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to source-verify findings.");
+  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
+  const pageText = peerReview.pages.filter(page => page.number <= 2).map(page => {
+    const text = String(page.text || page.ocrText || "").replace(/\s+/g, " ").trim().slice(0, 7000);
+    return `PAGE ${page.number} EXTRACTED TEXT (may be incomplete): ${text || "No reliable selectable text."}`;
+  }).join("\n\n");
+  const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
+  const candidateText = candidates.map((item, index) => JSON.stringify({
+    candidateIndex: index, category: item.category, affectedObject: item.affectedObject, page: item.page,
+    issue: item.issue, evidence: item.evidence, requirement: item.requirement, location: item.location,
+    confidence: item.confidence
+  })).join("\n");
+  const prompt = `Independently verify each proposed engineering finding against the clean drawing images and page-specific extracted text. Do not assume the first reviewer is correct.
+
+IMAGE MAP: ${imageMap}
+
+${pageText}
+
+PROPOSED FINDINGS:
+${candidateText}
+
+APPROVED COMPANY KNOWLEDGE EXCERPTS:
+${sourceKnowledge}
+
+Return exactly one verification for every candidateIndex. Set supported=false when the core issue cannot be located, the affected object is unnamed, the location is not specific, the visible evidence is absent, the quoted requirement is not visible, the page is wrong and cannot be corrected, or the reasoning only says a note "implies" an unrelated requirement. Never invent a quote, equipment-list item number, connection, or page reference.
+
+When the core issue is visible but the proposed wording is wrong, set supported=true and correct page, issue, evidence, requirement, and location. The page must be where the redline should be placed. Evidence must describe what is visibly present or absent. Requirement must be an exact visible note/schedule quote or an explicitly applicable approved company excerpt. If the correction is professional engineering judgment rather than a printed or approved requirement, use exactly "Engineer standard - confirm" and cap confidence at 0.55. A routing note about underground or overhead piping does not establish a drain requirement. An electrical-entry note does not establish 3-foot service clearance. A general plumbing note does not justify repeating a valve warning at every connection. Approved sources may support a general rule but never prove that a project-specific object, value, or location is present.
+
+Confidence rules: source-confirmed findings with a plainly visible mismatch and supporting requirement should be 0.65 or higher; use 0.90 or higher only when both are unmistakable. Use 0.70-0.89 for a visible mismatch with partially legible support. Engineer-standard confirmation remains a possible finding at 0.55 or lower. Issue must remain a concise imperative redline. Return JSON only.`;
+  let response;
+  try {
+    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
+      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: "You are the strict source-verification reviewer. Reject unsupported evidence instead of filling gaps from engineering expectations." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
+        format: PEER_ENGINEER_VERIFICATION_SCHEMA, numCtx: 24576, maxTokens: 3600, retryAttempt: 2
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error("Finding source verification exceeded 120 seconds.");
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Finding source verification returned ${response.status}.`);
+  const parsed = parsePeerJsonObject(payload.content);
+  if (!parsed || !Array.isArray(parsed.verifications)) throw new Error("Finding source verification returned incomplete information.");
+  return parsed.verifications;
 }
 
 async function requestPeerEquipmentExtraction(pageNumber, images = []) {
@@ -1303,6 +1602,10 @@ function renderPeerFindings() {
   Array.from(body.querySelectorAll(":scope > .peer-finding-card")).forEach((card, index) => {
     const item = displayed[index], footer = card.querySelector(".peer-finding-card-actions");
     if (!item || !footer) return;
+    if (item.verificationStatus === "possible") {
+      const confidenceBadge = card.querySelector(".peer-confidence");
+      if (confidenceBadge) confidenceBadge.textContent = `Possible - ${Math.round(Number(item.confidence || 0) * 100)}% confidence`;
+    }
     const ruleBadge = card.querySelector(".peer-confidence.rule");
     if (ruleBadge) {
       ruleBadge.classList.add("is-clickable");
@@ -1322,7 +1625,14 @@ function renderPeerFindings() {
 function getPeerFindingReliability(item) { if (item.source === "manual") return "Manual Comments"; if (item.confidence !== null && item.confidence !== undefined && Number(item.confidence) < .5) return "Possible Findings"; if (["visual-ai", "red-markup-ocr"].includes(item.source)) return "Visual Review"; return "Rule-Based Checks"; }
 function organizePeerFindingGroups(body, displayed) { if (!body || !displayed.length) return; const cards = Array.from(body.querySelectorAll(":scope > .peer-finding-card")), order = ["Confirmed PDF Comments", "Rule-Based Checks", "Visual Review", "Possible Findings", "Manual Comments"], groups = new Map(); displayed.forEach((item, index) => { const label = getPeerFindingReliability(item); if (!groups.has(label)) groups.set(label, []); if (cards[index]) groups.get(label).push(cards[index]); }); body.replaceChildren(); order.forEach(label => { const items = groups.get(label); if (!items?.length) return; const section = document.createElement("section"); section.className = `peer-finding-group${label === "Possible Findings" ? " is-possible" : ""}`; section.innerHTML = `<div class="peer-finding-group-heading"><strong>${escapePeerHTML(label)}</strong><span>${items.length} item${items.length === 1 ? "" : "s"}</span></div>`; items.forEach(card => section.appendChild(card)); body.appendChild(section); }); }
 
-function updatePeerFindingStatus(id, status) { const item = peerReview.findings.find(finding => finding.id === id); if (!item) return; item.status = status; item.history.push({ action: `Status changed to ${status}`, user: peerCurrentUser, date: new Date().toISOString() }); if (status === "Fixed") recordPeerResolution(item); renderPeerFindings(); renderPeerFixList(); savePeerReview(false); }
+function updatePeerFindingStatus(id, status) {
+  const item = peerReview.findings.find(finding => finding.id === id); if (!item) return;
+  item.status = status;
+  item.history.push({ action: `Status changed to ${status}`, user: peerCurrentUser, date: new Date().toISOString() });
+  if (status === "Fixed") recordPeerResolution(item);
+  recordPeerFindingFeedback(item, status);
+  renderPeerFindings(); renderPeerFixList(); savePeerReview(false);
+}
 function openPeerRuleExplanation(id) {
   const item = peerReview?.findings.find(finding => finding.id === id);
   if (!item) return;
@@ -1456,6 +1766,7 @@ function acceptAllPeerFindings() {
   items.forEach(item => {
     item.status = "Accepted";
     item.history.push({ action: "Finding accepted", user: peerCurrentUser, date, note: "Accepted from the Findings list." });
+    recordPeerFindingFeedback(item, "Accepted");
   });
   peerReview.history.push({ action: `${items.length} findings accepted`, user: peerCurrentUser, date });
   savePeerReview(false);
@@ -1475,6 +1786,7 @@ function savePeerRedline(accept = false) {
     if (existing) { existing.text = text; existing.editedAt = new Date().toISOString(); existing.editedBy = peerCurrentUser; }
     else item.comments.push({ id: peerId("comment"), text, redline: true, user: peerCurrentUser, date: new Date().toISOString() });
     item.history.push({ action: "Finding and redline accepted", user: peerCurrentUser, date: new Date().toISOString(), note: text });
+    recordPeerFindingFeedback(item, "Accepted");
   }
   savePeerReview(false); renderPeerFindings(); renderPeerFixList(); closePeerModal("peerRedlineModal");
   showPeerToast(accept ? "Finding accepted and redline saved." : "Redline draft saved.");

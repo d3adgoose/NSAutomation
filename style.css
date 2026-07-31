@@ -283,6 +283,45 @@ button:hover {
   color: #0b2d4d;
 }
 
+.home-feature-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.home-feature-heading h3 {
+  margin-bottom: 0;
+}
+
+.home-feature-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.home-ai-tag,
+.menu-ai-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 3px 8px;
+  border: 1px solid #9bc7e5;
+  border-radius: 999px;
+  background: #e8f5ff;
+  color: #075d91;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 /* --------------------------------------------------------------------------
    Specification automation
    -------------------------------------------------------------------------- */
@@ -967,10 +1006,32 @@ button:disabled {
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
 }
-.side-menu a:has(.spec-menu-analysis-status) { display: flex; align-items: center; gap: 10px; }
+.side-menu a:has(.spec-menu-analysis-status),
+.side-menu a:has(.menu-ai-tag) { display: flex; align-items: center; gap: 10px; }
 .spec-menu-analysis-status { margin-left: auto; padding: 3px 7px; border-radius: 999px; background: #e7edf2; color: #526579; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .spec-menu-analysis-status.is-running { background: #fff0c9; color: #76520f; }
 .spec-menu-analysis-status.is-done { background: #dff3e6; color: #17623a; }
+.side-menu .menu-ai-tag { margin-left: auto; border-color: rgba(155, 199, 229, .75); background: rgba(232, 245, 255, .96); }
+
+.home-wip-tag,
+.menu-wip-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border: 1px solid #e2c277;
+  border-radius: 999px;
+  background: #fff5d9;
+  color: #76520f;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.side-menu a:has(.menu-wip-tag) { gap: 6px; }
+.side-menu .menu-wip-tag { padding-inline: 6px; border-color: rgba(226, 194, 119, .85); background: rgba(255, 245, 217, .97); }
 
 .attach-pdf-btn {
   display: inline-block;

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Peer Review</title>
-  <link rel="stylesheet" href="style.css?v=20260730-table-rules-reliability" />
+  <link rel="stylesheet" href="style.css?v=20260731-ai-wip-tags" />
   <link rel="stylesheet" href="ghostAutocomplete.css?v=20260713-library-data" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js";</script>
@@ -147,5 +147,5 @@
   <div id="peerExportModal" class="modal hidden"><div class="modal-content peer-modal-content" role="dialog" aria-modal="true"><h2>Export Review</h2><p>Choose the marked engineering drawing or the written findings report.</p><div class="peer-export-options"><button onclick="exportAcceptedPeerRedlines()"><strong>Export Marked Drawing PDF</strong><span>Original drawing with accepted red comments placed on the reviewed pages.</span></button><button onclick="exportPeerPDF()"><strong>Export Review Report PDF</strong><span>Summary of findings, statuses, comments, checklist, and review history.</span></button><button class="secondary" onclick="exportPeerExcel()"><strong>Export Excel Report</strong><span>Spreadsheet version of the review records.</span></button></div><div class="button-row peer-ai-status-actions"><button class="secondary" onclick="closePeerModal('peerExportModal')">Close</button></div></div></div>
   <div id="peerToast" class="peer-toast hidden" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabaseClient.js"></script><script src="global-auth.js?v=20260722-database-login-style"></script>
-  <script src="navigation.js?v=20260729-peer-review"></script><script src="ghostAutocomplete.js?v=20260713-library-data"></script><script src="peer-review-utils.js?v=20260730-smaller-redlines"></script><script src="peer-review.js?v=20260730-smaller-redlines"></script>
+  <script src="navigation.js?v=20260731-ai-wip-tags"></script><script src="ghostAutocomplete.js?v=20260713-library-data"></script><script src="peer-review-utils.js?v=20260731-grounded-feedback"></script><script src="peer-review.js?v=20260731-grounded-feedback"></script>
 </body></html>
