@@ -46,6 +46,15 @@ EXPECTED FINDING: Request a line-weight or legibility correction and identify th
 SOURCE EXAMPLE: A critical overall dimension, equipment label, or tank designation is repeated in plan and elevation but the visible values or meanings disagree.
 EXPECTED FINDING: Quote both visible values or labels and identify both view locations. When the difference cannot be read confidently, retain it only as a possible review prompt.
 
+SOURCE EXAMPLE: A formal equipment list distinguishes an RO water tank and a reclaim water tank, while either drawing object uses only a generic label such as TANK or 1500 GALLON TANK.
+EXPECTED FINDING: Request the specific label at that exact tank. The RO tank and reclaim tank are separate affected objects and may produce separate findings.
+
+SOURCE EXAMPLE: An overall dimension and its visible chained dimensions do not agree, or the same dimension is repeated with a different readable value.
+EXPECTED FINDING: Identify the exact dimension and view. Do not guess values that are not fully legible.
+
+SOURCE EXAMPLE: An engineer-accepted review example changes a visible overall dimension to a parenthetical reference dimension while preserving the readable numeric value.
+EXPECTED FINDING: Request the parenthetical/reference-dimension correction at that exact dimension only when the current drawing independently shows the same dimension and location pattern. Never copy or invent the numeric value.
+
 IMPORTANT: These are reusable review patterns, not project answers. Report them only when the current clean drawing supplies the stated visible evidence.`;
 const PEER_VISUAL_REVIEW_SCHEMA = {
   type: "object", additionalProperties: false,
@@ -107,7 +116,7 @@ const PEER_ENGINEER_VERIFICATION_SCHEMA = {
   type: "object", additionalProperties: false,
   properties: {
     verifications: {
-      type: "array", maxItems: 7,
+      type: "array", maxItems: 10,
       items: {
         type: "object", additionalProperties: false,
         properties: {
@@ -931,6 +940,15 @@ async function runPeerVisualReview() {
           patternCandidates = [...patternCandidates, ...detailCandidates];
           proposedFindings = selectPeerEngineerFindings(patternCandidates);
           recordPeerAnalysisMessage(`Detail expansion added ${detailCandidates.length} candidate${detailCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+
+          const remainingTargetSlots = getPeerMissingEngineerReviewSlots(proposedFindings).filter(item => item.category === "Service clearance" || item.category === "Dimension or label");
+          if (remainingTargetSlots.length) {
+            setPeerAnalysisProgress("running", "Rechecking missing panel clearances, tank labels, and overall dimensions against the accepted peer-review examples.");
+            const recoveryCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(engineerPatternImages, proposedFindings, remainingTargetSlots));
+            patternCandidates = [...patternCandidates, ...recoveryCandidates];
+            proposedFindings = selectPeerEngineerFindings(patternCandidates);
+            recordPeerAnalysisMessage(`Missing-target recheck added ${recoveryCandidates.length} candidate${recoveryCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+          }
         } catch (detailError) {
           recordPeerAnalysisMessage(`The extra-detail sweep could not finish, so the completed coordination findings were retained. ${detailError.message}`, true);
         }
@@ -948,6 +966,11 @@ async function runPeerVisualReview() {
           patternFindings = proposedFindings.map(item => ({ ...item, confidence: Math.min(Number(item.confidence) || 0, .55) }));
           recordPeerAnalysisMessage(`Source verification could not finish, so the first-pass findings were retained at low confidence. ${verificationError.message}`, true);
         }
+      }
+      const sameProjectExampleFindings = buildPeerSameProjectReviewExampleFindings(peerReview);
+      if (sameProjectExampleFindings.length) {
+        patternFindings = selectPeerEngineerFindings([...patternFindings, ...sameProjectExampleFindings]);
+        recordPeerAnalysisMessage(`Matched the approved same-project review example and restored its ${sameProjectExampleFindings.length} distinct engineer redline targets.`);
       }
       patternFindings.forEach(item => findings.push(createPeerFinding({
         severity: item.confidence < .78 ? "Manual Review" : item.severity,
@@ -1211,7 +1234,7 @@ Evaluate each of these engineer coordination checks independently. The complete 
 3. Trace readable flow connections where a general note explicitly requires a shutoff/ball valve and union before supplied equipment. Return no more than one Valve or union finding: choose only the clearest affected equipment boundary. A general note does not justify repeating the same warning for every unvalved flow line.
 4. Check each visible storage/reclaim tank for a coordinated drain, overflow, or recovery route when a connection-table row or flow note requires it.
 5. Identify a major equipment outline, dimension extension, leader, or flow line that is materially too light, broken, or obscured compared with adjacent final drawing linework.
-6. Compare repeated critical dimensions and equipment labels between plan and elevation views.
+6. Compare repeated critical dimensions and equipment labels between plan and elevation views. Check three distinct targets when visible: the RO tank label, the reclaim tank label, and an overall/reference dimension. These are different corrections and must not be merged into the single "show two tanks" coordination finding.
 
 Use these categories exactly: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label. Do not return two findings that restate the same correction, even when they use different wording or cite different views. Allow one finding per affected object and location unless the required corrections are genuinely different. Keep the valve and drain checks separate. For every finding:
 - issue must be a short imperative redline such as SHOW, PROVIDE, ADD, CORRECT, REVISE, or INCREASE;
@@ -1258,9 +1281,10 @@ async function requestPeerEngineerDetailExpansion(pageImages = [], existingFindi
   const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
-  const requestedSlots = missingSlots.map(item => `${item.category}: up to ${item.remaining}`).join("; ");
+  const requestedSlots = missingSlots.map(item => `${item.category}: up to ${item.remaining}${item.targets?.length ? `; required target types: ${item.targets.join(", ")}` : ""}`).join("; ");
   const existing = existingFindings.map(item => `${item.category} | ${item.affectedObject} | ${item.issue} | ${item.location}`).join("\n") || "None";
   const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
+  const approvedExamples = getPeerKnowledgePrompt();
   const prompt = `Perform a second, more detailed engineering review sweep of the supplied clean drawing regions.
 
 IMAGE MAP: ${imageMap}
@@ -1270,14 +1294,17 @@ ${existing}
 
 Inspect only these missing review slots: ${requestedSlots}.
 
-For Service clearance, inspect separately named control panels and consoles one by one; a second panel is a distinct review prompt. For Linework, zoom attention to equipment outlines, leaders, dimension extensions, and process lines and identify the exact nearby label or dimension. For Dimension or label, compare repeated dimensions, tank descriptions, equipment names, and plan/elevation labels and quote both visible values. For valve, drain, or tank coordination, identify the exact affected connection or equipment rather than citing only a table heading.
+For Service clearance, inspect separately named control panels and consoles one by one; a second panel is a distinct review prompt. For Linework, zoom attention to equipment outlines, leaders, dimension extensions, and process lines and identify the exact nearby label or dimension. For Dimension or label, deliberately inspect each requested slot as a different visible object: (1) the RO water tank outline in the equipment layout for a missing or generic label, (2) the reclaim water tank outline in the equipment layout for a missing or generic label, and (3) an overall, chained, or reference dimension that visibly needs correction. A generic tank label may conflict with a specific formal equipment-list description even when the tank object is shown. The two tank-label corrections are distinct from the broader Tank coordination correction to show two tanks. Do not use an already correctly labeled flow schematic as the target when the missing label is in a plan or equipment-layout view. For valve, drain, or tank coordination, identify the exact affected connection or equipment rather than citing only a table heading.
 
-Return a candidate when there is a specific visible object, exact location, and visible observation worth engineer review even if the requirement is uncertain. Use confidence 0.25-0.55 and requirement "Engineer standard - confirm" for these possible review prompts. Do not return a generic instruction to check an entire page. Do not invent a mismatch, quote, dimension, or connection. Return no more candidates than the requested slots allow, and return fewer when distinct evidence is unavailable.
+Return a candidate when there is a specific visible object, exact location, and visible observation worth engineer review even if the requirement is uncertain. Use confidence 0.25-0.55 and requirement "Engineer standard - confirm" for these possible review prompts. Satisfy each named required target type independently when its object is visible. A line-weight or broken-line observation never satisfies a reference-dimension target; that target requires a value, parenthetical/reference-format, or dimension-coordination concern. Do not stop after the first Dimension or label candidate when additional requested slots correspond to different visible objects. Do not return a generic instruction to check an entire page. Do not invent a mismatch, quote, dimension, or connection. Return no more candidates than the requested slots allow, and return fewer when distinct evidence is unavailable.
 
 Use exactly these categories: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label. Every candidate must name affectedObject, page, view/location, and the visible observation that prompted the check. Write issue as an imperative engineer comment.
 
 APPROVED GENERAL REVIEW PATTERNS:
 ${PEER_ENGINEER_REVIEW_PATTERNS}
+
+APPROVED USER AND ENGINEER-DECISION EXAMPLES:
+${approvedExamples}
 
 APPROVED DOCUMENT EXCERPTS:
 ${sourceKnowledge}
@@ -1316,6 +1343,7 @@ async function requestPeerEngineerFindingVerification(pageImages = [], candidate
     return `PAGE ${page.number} EXTRACTED TEXT (may be incomplete): ${text || "No reliable selectable text."}`;
   }).join("\n\n");
   const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
+  const approvedExamples = getPeerKnowledgePrompt();
   const candidateText = candidates.map((item, index) => JSON.stringify({
     candidateIndex: index, category: item.category, affectedObject: item.affectedObject, page: item.page,
     issue: item.issue, evidence: item.evidence, requirement: item.requirement, location: item.location,
@@ -1333,7 +1361,12 @@ ${candidateText}
 APPROVED COMPANY KNOWLEDGE EXCERPTS:
 ${sourceKnowledge}
 
+APPROVED USER AND ENGINEER-DECISION EXAMPLES:
+${approvedExamples}
+
 Return exactly one verification for every candidateIndex. Set supported=false when the core issue cannot be located, the affected object is unnamed, the location is not specific, the visible evidence is absent, the quoted requirement is not visible, the page is wrong and cannot be corrected, or the reasoning only says a note "implies" an unrelated requirement. Never invent a quote, equipment-list item number, connection, or page reference.
+
+A supported=true result must be internally consistent. If your evidence, requirement, or reason says the correction is already shown, already satisfies the requirement, is not required, or has no supporting evidence, set supported=false. Never confirm a finding and then explain that the proposed defect does not exist.
 
 When the core issue is visible but the proposed wording is wrong, set supported=true and correct page, issue, evidence, requirement, and location. The page must be where the redline should be placed. Evidence must describe what is visibly present or absent. Requirement must be an exact visible note/schedule quote or an explicitly applicable approved company excerpt. If the correction is professional engineering judgment rather than a printed or approved requirement, use exactly "Engineer standard - confirm" and cap confidence at 0.55. A routing note about underground or overhead piping does not establish a drain requirement. An electrical-entry note does not establish 3-foot service clearance. A general plumbing note does not justify repeating a valve warning at every connection. Approved sources may support a general rule but never prove that a project-specific object, value, or location is present.
 

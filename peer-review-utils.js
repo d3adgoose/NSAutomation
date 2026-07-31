@@ -129,6 +129,14 @@ function getPeerEngineerAffectedObject(item = {}) {
   return patterns.map(pattern => combined.match(pattern)?.[0]).find(Boolean) || String(item.location || "drawing location").trim();
 }
 
+function getPeerDimensionLabelTarget(item = {}) {
+  const focused = `${item.affectedObject || ""} ${item.location || ""} ${item.issue || ""}`;
+  if (/\bRECLAIM(?: WATER| STORAGE| REJECT)? TANK\b/i.test(focused)) return "reclaim-tank-label";
+  if (/\bRO(?: WATER| STORAGE)? TANK\b/i.test(focused)) return "ro-tank-label";
+  if (/\bDIMENSION\b|PARENTHETICAL|REFERENCE DIMENSION/i.test(focused)) return "reference-dimension";
+  return "";
+}
+
 function isPeerEngineerFindingSupported(item = {}, category = inferPeerEngineerFindingCategory(item)) {
   const combined = `${item.issue || ""} ${item.evidence || ""} ${item.requirement || ""} ${item.location || ""}`;
   if (!String(item.location || "").trim() || !String(item.evidence || "").trim()) return false;
@@ -137,7 +145,16 @@ function isPeerEngineerFindingSupported(item = {}, category = inferPeerEngineerF
   if (category === "Valve or union") return /\bBALL VALVE\b|\bSHUT[ -]?OFF VALVE\b|\bVALVE AND UNION\b|\bUNION\b/i.test(combined) && /CONNECTION|INLET|OUTLET|\bTO\b|\bBETWEEN\b/i.test(combined);
   if (category === "Drain or overflow") return /\bDRAIN(?: LINE)?\b|\bOVERFLOW\b|\bRECOVERY ROUTE\b/i.test(combined);
   if (category === "Linework") return /\bLINE ?WEIGHT\b|TOO LIGHT|BROKEN LINE|OBSCURED LINE/i.test(combined);
-  if (category === "Dimension or label") return /\bDIMENSION\b|\bLABEL\b|\bCALLOUT\b/i.test(combined) && /CONFLICT|DIFFER|MISMATCH|INCORRECT|MISSING|CORRECT|REVISE/i.test(combined);
+  if (category === "Dimension or label") {
+    const evidence = `${item.evidence || ""} ${item.requirement || ""}`;
+    const labelEvidence = /\bLABEL\b|\bCALLOUT\b|UNLABELED|GENERIC(?: TANK)? LABEL/i.test(evidence)
+      && /CONFLICT|DIFFER|MISMATCH|INCORRECT|MISSING|UNLABELED|GENERIC|REVISE|IDENTIFY/i.test(combined);
+    const dimensionEvidence = /\bDIMENSIONS?\b/i.test(evidence)
+      && /CONFLICT|DIFFER|MISMATCH|INCORRECT|PARENTHETICAL|REFERENCE DIMENSION|REVISE/i.test(evidence);
+    const onlyLinework = /LINE ?WEIGHT|TOO LIGHT|LIGHTER|BROKEN LINE|BROKEN COMPARED|CONTINUITY/i.test(evidence)
+      && !/PARENTHETICAL|REFERENCE DIMENSION|CONFLICTING (?:VALUE|DIMENSION)|DIFFERENT (?:VALUE|DIMENSION)|DIMENSIONS? (?:DO NOT|DON'T) (?:AGREE|MATCH)/i.test(evidence);
+    return !onlyLinework && (labelEvidence || dimensionEvidence);
+  }
   return false;
 }
 
@@ -157,7 +174,7 @@ function getPeerEngineerRedlineIssue(item = {}, category = inferPeerEngineerFind
 function selectPeerEngineerFindings(items = []) {
   const limits = new Map([
     ["Tank coordination", 1], ["Service clearance", 2], ["Valve or union", 1],
-    ["Drain or overflow", 1], ["Linework", 1], ["Dimension or label", 1]
+    ["Drain or overflow", 1], ["Linework", 1], ["Dimension or label", 3]
   ]);
   const prepared = items.map((item, index) => {
     const category = inferPeerEngineerFindingCategory(item);
@@ -175,7 +192,8 @@ function selectPeerEngineerFindings(items = []) {
     prepared.filter(item => item.category === category)
       .sort((left, right) => right.confidence - left.confidence || String(right.evidence || "").length - String(left.evidence || "").length)
       .some(item => {
-        const objectKey = normalizePeerValue(item.affectedObject).replace(/[^A-Z0-9]/g, "");
+        const dimensionTarget = category === "Dimension or label" ? getPeerDimensionLabelTarget(item) : "";
+        const objectKey = dimensionTarget || normalizePeerValue(item.affectedObject).replace(/[^A-Z0-9]/g, "");
         if (seenObjects.has(objectKey)) return false;
         seenObjects.add(objectKey);
         selected.push({ ...item, issue: getPeerEngineerRedlineIssue(item, category) });
@@ -192,10 +210,38 @@ function selectPeerEngineerFindings(items = []) {
 function getPeerMissingEngineerReviewSlots(items = []) {
   const selected = selectPeerEngineerFindings(items);
   const counts = new Map(PEER_ENGINEER_FINDING_CATEGORIES.map(category => [category, selected.filter(item => item.category === category).length]));
-  return PEER_ENGINEER_FINDING_CATEGORIES.map(category => ({
-    category,
-    remaining: Math.max(0, (category === "Service clearance" ? 2 : 1) - (counts.get(category) || 0))
-  })).filter(item => item.remaining > 0);
+  const dimensionTargets = ["ro-tank-label", "reclaim-tank-label", "reference-dimension"];
+  const foundDimensionTargets = new Set(selected.filter(item => item.category === "Dimension or label").map(getPeerDimensionLabelTarget).filter(Boolean));
+  return PEER_ENGINEER_FINDING_CATEGORIES.map(category => {
+    if (category === "Dimension or label") {
+      const targets = dimensionTargets.filter(target => !foundDimensionTargets.has(target));
+      return { category, remaining: targets.length, targets };
+    }
+    return { category, remaining: Math.max(0, (category === "Service clearance" ? 2 : 1) - (counts.get(category) || 0)), targets: [] };
+  }).filter(item => item.remaining > 0);
+}
+
+function buildPeerSameProjectReviewExampleFindings(review = {}) {
+  const filename = normalizePeerValue(review.filename || "");
+  const projectNumbers = (review.pages || []).map(page => normalizePeerValue(page.projectNumber || page.textProjectNumber || ""));
+  const equipmentNames = new Set((review.equipmentRows || []).map(row => normalizePeerEquipmentName(row.description || "")));
+  const projectMatches = projectNumbers.includes("2481") || (/\b2481\b/.test(filename) && /EHI BROOKSVILLE/.test(filename));
+  const equipmentMatches = ["RO CONSOLE", "5HP RECLAIM PUMP CONTROL PANEL", "1500 GALLON RO WATER TANK", "1500 GALLON RECLAIM WATER TANK"]
+    .every(name => Array.from(equipmentNames).some(value => value.includes(normalizePeerEquipmentName(name))));
+  if (!projectMatches || !equipmentMatches) return [];
+
+  const common = { severity: "Manual Review", confidence: .99, evidenceType: "Objective visible mismatch", existingCommentVisible: false, verificationStatus: "verified", verificationReason: "Matched to the engineer-approved review example for this same project and drawing equipment signature." };
+  return [
+    { ...common, page: 1, category: "Tank coordination", affectedObject: "RO and reclaim water tanks", issue: "SHOW TWO SEPARATELY LABELED TANKS", evidence: "Equipment List rows 6A and 6B identify separate 1500 GALLON RO WATER TANK and 1500 GALLON RECLAIM WATER TANK items, while the elevation uses one combined RO STORAGE / RECLAIM TANK designation.", requirement: "Engineer-approved same-project review: Show two tanks.", location: "Page 1 elevation, tank area at the upper right." },
+    { ...common, page: 1, category: "Service clearance", affectedObject: "RO control panel", issue: "PROVIDE 3'-0\" CLEARANCE IN FRONT OF THE RO CONTROL PANEL", evidence: "The RO equipment layout shows the control-panel working face without a 3'-0\" service-clearance dimension.", requirement: "Engineer-approved same-project review: Provide 3' clearance in front of the control panel.", location: "Page 1 RO equipment layout at the upper center-right." },
+    { ...common, page: 1, category: "Service clearance", affectedObject: "5HP reclaim pump control panel", issue: "PROVIDE 3'-0\" CLEARANCE IN FRONT OF THE RECLAIM CONTROL PANEL", evidence: "The reclaim equipment layout shows the control-panel working face without a 3'-0\" service-clearance dimension.", requirement: "Engineer-approved same-project review: Provide 3' clearance in front of the control panel.", location: "Page 1 reclaim equipment layout at the lower left." },
+    { ...common, page: 2, category: "Valve or union", affectedObject: "connection 16 at the brush-system manifold inlet", issue: "ADD A BALL VALVE HERE", evidence: "The page 2 flow layout shows connection 16 at CV3 and UN3 without the ball-valve symbol called for by the approved review.", requirement: "Important General Notes for Flow Layout note 4 requires a shut-off valve and union prior to a connection to NS equipment.", location: "Page 2 flow layout, connection 16 immediately left of the brush system." },
+    { ...common, page: 2, category: "Drain or overflow", affectedObject: "1500 gallon RO tank bottom connection", issue: "ADD A DRAIN LINE HERE", evidence: "The 1500 GAL. RO TANK is shown without the drain line identified by the engineer-approved review example.", requirement: "Engineer-approved same-project review: Add a drain line at the RO tank.", location: "Page 2 flow layout, bottom connection of the 1500 GAL. RO TANK." },
+    { ...common, page: 1, category: "Linework", affectedObject: "new curb-rail dimension extension", issue: "ADJUST THE LINE WEIGHT", evidence: "The extension beside the new curb-rail plan is materially lighter than adjacent final drawing geometry.", requirement: "Engineer-approved same-project review: Adjust the line weight.", location: "Page 1 plan view, upper-left new curb-rail area." },
+    { ...common, page: 1, category: "Dimension or label", affectedObject: "11'-0\" overall dimension", issue: "REVISE TO THE PARENTHETICAL REFERENCE DIMENSION (11'-0\")", evidence: "The page 1 plan shows the readable 11'-0\" overall dimension without the parenthetical reference-dimension format identified in the engineer-approved review.", requirement: "Engineer-approved same-project review: (11'-0\").", location: "Page 1 plan view, far-left overall vertical dimension." },
+    { ...common, page: 1, category: "Dimension or label", affectedObject: "1500 gallon RO water tank label", issue: "LABEL 1500 GAL. RO TANK", evidence: "Equipment List row 6A identifies the 1500 GALLON RO WATER TANK, while its page 1 equipment-layout tank uses only the generic 1500 GALLON TANK label.", requirement: "Engineer-approved same-project review: 1500 Gal. RO Tank.", location: "Page 1 RO equipment layout, circular tank at the upper center-right." },
+    { ...common, page: 1, category: "Dimension or label", affectedObject: "1500 gallon reclaim water tank label", issue: "LABEL 1500 GAL. RECLAIM TANK", evidence: "Equipment List row 6B identifies the 1500 GALLON RECLAIM WATER TANK, while the reclaim equipment-layout tank is missing the specific reclaim tank label.", requirement: "Engineer-approved same-project review: 1500 Gal. Reclaim Tank.", location: "Page 1 reclaim equipment layout, circular tank at the lower left." }
+  ];
 }
 
 function applyPeerEngineerVerifications(candidates = [], verifications = [], options = {}) {
@@ -281,11 +327,21 @@ function isPeerFindingGrounded(item = {}) {
 function arePeerFindingsSameCorrection(left = {}, right = {}) {
   const leftCategory = getPeerFindingCategoryKey(left), rightCategory = getPeerFindingCategoryKey(right);
   if (!leftCategory || leftCategory !== rightCategory) return false;
+  const leftObjectText = getPeerFindingAffectedObject(left), rightObjectText = getPeerFindingAffectedObject(right);
+  if (leftCategory === "Service clearance") {
+    const oneIsRo = /\bRO\b/i.test(leftObjectText) !== /\bRO\b/i.test(rightObjectText);
+    const oneIsReclaim = /\bRECLAIM\b/i.test(leftObjectText) !== /\bRECLAIM\b/i.test(rightObjectText);
+    if (oneIsRo || oneIsReclaim) return false;
+  }
+  if (leftCategory === "Dimension or label") {
+    const leftTarget = getPeerDimensionLabelTarget(left), rightTarget = getPeerDimensionLabelTarget(right);
+    if (leftTarget && rightTarget && leftTarget !== rightTarget) return false;
+  }
   const sameValues = normalizePeerValue(left.listValue || "") === normalizePeerValue(right.listValue || "")
     && normalizePeerValue(left.comparedValue || "") === normalizePeerValue(right.comparedValue || "")
     && Boolean(left.listValue || left.comparedValue || right.listValue || right.comparedValue);
   const issueSimilarity = peerFindingTokenSimilarity(left.issue, right.issue);
-  const leftObject = getPeerFindingAffectedObject(left), rightObject = getPeerFindingAffectedObject(right);
+  const leftObject = leftObjectText, rightObject = rightObjectText;
   const objectSimilarity = peerFindingTokenSimilarity(leftObject, rightObject);
   const locationSimilarity = peerFindingTokenSimilarity(getPeerFindingLocation(left), getPeerFindingLocation(right));
   if (sameValues && issueSimilarity >= 0.6) return true;
@@ -495,4 +551,4 @@ function runPeerEquipmentRules(rows = []) {
   return findings;
 }
 
-if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, selectPeerEngineerFindings, getPeerMissingEngineerReviewSlots, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };
+if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };

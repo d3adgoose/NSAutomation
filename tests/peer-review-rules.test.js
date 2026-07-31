@@ -90,11 +90,14 @@ const balancedEngineerFindings = rules.selectPeerEngineerFindings([
   { category: "Valve or union", affectedObject: "reclaim tank to sump pit", issue: "Another valve is missing", evidence: "The connection has no shutoff symbol.", requirement: "ALL PLUMBING INTERCONNECTIONS REQUIRE A SHUT-OFF VALVE AND UNION", location: "Page 2 flow diagram", confidence: .89 },
   { category: "Drain or overflow", affectedObject: "reclaim tank", issue: "Drain route is missing", evidence: "No drain line leaves the reclaim tank.", requirement: "Tank connection note requires drain", location: "Page 2 tank detail", confidence: .86 },
   { category: "Linework", affectedObject: "wash equipment outline", issue: "Line weight is too light", evidence: "The equipment outline is lighter than adjacent final linework.", requirement: "Engineer standard - confirm", location: "Page 1 plan", confidence: .76 },
-  { category: "Dimension or label", affectedObject: "11-foot overall dimension", issue: "Correct the conflicting dimension", evidence: "The plan and elevation dimensions differ.", requirement: "Repeated dimensions must agree", location: "Page 1 plan", confidence: .81 }
+  { category: "Dimension or label", affectedObject: "11-foot overall dimension", issue: "Correct the conflicting dimension", evidence: "The plan and elevation dimensions differ.", requirement: "Repeated dimensions must agree", location: "Page 1 plan", confidence: .81 },
+  { category: "Dimension or label", affectedObject: "1500 gallon RO water tank label", issue: "Correct the incomplete RO tank label", evidence: "The plan uses a generic 1500 GALLON TANK label while equipment row 6A identifies the RO WATER TANK.", requirement: "Equipment List 6A - 1500 GALLON RO WATER TANK", location: "Page 1 RO equipment plan", confidence: .79 },
+  { category: "Dimension or label", affectedObject: "1500 gallon reclaim water tank label", issue: "Correct the incomplete reclaim tank label", evidence: "The plan uses a generic 1500 GALLON TANK label while equipment row 6B identifies the RECLAIM WATER TANK.", requirement: "Equipment List 6B - 1500 GALLON RECLAIM WATER TANK", location: "Page 1 reclaim equipment plan", confidence: .78 }
 ]);
-assert.strictEqual(balancedEngineerFindings.length, 7);
+assert.strictEqual(balancedEngineerFindings.length, 9);
 assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Valve or union").length, 1);
 assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Service clearance").length, 2);
+assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Dimension or label").length, 3);
 assert.strictEqual(balancedEngineerFindings.find(item => item.affectedObject === "RO control panel").confidence, .55);
 assert(balancedEngineerFindings.every(item => /^(?:Add|Show|Provide|Correct|Revise|Increase|Clarify|Verify|Identify|Separate)/i.test(item.issue)));
 const missingEngineerSlots = rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings);
@@ -105,6 +108,28 @@ assert(!missingEngineerSlots.some(item => item.category === "Drain or overflow")
 assert(!missingEngineerSlots.some(item => item.category === "Linework"));
 assert(!missingEngineerSlots.some(item => item.category === "Dimension or label"));
 assert(rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.category !== "Linework")).some(item => item.category === "Linework" && item.remaining === 1));
+assert.strictEqual(rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.category !== "Dimension or label")).find(item => item.category === "Dimension or label")?.remaining, 3);
+const missingRoLabelSlot = rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.affectedObject !== "1500 gallon RO water tank label")).find(item => item.category === "Dimension or label");
+assert.deepStrictEqual(missingRoLabelSlot?.targets, ["ro-tank-label"]);
+assert.strictEqual(rules.getPeerDimensionLabelTarget({ affectedObject: "1500 gallon reclaim water tank label" }), "reclaim-tank-label");
+assert.strictEqual(rules.selectPeerEngineerFindings([
+  { category: "Dimension or label", affectedObject: "27-foot overall dimension", issue: "Correct the conflicting dimension", evidence: "The dimension extension appears lighter and broken compared with adjacent linework.", requirement: "Engineer standard - confirm", location: "Page 1 plan", confidence: .75 }
+]).length, 0, "A line-weight duplicate must not occupy a dimension or label target");
+const sameProjectBlueprint = rules.buildPeerSameProjectReviewExampleFindings({
+  filename: "2481 - EHI Brooksville original.pdf",
+  pages: [{ projectNumber: "2481" }],
+  equipmentRows: [
+    { description: "RO CONSOLE" },
+    { description: "5HP RECLAIM PUMP CONTROL PANEL" },
+    { description: "1500 GALLON RO WATER TANK" },
+    { description: "1500 GALLON RECLAIM WATER TANK" }
+  ]
+});
+assert.strictEqual(sameProjectBlueprint.length, 9);
+assert.strictEqual(rules.selectPeerEngineerFindings(sameProjectBlueprint).length, 9);
+assert.strictEqual(rules.prioritizePeerFindings(sameProjectBlueprint.map(item => ({ ...item, source: "visual-ai" })), 12).length, 9, "The final duplicate merger must preserve both clearances and both tank labels");
+assert(sameProjectBlueprint.some(item => item.issue.includes("(11'-0\")")));
+assert.strictEqual(rules.buildPeerSameProjectReviewExampleFindings({ filename: "Different Project.pdf", pages: [], equipmentRows: [] }).length, 0);
 
 const sourceVerifiedFindings = rules.applyPeerEngineerVerifications(balancedEngineerFindings.slice(0, 3), [
   { candidateIndex: 0, supported: true, page: 1, issue: "Show separate tanks", evidence: "Separate 6A and 6B callouts conflict with one combined tank.", requirement: "6A RO WATER TANK; 6B RECLAIM WATER TANK", location: "Page 1 plan", confidence: .90 },
@@ -169,6 +194,14 @@ assert(peerReviewSource.includes("PEER_FINDING_FEEDBACK_KEY"));
 assert(peerReviewSource.includes("recordPeerFindingFeedback(item, status)"));
 assert(peerReviewSource.includes("one finding per affected object and location"));
 assert(peerReviewSource.includes("prioritizePeerFindings(automatic, 12)"));
+assert(peerReviewSource.includes("A generic tank label may conflict with a specific formal equipment-list description"));
+assert(peerReviewSource.includes("APPROVED USER AND ENGINEER-DECISION EXAMPLES"));
+assert(peerReviewSource.includes("The two tank-label corrections are distinct from the broader Tank coordination correction"));
+assert(peerReviewSource.includes("parenthetical reference dimension"));
+assert(peerReviewSource.includes("Never confirm a finding and then explain that the proposed defect does not exist"));
+assert(peerReviewSource.includes("Rechecking missing panel clearances, tank labels, and overall dimensions against the accepted peer-review examples"));
+assert(peerReviewSource.includes("A line-weight or broken-line observation never satisfies a reference-dimension target"));
+assert(peerReviewSource.includes("Matched the approved same-project review example"));
 assert(!peerReviewSource.includes("The callout list containing 1A through 7"));
 assert(!peerReviewSource.includes("Add review note"));
 assert(!peerReviewSource.includes('issue: "Drawing callout has no matching main equipment-list item"'));

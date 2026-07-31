@@ -1,6 +1,5 @@
 # Local agent and document-review workspaces
 .agents/
-.codex-doc-review/
 .tmp/
 
 # Local dependencies and runtime output
