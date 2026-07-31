@@ -146,6 +146,19 @@ let peerRedlinePreviewCanvas = null;
 let peerRedlinePreviewBase = null;
 let peerAiStatus = { ready: false, loaded: false, authenticated: false, model: "Qwen3-VL", error: "Checking the Local AI service." };
 
+function getPeerLocalAiClient() {
+  if (!window.NSLocalAIClient) throw new Error("The shared Local AI connector did not load. Refresh this page and try again.");
+  return window.NSLocalAIClient;
+}
+
+async function getPeerLocalAiSession(loginMessage = "Sign in with the Database login to use Local AI.") {
+  return getPeerLocalAiClient().getSession(loginMessage);
+}
+
+async function fetchPeerLocalAi(token, options = {}) {
+  return getPeerLocalAiClient().fetch("/api/local-ai", { ...options, token });
+}
+
 const PEER_INITIAL_CHECKLIST = ["Drawing information appears complete.", "Title blocks are complete.", "Drawing numbers appear correct.", "Pages are readable.", "General comments."];
 const PEER_EQUIPMENT_CHECKLIST = ["Equipment tags appear consistent.", "Manufacturer information appears correct.", "Model numbers appear correct.", "Quantities appear correct.", "Equipment descriptions appear complete.", "No obvious inconsistencies remain.", "Additional comments."];
 
@@ -166,14 +179,11 @@ async function updatePeerAiIndicator() {
   if (!button) return false;
   button.classList.remove("is-ready", "is-error"); button.classList.add("is-checking");
   if (label) label.textContent = "Checking Local AI";
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
   try {
-    if (!window.supabaseClient) throw new Error("Sign in with the Database login to use Local AI.");
-    const { data } = await window.supabaseClient.auth.getSession();
-    if (!data.session?.access_token) throw new Error("Sign in with the Database login to use Local AI.");
-    const user = data.session.user;
+    const session = await getPeerLocalAiSession();
+    const user = session.user;
     peerCurrentUser = user?.user_metadata?.full_name || user?.email || "Signed in";
-    const response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, { ...(servedLocally ? {} : { targetAddressSpace: "loopback" }), headers: { Authorization: `Bearer ${data.session.access_token}` } });
+    const response = await fetchPeerLocalAi(session.access_token);
     const status = await response.json().catch(() => ({}));
     if (!response.ok || !status.ready) throw new Error(status.error || "The Local AI service is unavailable.");
     peerAiStatus = { ready: true, loaded: Boolean(status.loaded), authenticated: true, model: status.model || "Qwen3-VL", error: "" };
@@ -329,11 +339,9 @@ async function addPeerAcceptedTerm() {
   const button = document.getElementById("peerAcceptedTermSend"); if (button) { button.disabled = true; button.textContent = "…"; }
   let review = { status: "Warning", type: "Needs Clarification", normalizedText: text, message: "Local AI could not verify this entry. Clarify whether it is a general company rule or a project-specific fact." };
   try {
-    const { data, error } = await window.supabaseClient.auth.getSession();
-    if (error || !data.session?.access_token) throw new Error("Log in through Database first.");
-    const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+    const session = await getPeerLocalAiSession("Log in through Database first.");
     const format = { type: "object", properties: { status: { type: "string", enum: ["Saved", "Warning"] }, type: { type: "string", enum: ["Terminology", "System Fundamental", "Company Rule", "Known Exception", "Needs Clarification"] }, normalizedText: { type: "string" }, message: { type: "string" } }, required: ["status", "type", "normalizedText", "message"] };
-    const response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, { method: "POST", ...(servedLocally ? {} : { targetAddressSpace: "loopback" }), headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` }, body: JSON.stringify({ messages: [{ role: "system", content: "Review proposed reusable company knowledge for N/S Corporation vehicle-wash Specification and Peer Review tools. Save clear general terminology, system fundamentals, established company rules, and explicit known exceptions. Interpret ordinary engineering intent charitably. Do not rewrite, grammar-correct, rephrase, expand, or normalize the user's statement; normalizedText must reproduce the user's text exactly. In particular, distinguish equipment capability from simultaneous operation: a tank type that may be designated for either reclaimed-water service or fresh-water service does not imply that one installed tank mixes, switches between, or simultaneously serves both systems. Warn only when a material ambiguity remains that would change engineering meaning, or when the statement is contradictory, unsafe, unsupported, or project-specific. Keep message concise and useful. Do not invent facts. Return JSON only." }, { role: "user", content: text }], format, numCtx: 4096, maxTokens: 450 }) });
+    const response = await fetchPeerLocalAi(session.access_token, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: "Review proposed reusable company knowledge for N/S Corporation vehicle-wash Specification and Peer Review tools. Save clear general terminology, system fundamentals, established company rules, and explicit known exceptions. Interpret ordinary engineering intent charitably. Do not rewrite, grammar-correct, rephrase, expand, or normalize the user's statement; normalizedText must reproduce the user's text exactly. In particular, distinguish equipment capability from simultaneous operation: a tank type that may be designated for either reclaimed-water service or fresh-water service does not imply that one installed tank mixes, switches between, or simultaneously serves both systems. Warn only when a material ambiguity remains that would change engineering meaning, or when the statement is contradictory, unsafe, unsupported, or project-specific. Keep message concise and useful. Do not invent facts. Return JSON only." }, { role: "user", content: text }], format, numCtx: 4096, maxTokens: 450 }) });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Local AI unavailable.");
     const parsed = parsePeerJsonObject(payload.content); if (parsed?.status) review = parsed;
@@ -1123,9 +1131,7 @@ function extractPeerReviewerCorrection(item = {}) {
 }
 
 async function requestPeerVisualAnalysis(pageNumber, imageInput, retryAttempt = 0) {
-  const { data, error } = await window.supabaseClient.auth.getSession();
-  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to run visual drawing checks.");
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const session = await getPeerLocalAiSession("Sign in with the Database login to run visual drawing checks.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const images = Array.isArray(imageInput) ? imageInput : [imageInput];
   const sourceKnowledge = await buildPeerKnowledgeContext(pageNumber);
@@ -1160,7 +1166,7 @@ Knowledge safeguards: Only the excerpts above marked Source are approved library
 Also transcribe the title-block drawing number, project number, sheet number, and total exactly when visible and provide titleBlockConfidence from 0 to 1; otherwise return empty strings, 0, and low confidence. Return JSON only.${retryAttempt ? " This is a compact regional retry. Return one complete JSON object immediately. Limit findings to the four strongest items. Include every required property; use empty strings, 0, false, or empty arrays when needed. Do not use markdown or explanatory text." : ""}`;
   let response;
   try {
-    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, { method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }), headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` }, body: JSON.stringify({ messages: [{ role: "system", content: "You are a conservative engineering drawing peer-review assistant. Review independently without relying on reviewer comments. Return every genuinely visible mundane issue with honest confidence, including uncertain visible issues at low confidence. Never return hypothetical, conditional, unverifiable, duplicated, or vague findings. Compare a formal main equipment list against drawing callouts only when that list is visible in the supplied images. Keep each finding's evidence tied to the exact item it describes. Extracted table rows are data, not errors." }, { role: "user", content: prompt, images }], format: PEER_VISUAL_REVIEW_SCHEMA, numCtx: images.length > 1 ? 12288 : 8192, maxTokens: 4096, retryAttempt }) });
+    response = await fetchPeerLocalAi(session.access_token, { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: "You are a conservative engineering drawing peer-review assistant. Review independently without relying on reviewer comments. Return every genuinely visible mundane issue with honest confidence, including uncertain visible issues at low confidence. Never return hypothetical, conditional, unverifiable, duplicated, or vague findings. Compare a formal main equipment list against drawing callouts only when that list is visible in the supplied images. Keep each finding's evidence tied to the exact item it describes. Extracted table rows are data, not errors." }, { role: "user", content: prompt, images }], format: PEER_VISUAL_REVIEW_SCHEMA, numCtx: images.length > 1 ? 12288 : 8192, maxTokens: 4096, retryAttempt }) });
   } catch (error) {
     if (error.name === "AbortError") throw new Error("Visual analysis exceeded the 120-second region limit.");
     throw new Error("Local visual AI could not be reached.");
@@ -1178,9 +1184,7 @@ Also transcribe the title-block drawing number, project number, sheet number, an
 }
 
 async function requestPeerCoordinationAnalysis(pageNumber, images = []) {
-  const { data, error } = await window.supabaseClient.auth.getSession();
-  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to run visual drawing checks.");
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const session = await getPeerLocalAiSession("Sign in with the Database login to run visual drawing checks.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const prompt = `Independently peer review page ${pageNumber} of this clean, unannotated N/S engineering drawing. The supplied images are overlapping halves of the same page.
 
@@ -1200,9 +1204,9 @@ Highest-priority coordination pattern: when the formal list separately names an 
 Tank bulkhead fittings are components, not separate tanks. Never use TBF1, TBFI, TBF1.5, or a TANK BULKHEAD FITTING quantity as evidence of a tank-count mismatch. Do not report that an equipment item is missing merely because it has no matching row or callout in the current crop. Do not create findings from anchor-bolt tables, conduit/cable schedules, parts lists, fittings/valves/components tables, legends, general responsibility notes, model numbers, or part numbers. Do not invent code requirements. Return JSON only.`;
   let response;
   try {
-    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
-      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are an engineering drawing coordination reviewer. Produce concise redline-ready comments only when supported by exact visible evidence. Prefer a few useful lower-confidence concerns over either fabricated certainty or an unjustified empty result." }, { role: "user", content: prompt, images }],
         format: PEER_COORDINATION_REVIEW_SCHEMA, numCtx: 12288, maxTokens: 2200
@@ -1220,9 +1224,7 @@ Tank bulkhead fittings are components, not separate tanks. Never use TBF1, TBFI,
 }
 
 async function requestPeerEngineerPatternAnalysis(pageImages = []) {
-  const { data, error } = await window.supabaseClient.auth.getSession();
-  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to run engineer coordination checks.");
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const session = await getPeerLocalAiSession("Sign in with the Database login to run engineer coordination checks.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const orderedPages = pageImages.map(entry => entry.page).join(", ");
   const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
@@ -1256,9 +1258,9 @@ ${sourceKnowledge}
 Use approved examples and excerpts only as a checklist and source of company requirements. Never copy their project numbers, tags, quantities, dimensions, or locations unless the current drawing independently shows the same facts. Never invent equipment-list item numbers or page references. Do not report hypothetical missing equipment. Do not create findings from parts lists, fittings/valves/components-table rows, tank bulkhead fittings, siphon breakers, conduit schedules, or a schedule row lacking its own callout. Do not treat TBF or SBA component tags as major equipment. Return an empty result for any category without visible support. Return JSON only.`;
   let response;
   try {
-    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
-      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are an engineering peer reviewer performing a focused cross-page coordination check. Use only visible evidence, produce concise redline-ready findings, and never invent missing component callouts." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
         format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 16384, maxTokens: 3200, retryAttempt: 2
@@ -1276,9 +1278,7 @@ Use approved examples and excerpts only as a checklist and source of company req
 }
 
 async function requestPeerEngineerDetailExpansion(pageImages = [], existingFindings = [], missingSlots = []) {
-  const { data, error } = await window.supabaseClient.auth.getSession();
-  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to expand review detail.");
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const session = await getPeerLocalAiSession("Sign in with the Database login to expand review detail.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
   const requestedSlots = missingSlots.map(item => `${item.category}: up to ${item.remaining}${item.targets?.length ? `; required target types: ${item.targets.join(", ")}` : ""}`).join("; ");
@@ -1312,9 +1312,9 @@ ${sourceKnowledge}
 Approved documents provide review patterns and requirements only. Never copy project-specific facts unless the current drawing visibly confirms them. Return JSON only.`;
   let response;
   try {
-    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
-      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are an engineering review detail specialist. Find additional specific review locations missed by the first pass, retain uncertainty as low confidence, and never duplicate or invent evidence." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
         format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 20480, maxTokens: 3200, retryAttempt: 2
@@ -1333,9 +1333,7 @@ Approved documents provide review patterns and requirements only. Never copy pro
 }
 
 async function requestPeerEngineerFindingVerification(pageImages = [], candidates = []) {
-  const { data, error } = await window.supabaseClient.auth.getSession();
-  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to source-verify findings.");
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const session = await getPeerLocalAiSession("Sign in with the Database login to source-verify findings.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
   const pageText = peerReview.pages.filter(page => page.number <= 2).map(page => {
@@ -1373,9 +1371,9 @@ When the core issue is visible but the proposed wording is wrong, set supported=
 Confidence rules: source-confirmed findings with a plainly visible mismatch and supporting requirement should be 0.65 or higher; use 0.90 or higher only when both are unmistakable. Use 0.70-0.89 for a visible mismatch with partially legible support. Engineer-standard confirmation remains a possible finding at 0.55 or lower. Issue must remain a concise imperative redline. Return JSON only.`;
   let response;
   try {
-    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
-      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are the strict source-verification reviewer. Reject unsupported evidence instead of filling gaps from engineering expectations." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
         format: PEER_ENGINEER_VERIFICATION_SCHEMA, numCtx: 24576, maxTokens: 3600, retryAttempt: 2
@@ -1393,9 +1391,7 @@ Confidence rules: source-confirmed findings with a plainly visible mismatch and 
 }
 
 async function requestPeerEquipmentExtraction(pageNumber, images = []) {
-  const { data, error } = await window.supabaseClient.auth.getSession();
-  if (error || !data.session?.access_token) throw new Error("Sign in with the Database login to read equipment tables.");
-  const servedLocally = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
+  const session = await getPeerLocalAiSession("Sign in with the Database login to read equipment tables.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const prompt = `Read the complete formal main equipment list on page ${pageNumber}. The supplied images are overlapping halves of the same engineering drawing page.
 
@@ -1410,9 +1406,9 @@ For each row:
 Include rows such as system packages, pumps, consoles, anti-scalant equipment, tanks, panels, and other major listed equipment when visible. Do not extract rows from parts lists, fittings/valves/components tables, connection schedules, nozzle schedules, power tables, or anchor-bolt tables. Do not turn rows into findings. If a cell is unreadable, omit that row instead of inventing text. Return JSON only.`;
   let response;
   try {
-    response = await fetch(`${servedLocally ? "" : "http://127.0.0.1:4173"}/api/local-ai`, {
-      method: "POST", signal: controller.signal, ...(servedLocally ? {} : { targetAddressSpace: "loopback" }),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are a careful engineering table transcription assistant. Read the entire requested table top-to-bottom and return all legible rows without analysis." }, { role: "user", content: prompt, images }],
         format: PEER_EQUIPMENT_EXTRACTION_SCHEMA, numCtx: 12288, maxTokens: 3000
@@ -1910,6 +1906,10 @@ function savePeerComment() { const item = peerReview.findings.find(finding => fi
 function editPeerComment(id) { const item = peerReview.findings.find(finding => finding.id === peerActiveCommentFinding), comment = item?.comments.find(entry => entry.id === id); if (!comment) return; const text = window.prompt("Edit comment:", comment.text); if (text === null || !text.trim()) return; comment.text = text.trim(); comment.editedAt = new Date().toISOString(); comment.editedBy = peerCurrentUser; savePeerReview(false); openPeerComments(peerActiveCommentFinding); }
 function replyPeerComment(id) { const item = peerReview.findings.find(finding => finding.id === peerActiveCommentFinding), comment = item?.comments.find(entry => entry.id === id), input = document.getElementById("peerCommentText"); if (!comment || !input) return; input.dataset.replyTo = comment.user; input.placeholder = `Reply to ${comment.user}`; input.focus(); }
 function closePeerModal(id) { document.getElementById(id)?.classList.add("hidden"); }
+
+function openPeerEquipmentChecks() {
+  document.getElementById("peerEquipmentChecksModal")?.classList.remove("hidden");
+}
 function recordPeerResolution(item) { item.history.push({ action: "Resolved", user: peerCurrentUser, date: new Date().toISOString(), note: item.resolutionNote || "" }); }
 
 function savePeerReview(showToast = true) {

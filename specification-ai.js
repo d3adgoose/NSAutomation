@@ -109,27 +109,23 @@ Every returned equipment item, fill-in, and clause must include a short exact ev
   }
 
   async function sessionToken() {
-    if (!window.supabaseClient) throw new Error("Database login is unavailable on this page.");
-    const { data, error } = await window.supabaseClient.auth.getSession();
-    if (error || !data.session?.access_token) throw new Error("Sign in on the Database page, then return here to use local AI.");
-    return data.session.access_token;
+    if (!window.NSLocalAIClient) throw new Error("The shared Local AI connector did not load. Refresh this page and try again.");
+    return window.NSLocalAIClient.getSessionToken("Sign in on the Database page, then return here to use local AI.");
   }
 
   async function request(path, options = {}) {
     const token = await sessionToken();
-    const servedByLocalGateway = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "4173";
-    const gatewayBase = servedByLocalGateway ? "" : "http://127.0.0.1:4173";
     const { timeoutMs = 0, ...fetchOptions } = options;
     const controller = new AbortController();
     activeRequestControllers.add(controller);
     const timeout = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let response;
     try {
-      response = await fetch(`${gatewayBase}${path}`, {
+      response = await window.NSLocalAIClient.fetch(path, {
         ...fetchOptions,
-        ...(servedByLocalGateway ? {} : { targetAddressSpace: "local" }),
+        token,
         signal: controller?.signal,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(fetchOptions.headers || {}) }
+        headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) }
       });
     } catch (error) {
       if (error?.name === "AbortError") throw new Error(cancelRequested ? "Analysis stopped by user." : "Visual analysis exceeded the 90-second page limit.");

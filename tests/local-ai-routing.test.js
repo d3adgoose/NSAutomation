@@ -5,6 +5,10 @@ const vm = require("vm");
 
 const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "specification.html"), "utf8");
+const peerHtml = fs.readFileSync(path.join(root, "peer-review.html"), "utf8");
+const sharedClient = fs.readFileSync(path.join(root, "local-ai-client.js"), "utf8");
+const specificationAi = fs.readFileSync(path.join(root, "specification-ai.js"), "utf8");
+const peerReview = fs.readFileSync(path.join(root, "peer-review.js"), "utf8");
 const localAiServer = fs.readFileSync(path.join(root, "local-ai-server.js"), "utf8");
 const redirectIndex = html.indexOf('location.port !== "4173"');
 const firstExternalScriptIndex = html.indexOf('src="https://');
@@ -24,6 +28,20 @@ assert(localAiServer.includes("worker-src 'self' blob: https://cdnjs.cloudflare.
   "The local gateway CSP must allow the configured PDF.js worker.");
 assert(localAiServer.includes('req.method === "DELETE"') && localAiServer.includes("activeOllamaControllers"),
   "Canceling Local AI must abort the active Ollama request on the local gateway.");
+assert(sharedClient.includes('const GATEWAY_ORIGIN = "http://127.0.0.1:4173"'),
+  "The shared Local AI connector must route deployed pages to the local gateway.");
+assert(sharedClient.includes('["loopback", "local"]') && sharedClient.includes("detectTargetAddressSpace"),
+  "The shared connector must support Chrome's loopback/local address-space naming across versions.");
+assert(sharedClient.includes("getSessionToken") && sharedClient.includes('headers.set("Authorization"'),
+  "The shared connector must apply the Database session to every Local AI request.");
+assert(html.indexOf("local-ai-client.js") >= 0 && html.indexOf("local-ai-client.js") < html.indexOf("specification-ai.js"),
+  "Specification must load the shared Local AI connector before its AI workflow.");
+assert(peerHtml.indexOf("local-ai-client.js") >= 0 && peerHtml.indexOf("local-ai-client.js") < peerHtml.indexOf("peer-review.js"),
+  "Peer Review must load the shared Local AI connector before its AI workflow.");
+assert(specificationAi.includes("window.NSLocalAIClient.fetch") && peerReview.includes("fetchPeerLocalAi"),
+  "Specification and Peer Review must both use the shared Local AI connector.");
+assert(!specificationAi.includes("targetAddressSpace") && !peerReview.includes("targetAddressSpace"),
+  "Feature pages must not maintain separate deployed-to-local address-space logic.");
 assert(html.includes('pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js?v=3.11.174"'),
   "Specification PDF.js must use the same-origin worker to avoid CSP blob-worker failures.");
 assert(fs.existsSync(path.join(root, "vendor-pdf.worker.min.js")),
