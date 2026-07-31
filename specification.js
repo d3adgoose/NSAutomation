@@ -372,24 +372,33 @@ async function updateSpecAiDownloadGuidanceVisibility() {
   const help = document.getElementById("specAiLoggedInDownloadHelp");
   const banner = document.getElementById("specLocalAiBanner");
   const headerButton = document.getElementById("specAiHeaderButton");
-  if (!window.supabaseClient) { help?.classList.add("hidden"); banner?.classList.add("hidden"); headerButton?.classList.add("hidden"); return; }
+  headerButton?.classList.remove("hidden");
+  if (!window.supabaseClient) {
+    specAiAuthenticatedUser = null;
+    help?.classList.add("hidden");
+    banner?.classList.add("hidden");
+    setSpecAiHeaderStatus(false);
+    renderSpecDocuments();
+    return;
+  }
   const { data } = await window.supabaseClient.auth.getSession().catch(() => ({ data: null }));
   specAiAuthenticatedUser = data?.session?.user || null;
   help?.classList.toggle("hidden", !specAiAuthenticatedUser);
   banner?.classList.toggle("hidden", !specAiAuthenticatedUser);
-  headerButton?.classList.toggle("hidden", !specAiAuthenticatedUser);
   renderSpecDocuments();
-  if (specAiAuthenticatedUser && headerButton) {
-    headerButton.classList.remove("is-ready", "is-error");
-    headerButton.classList.add("is-checking");
-    const label = headerButton.querySelector(".spec-ai-header-status-label");
-    if (label) label.textContent = "Checking Local AI";
-    try {
-      const status = await SpecificationLocalAI.status();
-      setSpecAiHeaderStatus(Boolean(status?.ready));
-    } catch {
-      setSpecAiHeaderStatus(false);
-    }
+  if (!specAiAuthenticatedUser || !headerButton) {
+    setSpecAiHeaderStatus(false);
+    return;
+  }
+  headerButton.classList.remove("is-ready", "is-error");
+  headerButton.classList.add("is-checking");
+  const label = headerButton.querySelector(".spec-ai-header-status-label");
+  if (label) label.textContent = "Checking Local AI";
+  try {
+    const status = await SpecificationLocalAI.status();
+    setSpecAiHeaderStatus(Boolean(status?.ready));
+  } catch {
+    setSpecAiHeaderStatus(false);
   }
 }
 

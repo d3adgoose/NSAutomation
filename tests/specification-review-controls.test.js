@@ -6,6 +6,13 @@ const root = path.resolve(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "specification.html"), "utf8");
 const source = fs.readFileSync(path.join(root, "specification.js"), "utf8");
 
+assert(!/id="specAiHeaderButton"[^>]*class="[^"]*\bhidden\b/.test(html),
+  "The Specification Local AI status button must remain visible while AI is offline.");
+assert(source.includes('headerButton?.classList.remove("hidden")'),
+  "Specification must restore the Local AI status button before checking login or service availability.");
+assert(!source.includes('headerButton?.classList.toggle("hidden", !specAiAuthenticatedUser)'),
+  "Specification must show an offline status instead of hiding the Local AI button when signed out.");
+
 assert(html.includes('<details id="specEquipmentApprovalPanel"') && html.includes('id="specEquipmentApprovalBody"'),
   "Equipment approval must provide a collapsible panel.");
 assert(html.includes('<details id="specExtractedFillPanel"') && html.includes('id="specExtractedFillBody"'),

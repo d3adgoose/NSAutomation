@@ -55,7 +55,7 @@
       <div class="button-row">
         <button type="button" onclick="saveSpecificationProject(true)">Save Project</button>
         <button type="button" class="secondary" onclick="newSpecificationProject()">New Project</button>
-        <button id="specAiHeaderButton" type="button" class="spec-ai-header-button is-checking hidden" onclick="openSpecLocalAiStatusModal()"><span class="spec-ai-header-status-dot" aria-hidden="true"></span><span class="spec-ai-header-status-label">Checking Local AI</span></button>
+        <button id="specAiHeaderButton" type="button" class="spec-ai-header-button is-checking" onclick="openSpecLocalAiStatusModal()"><span class="spec-ai-header-status-dot" aria-hidden="true"></span><span class="spec-ai-header-status-label" aria-live="polite">Checking Local AI</span></button>
       </div>
     </section>
 
@@ -384,7 +384,7 @@ A. Deliver final O&amp;M manuals, drawings, warranties, and service contact info
   <script src="specification-ai.js?v=20260731-shared-connector"></script>
   <script src="specification-utils.js?v=20260724-refactor"></script>
   <script src="specification-company-library.js?v=20260730-company-library-star"></script>
-  <script src="specification.js?v=20260729-source-review-messages"></script>
+  <script src="specification.js?v=20260731-persistent-ai-status"></script>
   <script src="global-auth.js?v=20260722-database-login-style"></script>
   <script src="navigation.js?v=20260731-ai-wip-tags"></script>
 </body>
