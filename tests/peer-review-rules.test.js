@@ -205,6 +205,21 @@ assert.strictEqual(rules.applyPeerEngineerVerifications([unsupportedDrainCandida
 }], { retainUnsupported: true }).length, 0, "A prompt with explicitly absent evidence or requirement should not survive as a possible finding");
 assert(verifiedAndPossibleFindings.some(item => item.issue.startsWith("Verify - ")));
 
+const broadVerificationCandidates = rules.selectPeerVerificationCandidates([
+  ...balancedEngineerFindings.map(item => ({ ...item, source: "visual-ai", page: item.page || 1 })),
+  { source: "visual-ai", page: 2, category: "Electrical coordination", affectedObject: "dryer feeder", issue: "Verify feeder coordination", evidence: "The feeder and equipment schedule show different descriptions.", requirement: "Coordinate repeated drawing information", location: "Page 2 electrical diagram", confidence: .61 },
+  { source: "visual-ai", page: 2, category: "Schedule or table", affectedObject: "activation eyes", issue: "Verify activation-eye descriptions", evidence: "The schedule and plan use different entrance and exit descriptions.", requirement: "Coordinate repeated drawing information", location: "Page 2 schedule and plan", confidence: .58 }
+], 12);
+assert(broadVerificationCandidates.length >= 10 && broadVerificationCandidates.length <= 12, "Maximum Sweep should source-verify a broad discipline-balanced candidate set after deduplication");
+assert(broadVerificationCandidates.some(item => item.category === "Electrical coordination"));
+assert(broadVerificationCandidates.some(item => item.category === "Schedule or table"));
+
+const unrelatedDrainListCandidate = { source: "visual-ai", page: 2, category: "Drain or overflow", affectedObject: "drain curtains connections", issue: "ADD DRAIN ROUTE", evidence: "Drain curtains are shown at the rinse arch.", requirement: "Coordinate repeated drawing information", location: "Elevation", confidence: .55 };
+assert.strictEqual(rules.applyPeerEngineerVerifications([unrelatedDrainListCandidate], [{
+  candidateIndex: 0, supported: true, evidenceLocated: true, comparisonValid: true, requirementLocated: true, page: 2, issue: "ADD DRAIN ROUTE",
+  evidence: "The equipment list does not include a corresponding entry for this connection type or material.", requirement: "Coordinate repeated drawing information", location: "Elevation and equipment list", confidence: .55, reason: "No corresponding equipment-list entry."
+}], { retainUnsupported: true }).length, 0, "An equipment list is not a piping connection schedule and cannot establish a missing drain route");
+
 const groundedFinding = {
   source: "visual-ai", page: 1, affectedObject: "RO water tank", location: "Plan view, right side",
   evidence: "The plan labels one combined RO STORAGE / RECLAIM TANK.", issue: "Show separate tanks", confidence: .82
@@ -239,12 +254,17 @@ assert(peerReviewSource.includes("openPeerRedlinePreview"));
 assert(peerReviewSource.includes("exportAcceptedPeerRedlines"));
 assert(peerReviewSource.includes("getPeerSuggestedRedlineTarget"));
 assert(peerReviewSource.includes("setPeerRedlinePlacementMode"));
+assert(peerReviewSource.includes("setPeerRedlineArrowVisibility"));
+assert(peerReviewSource.includes("syncPeerRedlinePlacementControls"));
+assert(peerReviewSource.includes("item.annotationShowArrow !== false"));
 assert(peerReviewSource.includes("drawPeerCanvasArrow"));
 assert(peerReviewSource.includes("drawPeerRedlineAnnotation"));
 assert(peerReviewSource.includes("getPeerAcceptedRedlinesForPage"));
 assert(peerReviewSource.includes("acceptedOnPage.forEach"));
 assert(peerReviewSource.includes("removePeerAcceptedRedline"));
 assert(peerReviewSource.includes('item.status === "Accepted"'));
+assert(peerReviewSource.includes("togglePeerFindingAccepted"));
+assert(peerReviewSource.includes('if (!accepted && item.annotationAccepted) return removePeerAcceptedRedline(id)'));
 assert(peerReviewSource.includes("drawPeerPdfArrow"));
 assert(peerReviewSource.includes("applyPeerRedlineZoom"));
 assert(peerReviewSource.includes("changePeerRedlineZoom"));
@@ -253,7 +273,7 @@ assert(peerReviewSource.includes("redoPeerRedlineChange"));
 assert(peerReviewSource.includes("peerRedlineUndoStack"));
 assert(peerReviewSource.includes("requestPeerEngineerPatternAnalysis"));
 assert(peerReviewSource.includes("requestPeerDisciplineAnalysis"));
-assert(peerReviewSource.includes('const disciplineSweeps = ["Drawing coordination", "Equipment", "Plumbing", "Electrical"]'));
+assert(peerReviewSource.includes('"Dimensions and clearances", "Schedules and descriptions", "Constructability"'));
 assert(peerReviewSource.includes('Coordinate repeated drawing information'));
 assert(peerReviewSource.includes("Do not compare unlike attributes such as pipe diameter versus nozzle thread or orifice size"));
 assert(peerReviewSource.includes("document-level engineer coordination"));
@@ -284,7 +304,11 @@ assert(peerReviewSource.includes("peerExportMarkedButton"));
 assert(peerReviewSource.includes("accepted redline${accepted === 1"));
 assert(!peerReviewSource.includes('recordPeerFindingFeedback(item, "Accepted");'));
 assert(peerReviewSource.includes("one finding per affected object and location"));
-assert(peerReviewSource.includes("prioritizePeerFindings(automatic, 20)"));
+assert(peerReviewSource.includes("peerReview.maximumSweep === false ? 20 : 36"));
+assert(peerReviewSource.includes("buildPeerSystemRegistry"));
+assert(peerReviewSource.includes("createPeerCoverageReport"));
+assert(peerReviewSource.includes("classifyPeerFindingTier"));
+assert(peerReviewSource.includes("renderPeerCoverageSummary"));
 assert(peerReviewSource.includes("A generic tank label may conflict with a specific formal equipment-list description"));
 assert(peerReviewSource.includes("APPROVED USER AND ENGINEER-DECISION EXAMPLES"));
 assert(peerReviewSource.includes("The two tank-label corrections are distinct from the broader Tank coordination correction"));
@@ -305,9 +329,18 @@ assert(peerReviewSource.includes("Rule check · confirm source"));
 const peerReviewHtml = fs.readFileSync(path.join(__dirname, "..", "peer-review.html"), "utf8");
 const peerReviewStyles = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8");
 assert(peerReviewHtml.includes('id="peerRedlineArrowMode"') && peerReviewHtml.includes('id="peerRedlineCommentMode"'));
+assert(peerReviewHtml.includes('id="peerRedlineArrowToggle"') && peerReviewHtml.includes("Turn this off for a comment box only"));
 assert(peerReviewHtml.includes('id="peerRedlineZoomValue"') && peerReviewHtml.includes("Fit sheet"));
 assert(peerReviewHtml.includes('id="peerRedlineUndoButton"') && peerReviewHtml.includes('id="peerRedlineRedoButton"'));
 assert(peerReviewHtml.includes('id="peerRemoveRedlineButton"'));
 assert(peerReviewHtml.includes('class="peer-export-option is-primary"') && peerReviewHtml.includes('id="peerExportSummary"'));
+assert(peerReviewHtml.includes('id="peerMaximumSweep"') && peerReviewHtml.includes('id="peerCoverageSummary"'));
+assert(peerReviewHtml.includes('id="peerFindingTier"'));
+assert(peerReviewHtml.includes("Add Manual Comment") && peerReviewHtml.includes("noticed by an engineer that was not created by the AI"));
+assert(peerReviewHtml.includes('value="not-accepted">Not accepted') && peerReviewHtml.includes('value="accepted">Accepted'));
+assert(peerReviewHtml.includes('onclick="savePeerRedline(true)">Save redline'));
+assert(peerReviewStyles.includes(".peer-finding-acceptance") && peerReviewStyles.includes(".peer-finding-card.is-accepted"));
+assert(peerReviewStyles.includes(".peer-redline-mode-options") && peerReviewStyles.includes(".peer-redline-mode.is-active"));
+assert(peerReviewStyles.includes(".peer-redline-arrow-toggle input:checked + span"));
 assert(peerReviewStyles.includes("width: min(1720px, 98vw)") && peerReviewStyles.includes("scroll-behavior: smooth"));
 console.log("Peer Review rule tests passed.");
