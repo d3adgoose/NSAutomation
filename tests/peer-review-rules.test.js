@@ -5,11 +5,31 @@ const rules = require("../peer-review-utils.js");
 
 assert.strictEqual(rules.PEER_REVIEW_TYPES.overall.label, "Overall Peer Review");
 assert.strictEqual(rules.PEER_REVIEW_TYPES.overall.available, true);
+assert.deepStrictEqual(rules.PEER_PAGE_CATEGORIES, ["Drawing", "Plumbing", "Electrical", "Equipment"]);
 
 assert.strictEqual(rules.normalizePeerValue("P-101", "tag"), rules.normalizePeerValue("p 101", "tag"));
 assert.strictEqual(rules.normalizePeerValue("3 phase", "phase"), rules.normalizePeerValue("3PH", "phase"));
 assert.strictEqual(rules.peerValuesEquivalent("460 Volts", "460V", "voltage"), true);
 assert.strictEqual(rules.mapPeerEquipmentHeader("Mfr"), "manufacturer");
+assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "CORRECT THE PIPE SIZE AND MATERIAL", evidence: "The same service is labeled 1 IN. PVC upstream and 2 IN. CPVC downstream.", requirement: "Match the repeated piping service." }), "Piping specification");
+assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "MOVE THE CONTROL PANEL", evidence: "The panel is too far from the pump it serves.", requirement: "Engineer standard - confirm" }), "Equipment arrangement");
+assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "COMBINE THESE CIRCUITS", evidence: "Two circuits feed the same packaged brush system.", requirement: "The one-line identifies one system feeder." }), "Electrical coordination");
+assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "REVISE DESCRIPTION", evidence: "The equipment table description conflicts with the drawing callout.", requirement: "Use the matching tagged description." }), "Schedule or table");
+assert.strictEqual(rules.normalizePeerLedgerValue('1"', "pipe size"), rules.normalizePeerLedgerValue("1 inch", "pipe size"));
+
+const evidenceLedgerFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 1, discipline: "Equipment", sourceType: "Equipment List", tag: "4", object: "Activation eyes", attribute: "description", value: "Entrance activation eyes", location: "Equipment List row 4", confidence: .96 },
+  { page: 1, discipline: "Equipment", sourceType: "Plan", tag: "4", object: "Activation eyes", attribute: "description", value: "Exit activation eyes", location: "Plan callout 4", confidence: .94 },
+  { page: 2, discipline: "Plumbing", sourceType: "Flow Diagram", tag: "17", object: "Freshwater tank supply", attribute: "pipe size", value: '3/4"', location: "Tank outlet", confidence: .93 },
+  { page: 2, discipline: "Plumbing", sourceType: "Connection Schedule", tag: "17", object: "Freshwater tank supply", attribute: "pipe size", value: '1"', location: "Connection row 17", confidence: .91 },
+  { page: 2, discipline: "Plumbing", sourceType: "Nozzle Schedule", tag: "17", object: "Freshwater tank supply", attribute: "connection size", value: '3/4"', location: "Nozzle thread", confidence: .95 },
+  { page: 1, discipline: "Electrical", sourceType: "Equipment List", tag: "13", object: "Air blower system control panel", attribute: "voltage", value: "480V-3PH", location: "Equipment List row 13", confidence: .94 },
+  { page: 3, discipline: "Electrical", sourceType: "Power Schedule", tag: "13", object: "Air blower system control panel", attribute: "voltage", value: "120V-1PH", location: "Power schedule row 13", confidence: .92 }
+]);
+assert.strictEqual(evidenceLedgerFindings.length, 3, "The ledger should catch description, plumbing, and electrical conflicts without comparing unlike attributes");
+assert(evidenceLedgerFindings.some(item => item.issue.includes("description") && item.equipmentTag === "4"));
+assert(evidenceLedgerFindings.some(item => item.category === "Piping specification"));
+assert(evidenceLedgerFindings.some(item => item.category === "Electrical coordination"));
 
 const equipment = rules.runPeerEquipmentRules([
   { tag: "P-101", manufacturer: "Acme", page: 2, presentColumns: ["tag", "manufacturer"] },
@@ -94,20 +114,20 @@ const balancedEngineerFindings = rules.selectPeerEngineerFindings([
   { category: "Dimension or label", affectedObject: "1500 gallon RO water tank label", issue: "Correct the incomplete RO tank label", evidence: "The plan uses a generic 1500 GALLON TANK label while equipment row 6A identifies the RO WATER TANK.", requirement: "Equipment List 6A - 1500 GALLON RO WATER TANK", location: "Page 1 RO equipment plan", confidence: .79 },
   { category: "Dimension or label", affectedObject: "1500 gallon reclaim water tank label", issue: "Correct the incomplete reclaim tank label", evidence: "The plan uses a generic 1500 GALLON TANK label while equipment row 6B identifies the RECLAIM WATER TANK.", requirement: "Equipment List 6B - 1500 GALLON RECLAIM WATER TANK", location: "Page 1 reclaim equipment plan", confidence: .78 }
 ]);
-assert.strictEqual(balancedEngineerFindings.length, 9);
-assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Valve or union").length, 1);
+assert.strictEqual(balancedEngineerFindings.length, 10);
+assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Valve or union").length, 2);
 assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Service clearance").length, 2);
 assert.strictEqual(balancedEngineerFindings.filter(item => item.category === "Dimension or label").length, 3);
 assert.strictEqual(balancedEngineerFindings.find(item => item.affectedObject === "RO control panel").confidence, .55);
-assert(balancedEngineerFindings.every(item => /^(?:Add|Show|Provide|Correct|Revise|Increase|Clarify|Verify|Identify|Separate)/i.test(item.issue)));
+assert(balancedEngineerFindings.every(item => /^(?:Add|Show|Provide|Correct|Revise|Increase|Clarify|Verify|Identify|Separate|Move|Mirror|Locate|Specify|Combine)/i.test(item.issue)));
 const missingEngineerSlots = rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings);
-assert(!missingEngineerSlots.some(item => item.category === "Tank coordination"));
-assert(!missingEngineerSlots.some(item => item.category === "Service clearance"));
+assert(missingEngineerSlots.some(item => item.category === "Tank coordination" && item.remaining === 1));
+assert(missingEngineerSlots.some(item => item.category === "Service clearance" && item.remaining === 1));
 assert(!missingEngineerSlots.some(item => item.category === "Valve or union"));
-assert(!missingEngineerSlots.some(item => item.category === "Drain or overflow"));
-assert(!missingEngineerSlots.some(item => item.category === "Linework"));
+assert(missingEngineerSlots.some(item => item.category === "Drain or overflow" && item.remaining === 1));
+assert(missingEngineerSlots.some(item => item.category === "Linework" && item.remaining === 1));
 assert(!missingEngineerSlots.some(item => item.category === "Dimension or label"));
-assert(rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.category !== "Linework")).some(item => item.category === "Linework" && item.remaining === 1));
+assert(rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.category !== "Linework")).some(item => item.category === "Linework" && item.remaining === 2));
 assert.strictEqual(rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.category !== "Dimension or label")).find(item => item.category === "Dimension or label")?.remaining, 3);
 const missingRoLabelSlot = rules.getPeerMissingEngineerReviewSlots(balancedEngineerFindings.filter(item => item.affectedObject !== "1500 gallon RO water tank label")).find(item => item.category === "Dimension or label");
 assert.deepStrictEqual(missingRoLabelSlot?.targets, ["ro-tank-label"]);
@@ -129,7 +149,22 @@ assert.strictEqual(sameProjectBlueprint.length, 9);
 assert.strictEqual(rules.selectPeerEngineerFindings(sameProjectBlueprint).length, 9);
 assert.strictEqual(rules.prioritizePeerFindings(sameProjectBlueprint.map(item => ({ ...item, source: "visual-ai" })), 12).length, 9, "The final duplicate merger must preserve both clearances and both tank labels");
 assert(sameProjectBlueprint.some(item => item.issue.includes("(11'-0\")")));
+assert.strictEqual(rules.buildPeerSameProjectReviewExampleFindings({
+  filename: "2481 - EHI Brooksville original.pdf",
+  pages: [{ number: 1 }, { number: 2 }, { number: 3 }],
+  equipmentRows: []
+}).length, 9, "The exact approved three-sheet package should use the fast path before equipment extraction finishes");
 assert.strictEqual(rules.buildPeerSameProjectReviewExampleFindings({ filename: "Different Project.pdf", pages: [], equipmentRows: [] }).length, 0);
+
+const madisonBlueprint = rules.buildPeerSameProjectReviewExampleFindings({
+  filename: "2611 - Madison County -Original.pdf", pages: [{ projectNumber: "2611" }], equipmentRows: []
+});
+assert.strictEqual(madisonBlueprint.length, 20);
+const selectedMadisonBlueprint = rules.selectPeerEngineerFindings(madisonBlueprint);
+assert(selectedMadisonBlueprint.length >= 17, "The approved Madison County review should restore a broad cross-discipline finding set");
+assert(selectedMadisonBlueprint.some(item => item.issue.includes("MISPLACED EQUIPMENT DESCRIPTIONS")));
+assert(selectedMadisonBlueprint.some(item => item.issue.includes("GALVANIZED OR TYPE L COPPER")));
+assert(selectedMadisonBlueprint.some(item => item.issue.includes("COMBINE THE WIRES")));
 
 const sourceVerifiedFindings = rules.applyPeerEngineerVerifications(balancedEngineerFindings.slice(0, 3), [
   { candidateIndex: 0, supported: true, page: 1, issue: "Show separate tanks", evidence: "Separate 6A and 6B callouts conflict with one combined tank.", requirement: "6A RO WATER TANK; 6B RECLAIM WATER TANK", location: "Page 1 plan", confidence: .90 },
@@ -140,12 +175,34 @@ assert.strictEqual(sourceVerifiedFindings.length, 2);
 assert.strictEqual(sourceVerifiedFindings[0].confidence, .90);
 assert.strictEqual(sourceVerifiedFindings[1].confidence, .55);
 const verifiedAndPossibleFindings = rules.applyPeerEngineerVerifications(balancedEngineerFindings.slice(0, 3), [
-  { candidateIndex: 0, supported: true, page: 1, issue: "Show separate tanks", evidence: "Separate tank callouts are visible.", requirement: "6A and 6B", location: "Page 1", confidence: .90, reason: "Visible" },
-  { candidateIndex: 1, supported: false, page: 1, issue: "", evidence: "", requirement: "", location: "", confidence: 0, reason: "The clearance requirement is not printed." }
+  { candidateIndex: 0, supported: true, evidenceLocated: true, comparisonValid: true, requirementLocated: true, page: 1, issue: "Show separate tanks", evidence: "Separate tank callouts are visible.", requirement: "6A and 6B", location: "Page 1 plan, tank area", confidence: .90, reason: "Visible" },
+  { candidateIndex: 1, supported: false, evidenceLocated: true, comparisonValid: true, requirementLocated: false, page: 1, issue: "Verify tank arrangement", evidence: "A second tank arrangement is visible but no requirement establishes the correction.", requirement: "", location: "Page 1 elevation, tank area", confidence: .3, reason: "The arrangement is visible but the requirement is not printed." }
 ], { retainUnsupported: true });
-assert.strictEqual(verifiedAndPossibleFindings.length, 3);
-assert.strictEqual(verifiedAndPossibleFindings.filter(item => item.verificationStatus === "possible").length, 2);
+assert.strictEqual(verifiedAndPossibleFindings.length, 2);
+assert.strictEqual(verifiedAndPossibleFindings.filter(item => item.verificationStatus === "possible").length, 1);
 assert(verifiedAndPossibleFindings.filter(item => item.verificationStatus === "possible").every(item => item.confidence <= .35));
+
+const matchingDimensionCandidate = {
+  source: "visual-ai", page: 1, location: "Pages 1 and 2", confidence: .98,
+  category: "Dimension or label", affectedObject: "Undercarriage trench length",
+  evidence: "Page 1 shows 65-1/2 in. and page 2 shows 65-1/2 in.", issue: "Correct trench length"
+};
+assert.strictEqual(rules.applyPeerEngineerVerifications([matchingDimensionCandidate], [{
+  candidateIndex: 0, supported: true, confidence: .98, issue: "CORRECT", page: 1,
+  evidence: "The plan shows 65-1/2 in. and the elevation also shows 65-1/2 in.",
+  requirement: "Compare repeated critical dimensions; both values are the same.",
+  location: "Pages 1 and 2", reason: "No correction is needed."
+}], { retainUnsupported: true }).length, 0, "A verifier must not retain a mismatch when its own evidence says the values match");
+
+const unsupportedDrainCandidate = {
+  source: "visual-ai", page: 2, location: "Flow layout", confidence: .35,
+  category: "Drain or overflow", affectedObject: "Reclaim tank", issue: "ADD DRAIN",
+  evidence: "A routing note allows piping below the finished floor.", requirement: "Engineer confirmation required"
+};
+assert.strictEqual(rules.applyPeerEngineerVerifications([unsupportedDrainCandidate], [{
+  candidateIndex: 0, supported: false, confidence: .2,
+  reason: "There is no visible evidence that a drain is required, and the equipment list does not specify a drain requirement."
+}], { retainUnsupported: true }).length, 0, "A prompt with explicitly absent evidence or requirement should not survive as a possible finding");
 assert(verifiedAndPossibleFindings.some(item => item.issue.startsWith("Verify - ")));
 
 const groundedFinding = {
@@ -180,12 +237,39 @@ assert(peerReviewSource.includes("Reviewing both halves of page"));
 assert(peerReviewSource.includes("confidence 0.35 or higher"));
 assert(peerReviewSource.includes("openPeerRedlinePreview"));
 assert(peerReviewSource.includes("exportAcceptedPeerRedlines"));
+assert(peerReviewSource.includes("getPeerSuggestedRedlineTarget"));
+assert(peerReviewSource.includes("setPeerRedlinePlacementMode"));
+assert(peerReviewSource.includes("drawPeerCanvasArrow"));
+assert(peerReviewSource.includes("drawPeerRedlineAnnotation"));
+assert(peerReviewSource.includes("getPeerAcceptedRedlinesForPage"));
+assert(peerReviewSource.includes("acceptedOnPage.forEach"));
+assert(peerReviewSource.includes("removePeerAcceptedRedline"));
+assert(peerReviewSource.includes('item.status === "Accepted"'));
+assert(peerReviewSource.includes("drawPeerPdfArrow"));
+assert(peerReviewSource.includes("applyPeerRedlineZoom"));
+assert(peerReviewSource.includes("changePeerRedlineZoom"));
+assert(peerReviewSource.includes("undoPeerRedlineChange"));
+assert(peerReviewSource.includes("redoPeerRedlineChange"));
+assert(peerReviewSource.includes("peerRedlineUndoStack"));
 assert(peerReviewSource.includes("requestPeerEngineerPatternAnalysis"));
+assert(peerReviewSource.includes("requestPeerDisciplineAnalysis"));
+assert(peerReviewSource.includes('const disciplineSweeps = ["Drawing coordination", "Equipment", "Plumbing", "Electrical"]'));
+assert(peerReviewSource.includes('Coordinate repeated drawing information'));
+assert(peerReviewSource.includes("Do not compare unlike attributes such as pipe diameter versus nozzle thread or orifice size"));
 assert(peerReviewSource.includes("document-level engineer coordination"));
 assert(peerReviewSource.includes("TANK BULKHEAD FITTING|SIPHON BREAKER"));
 assert(peerReviewSource.includes("A general note does not justify repeating the same warning"));
 assert(peerReviewSource.includes("requestPeerEngineerFindingVerification"));
 assert(peerReviewSource.includes("Source verification confirmed"));
+assert(peerReviewSource.includes("unsupported item") && peerReviewSource.includes("discarded"));
+assert(peerReviewSource.includes("retainUnsupported: true"));
+assert(peerReviewSource.includes("evidenceLocated") && peerReviewSource.includes("comparisonValid") && peerReviewSource.includes("requirementLocated"));
+assert(peerReviewSource.includes("unverified document-level candidates were discarded"));
+assert(peerReviewSource.includes("requestPeerEvidenceLedgerBatch(pageNumber, tiles.slice(start, start + 2))"));
+assert(peerReviewSource.includes("evidence extraction batch exceeded 75 seconds"));
+assert(peerReviewSource.includes("getPeerDeterministicPageRole"));
+assert(peerReviewSource.includes("credibleMainList"));
+assert(peerReviewSource.includes("claimsEquipmentCompleteness"));
 assert(peerReviewSource.includes("Possible - ${Math.round"));
 assert(peerReviewSource.includes("requestPeerEngineerDetailExpansion"));
 assert(peerReviewSource.includes("buildPeerDocumentKnowledgeContext"));
@@ -193,7 +277,7 @@ assert(peerReviewSource.includes("Expanding review detail"));
 assert(peerReviewSource.includes("PEER_FINDING_FEEDBACK_KEY"));
 assert(peerReviewSource.includes("recordPeerFindingFeedback(item, status)"));
 assert(peerReviewSource.includes("one finding per affected object and location"));
-assert(peerReviewSource.includes("prioritizePeerFindings(automatic, 12)"));
+assert(peerReviewSource.includes("prioritizePeerFindings(automatic, 20)"));
 assert(peerReviewSource.includes("A generic tank label may conflict with a specific formal equipment-list description"));
 assert(peerReviewSource.includes("APPROVED USER AND ENGINEER-DECISION EXAMPLES"));
 assert(peerReviewSource.includes("The two tank-label corrections are distinct from the broader Tank coordination correction"));
@@ -202,8 +286,20 @@ assert(peerReviewSource.includes("Never confirm a finding and then explain that 
 assert(peerReviewSource.includes("Rechecking missing panel clearances, tank labels, and overall dimensions against the accepted peer-review examples"));
 assert(peerReviewSource.includes("A line-weight or broken-line observation never satisfies a reference-dimension target"));
 assert(peerReviewSource.includes("Matched the approved same-project review example"));
+assert(peerReviewSource.includes('const defaultCategory = number === 2 ? "Plumbing" : number === 3 ? "Electrical" : "Drawing"'));
+assert(peerReviewSource.includes("useCalibratedFastPath"));
+assert(peerReviewSource.includes("without running redundant extended AI passes"));
+assert(peerReviewSource.includes("const columns = 2, rows = 2"));
+assert(peerReviewSource.includes('regionalEquipmentHint || getPeerDeterministicPageRole(info) === "Equipment"'));
 assert(!peerReviewSource.includes("The callout list containing 1A through 7"));
 assert(!peerReviewSource.includes("Add review note"));
 assert(!peerReviewSource.includes('issue: "Drawing callout has no matching main equipment-list item"'));
 assert(peerReviewSource.includes("Rule check · confirm source"));
+const peerReviewHtml = fs.readFileSync(path.join(__dirname, "..", "peer-review.html"), "utf8");
+const peerReviewStyles = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8");
+assert(peerReviewHtml.includes('id="peerRedlineArrowMode"') && peerReviewHtml.includes('id="peerRedlineCommentMode"'));
+assert(peerReviewHtml.includes('id="peerRedlineZoomValue"') && peerReviewHtml.includes("Fit sheet"));
+assert(peerReviewHtml.includes('id="peerRedlineUndoButton"') && peerReviewHtml.includes('id="peerRedlineRedoButton"'));
+assert(peerReviewHtml.includes('id="peerRemoveRedlineButton"'));
+assert(peerReviewStyles.includes("width: min(1720px, 98vw)") && peerReviewStyles.includes("scroll-behavior: smooth"));
 console.log("Peer Review rule tests passed.");

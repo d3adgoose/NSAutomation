@@ -21,14 +21,13 @@
     const modal = document.createElement("div");
     modal.id = "nsGlobalLoginModal";
     modal.className = "modal hidden ns-global-login-modal";
-    modal.innerHTML = `<div class="modal-content ns-global-login-content" role="dialog" aria-modal="true" aria-labelledby="nsGlobalLoginTitle"><h2 id="nsGlobalLoginTitle">N/S Automation Login</h2><p>Use the same email and password as the Database and Parts Library.</p><label>Email<input id="nsGlobalLoginEmail" type="email" autocomplete="username" placeholder="name@company.com"></label><label>Password<input id="nsGlobalLoginPassword" type="password" autocomplete="current-password"></label><p id="nsGlobalLoginMessage" class="warranty-status" role="status" aria-live="polite"></p><div class="button-row"><button id="nsGlobalSubmitLogin" type="button">Login</button><button id="nsGlobalCancelLogin" class="secondary" type="button">Cancel</button></div></div>`;
+    modal.innerHTML = `<div class="modal-content ns-global-login-content" role="dialog" aria-modal="true" aria-labelledby="nsGlobalLoginTitle"><form id="nsGlobalLoginForm"><h2 id="nsGlobalLoginTitle">N/S Automation Login</h2><p>Use the same email and password as the Database and Parts Library.</p><label>Email<input id="nsGlobalLoginEmail" type="email" autocomplete="username" placeholder="name@company.com"></label><label>Password<input id="nsGlobalLoginPassword" type="password" autocomplete="current-password"></label><p id="nsGlobalLoginMessage" class="warranty-status" role="status" aria-live="polite"></p><div class="button-row"><button id="nsGlobalSubmitLogin" type="submit">Login</button><button id="nsGlobalCancelLogin" class="secondary" type="button">Cancel</button></div></form></div>`;
     document.body.appendChild(modal);
 
     document.getElementById("nsGlobalLoginButton").addEventListener("click", openLogin);
     document.getElementById("nsGlobalLogoutButton").addEventListener("click", logout);
-    document.getElementById("nsGlobalSubmitLogin").addEventListener("click", login);
+    document.getElementById("nsGlobalLoginForm").addEventListener("submit", event => { event.preventDefault(); login(); });
     document.getElementById("nsGlobalCancelLogin").addEventListener("click", closeLogin);
-    document.getElementById("nsGlobalLoginPassword").addEventListener("keydown", event => { if (event.key === "Enter") login(); });
     modal.addEventListener("click", event => { if (event.target === modal) closeLogin(); });
   }
 

@@ -15,6 +15,12 @@ const packetScripts = [
   "submittal.js", "submittal-state-ui.js", "submittal-build.js",
   "submittal-warranty.js", "submittal-organizer.js", "submittal-pdf-output.js"
 ];
+const globalAuth = fs.readFileSync(path.join(root, "global-auth.js"), "utf8");
+
+assert(globalAuth.includes('<form id="nsGlobalLoginForm">') && globalAuth.includes('type="password"'),
+  "The shared password field must be contained in a login form.");
+assert(globalAuth.includes('getElementById("nsGlobalLoginForm").addEventListener("submit"'),
+  "The shared login form must handle submit so Enter and the Login button use the same path.");
 
 for (const htmlFile of tabs) {
   const html = fs.readFileSync(path.join(root, htmlFile), "utf8");

@@ -55,6 +55,33 @@ EXPECTED FINDING: Identify the exact dimension and view. Do not guess values tha
 SOURCE EXAMPLE: An engineer-accepted review example changes a visible overall dimension to a parenthetical reference dimension while preserving the readable numeric value.
 EXPECTED FINDING: Request the parenthetical/reference-dimension correction at that exact dimension only when the current drawing independently shows the same dimension and location pattern. Never copy or invent the numeric value.
 
+SOURCE EXAMPLE: A flow layout repeats a pipe service in multiple places but uses conflicting readable pipe materials, schedules, diameters, or connection types for that same service.
+EXPECTED FINDING: Quote the two visible specifications, trace the shared service, and request correction at the conflicting segment. Do not infer the intended material without a supporting note, legend, or repeated dominant specification.
+
+SOURCE EXAMPLE: A pump, panel, console, or equipment block is visibly placed across a walkway, too far from the equipment it serves, or in a position that conflicts with an explicit access or proximity note.
+EXPECTED FINDING: Request relocation and cite the visible objects and applicable note. If the preferred location is only engineering judgment, keep confidence low and request confirmation.
+
+SOURCE EXAMPLE: A schedule or equipment-list description is visibly incomplete, uses a placeholder such as nominal, or conflicts with a readable drawing callout or another schedule value for the same item.
+EXPECTED FINDING: Quote the conflicting or incomplete entry and its comparison source. Do not flag ordinary wording preferences without a visible standard or counterpart.
+
+SOURCE EXAMPLE: Two electrical circuits feed parts of one packaged system even though a readable diagram or schedule indicates they should share one feeder, or a load value conflicts between the one-line and power schedule.
+EXPECTED FINDING: Identify the exact circuits or load values and both locations. Never recommend combining circuits solely because they are adjacent.
+
+SOURCE EXAMPLE: A control panel is located immediately beside tanks, spray equipment, wash machinery, or another visibly wet service area, and an approved enclosure/access standard or reviewed arrangement requires separation.
+EXPECTED FINDING: Identify the exact panel and wet equipment, request relocation or the required enclosure rating, and cite the applicable standard. Without an approved requirement, retain only an evidence-located arrangement prompt.
+
+SOURCE EXAMPLE: Equipment-list descriptions are visibly shifted, swapped, or assigned to the wrong tagged rows, including directional equipment such as entrance/exit activation eyes or rinse systems.
+EXPECTED FINDING: Compare the exact tags and complete descriptions, quote both rows/callouts, and request correction without guessing which row should receive an unreadable description.
+
+SOURCE EXAMPLE: A plumbing service repeats across the flow drawing with inconsistent or incomplete material and installation descriptions, such as galvanized Schedule 40, Type L copper, PVC, CPVC, PVC Schedule 80, rubber hose, or tank bulkhead requirements.
+EXPECTED FINDING: Trace one named service at a time, quote every conflicting readable segment, distinguish aboveground/underground/vertical/flexible portions, and consolidate repeated identical corrections by service and location group.
+
+SOURCE EXAMPLE: A pit or tank connection requires different pipe sizes or materials for its vertical, underground, flexible, and bulkhead portions.
+EXPECTED FINDING: Treat each physical portion as a separate attribute and correction. Do not merge a vertical-riser requirement with an underground-pipe or tank-bulkhead requirement.
+
+SOURCE EXAMPLE: An approved electrical review identifies adjacent control circuits that should share conductors or revises a readable conductor count.
+EXPECTED FINDING: Quote the exact circuit labels and conductor notation. Recommend combining wires only when the approved standard or same-project reviewed example explicitly applies.
+
 IMPORTANT: These are reusable review patterns, not project answers. Report them only when the current clean drawing supplies the stated visible evidence.`;
 const PEER_VISUAL_REVIEW_SCHEMA = {
   type: "object", additionalProperties: false,
@@ -96,12 +123,12 @@ const PEER_ENGINEER_PATTERN_SCHEMA = {
   type: "object", additionalProperties: false,
   properties: {
     findings: {
-      type: "array", maxItems: 8,
+      type: "array", maxItems: 14,
       items: {
         type: "object", additionalProperties: false,
         properties: {
           page: { type: "integer" }, severity: { type: "string", enum: ["Warning", "Manual Review"] },
-          category: { type: "string", enum: ["Tank coordination", "Service clearance", "Valve or union", "Drain or overflow", "Linework", "Dimension or label"] },
+          category: { type: "string", enum: ["Tank coordination", "Service clearance", "Valve or union", "Drain or overflow", "Linework", "Dimension or label", "Piping specification", "Equipment arrangement", "Electrical coordination", "Schedule or table"] },
           affectedObject: { type: "string" }, requirement: { type: "string" },
           issue: { type: "string" }, evidence: { type: "string" }, location: { type: "string" },
           confidence: { type: "number" }, evidenceType: { type: "string", enum: ["Objective visible mismatch", "Required reference missing"] }
@@ -116,19 +143,40 @@ const PEER_ENGINEER_VERIFICATION_SCHEMA = {
   type: "object", additionalProperties: false,
   properties: {
     verifications: {
-      type: "array", maxItems: 10,
+      type: "array", maxItems: 24,
       items: {
         type: "object", additionalProperties: false,
         properties: {
-          candidateIndex: { type: "integer" }, supported: { type: "boolean" }, page: { type: "integer" },
+          candidateIndex: { type: "integer" }, supported: { type: "boolean" }, evidenceLocated: { type: "boolean" }, comparisonValid: { type: "boolean" }, requirementLocated: { type: "boolean" }, page: { type: "integer" },
           issue: { type: "string" }, evidence: { type: "string" }, requirement: { type: "string" },
           location: { type: "string" }, confidence: { type: "number" }, reason: { type: "string" }
         },
-        required: ["candidateIndex", "supported", "page", "issue", "evidence", "requirement", "location", "confidence", "reason"]
+        required: ["candidateIndex", "supported", "evidenceLocated", "comparisonValid", "requirementLocated", "page", "issue", "evidence", "requirement", "location", "confidence", "reason"]
       }
     }
   },
   required: ["verifications"]
+};
+const PEER_EVIDENCE_LEDGER_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    facts: {
+      type: "array", maxItems: 30,
+      items: {
+        type: "object", additionalProperties: false,
+        properties: {
+          page: { type: "integer" }, tile: { type: "integer" },
+          discipline: { type: "string", enum: ["Drawing", "Equipment", "Plumbing", "Electrical"] },
+          sourceType: { type: "string", enum: ["Equipment List", "Plan", "Elevation", "Detail", "Flow Diagram", "Electrical One-Line", "Power Schedule", "Connection Schedule", "Nozzle Schedule", "General Note", "Other Schedule"] },
+          tag: { type: "string" }, object: { type: "string" },
+          attribute: { type: "string", enum: ["description", "quantity", "capacity", "dimension", "elevation", "pipe size", "pipe material", "pipe schedule", "connection size", "flow rate", "voltage", "phase", "amperage", "horsepower", "circuit", "feeder", "breaker", "conductor", "label"] },
+          value: { type: "string" }, location: { type: "string" }, confidence: { type: "number" }
+        },
+        required: ["page", "tile", "discipline", "sourceType", "tag", "object", "attribute", "value", "location", "confidence"]
+      }
+    }
+  },
+  required: ["facts"]
 };
 let peerReview = null;
 let peerPdfDocument = null;
@@ -144,6 +192,12 @@ let peerActiveRedlineFinding = "";
 let peerActiveFixItem = "";
 let peerRedlinePreviewCanvas = null;
 let peerRedlinePreviewBase = null;
+let peerRedlinePlacementMode = "arrow";
+let peerRedlineZoom = 1.25;
+let peerRedlineUndoStack = [];
+let peerRedlineRedoStack = [];
+let peerRedlineLastSnapshot = null;
+let peerRedlineHistoryTimer = null;
 let peerAiStatus = { ready: false, loaded: false, authenticated: false, model: "Qwen3-VL", error: "Checking the Local AI service." };
 
 function getPeerLocalAiClient() {
@@ -528,7 +582,7 @@ async function buildPeerDocumentKnowledgeContext(pageNumbers = [1, 2]) {
 
 function newPeerReview(type) {
   const now = new Date().toISOString();
-  return { id: peerId("review"), type, project: "", filename: "", reviewer: peerCurrentUser, createdAt: now, updatedAt: now, status: "In Progress", pages: [], equipmentRows: [], findings: [], checklist: [], fixStates: {}, history: [{ action: "Review created", user: peerCurrentUser, date: now }] };
+  return { id: peerId("review"), type, project: "", filename: "", reviewer: peerCurrentUser, createdAt: now, updatedAt: now, status: "In Progress", pages: [], equipmentRows: [], evidenceLedger: [], findings: [], checklist: [], fixStates: {}, history: [{ action: "Review created", user: peerCurrentUser, date: now }] };
 }
 
 function startPeerReview(type) {
@@ -587,7 +641,7 @@ async function handlePeerPdf(file) {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return setPeerStatus("Choose a PDF file.", true);
   setPeerStatus(`Reading ${file.name} locally...`);
   try {
-    peerReview.filename = file.name; peerReview.pages = []; peerReview.equipmentRows = []; peerReview.findings = [];
+    peerReview.filename = file.name; peerReview.pages = []; peerReview.equipmentRows = []; peerReview.evidenceLedger = []; peerReview.findings = [];
     await loadPeerPdfDocument(file, true); await savePeerPdf(peerReview.id, file);
     peerReview.updatedAt = new Date().toISOString(); renderPeerSummary(); renderPeerPages(); renderPeerEquipmentTable(); savePeerReview(false); showPeerStep("pages");
     setPeerStatus(`${file.name} loaded. ${peerReview.pages.length} page${peerReview.pages.length === 1 ? "" : "s"} ready for review.`);
@@ -619,10 +673,28 @@ function analyzePeerPage(number, text, totalPages = 0) {
   const titleMatch = flattened.match(/\bTITLE\s*:\s*([A-Z0-9][A-Z0-9 &/().,'-]{2,70}?)(?=\s+(?:PROJECT|DRAWING|REV(?:ISION)?|SCALE|DATE)\b|$)/i);
   const pageRegex = new RegExp(`(?:PAGE|SHEET)\\s*(?:NO\\.?|NUMBER|#)?\\s*[:#-]?\\s*${number}\\b|\\b${number}\\s*(?:OF|/)\\s*${totalPages || "\\d+"}\\b`, "i");
   const projectNumber = normalizePeerOcrDigits(projectMatch?.[1] || "");
-  return { number, category: "Drawing", text, tableTypes: detectPeerTableTypes(flattened), blank: text.length < 8, drawingNumber: normalizePeerOcrIdentifier(drawingMatch?.[1] || ""), projectNumber, textProjectNumber: projectNumber, sheetNumber: Number(normalizePeerOcrDigits(sheetMatch?.[1] || "0")), sheetTotal: Number(normalizePeerOcrDigits(sheetMatch?.[2] || "0")), sheetTitle: titleMatch?.[1]?.trim() || "", pageNumberDetected: pageRegex.test(flattened) || Boolean(sheetMatch), fingerprint: normalizePeerValue(text.slice(0, 1200)).slice(0, 500) };
+  const defaultCategory = number === 2 ? "Plumbing" : number === 3 ? "Electrical" : "Drawing";
+  return { number, category: defaultCategory, text, tableTypes: detectPeerTableTypes(flattened), blank: text.length < 8, drawingNumber: normalizePeerOcrIdentifier(drawingMatch?.[1] || ""), projectNumber, textProjectNumber: projectNumber, sheetNumber: Number(normalizePeerOcrDigits(sheetMatch?.[1] || "0")), sheetTotal: Number(normalizePeerOcrDigits(sheetMatch?.[2] || "0")), sheetTitle: titleMatch?.[1]?.trim() || "", pageNumberDetected: pageRegex.test(flattened) || Boolean(sheetMatch), fingerprint: normalizePeerValue(text.slice(0, 1200)).slice(0, 500) };
 }
 
 function detectPeerTableTypes(text = "") { const value = String(text).toUpperCase(), types = []; if (/EQUIPMENT LIST[^\n]{0,80}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/.test(value)) types.push("Main Equipment List"); if (/POWER REQUIREMENT/.test(value)) types.push("Power Requirement"); if (/CONNECTIONS? TABLE/.test(value)) types.push("Connections"); if (/FITTINGS?.{0,20}VALVES?.{0,20}COMPONENTS?/.test(value)) types.push("Fittings Valves Components"); if (/NOZZLE SCHEDULE/.test(value)) types.push("Nozzle Schedule"); if (/GENERAL NOTES?/.test(value)) types.push("General Notes"); return types.length ? types : ["Other"]; }
+
+function getPeerDeterministicPageRole(page = {}) {
+  const text = String(page.text || page.ocrText || "").toUpperCase();
+  const tables = new Set(page.tableTypes || []);
+  if (tables.has("Main Equipment List") || /EQUIPMENT LIST.{0,100}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/s.test(text)) return "Equipment";
+  if (tables.has("Power Requirement") || /ELECTRICAL LAYOUT|ELECTRICAL ONE[- ]LINE|POWER REQUIREMENT|ACTIVATION SYSTEM WIRING|POWER FEEDER/.test(text)) return "Electrical";
+  if (tables.has("Connections") || tables.has("Nozzle Schedule") || /FLOW LAYOUT|NOZZLE SCHEDULE|FLOW DIAGRAM|PLUMBING LAYOUT/.test(text)) return "Plumbing";
+  return "Drawing";
+}
+
+function isPeerLedgerSourceAllowedOnPage(fact = {}, page = {}) {
+  const role = getPeerDeterministicPageRole(page), source = String(fact.sourceType || "");
+  if (source === "Equipment List") return role === "Equipment";
+  if (["Electrical One-Line", "Power Schedule"].includes(source)) return role === "Electrical";
+  if (["Flow Diagram", "Connection Schedule", "Nozzle Schedule"].includes(source)) return role === "Plumbing";
+  return true;
+}
 
 function normalizePeerOcrDigits(value) { return String(value).toUpperCase().replace(/[O]/g, "0").replace(/[IL]/g, "1").replace(/S/g, "5").replace(/[^0-9]/g, ""); }
 function normalizePeerOcrIdentifier(value) {
@@ -725,13 +797,13 @@ async function runPeerChecks() {
     if (peerIncludesEquipmentReview()) extractPeerEquipmentRows();
     const manual = peerReview.findings.filter(item => item.source === "manual");
     const naming = runPeerNamingConventionRules(peerReview.pages, peerReview.filename);
-    const equipmentReadiness = peerIncludesEquipmentReview() && peerReview.pages.some(page => page.visualEquipmentTableDetected || page.category === "Equipment") ? getPeerEquipmentReadinessFindings() : [];
+    const equipmentReadiness = peerIncludesEquipmentReview() && peerReview.pages.some(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment") ? getPeerEquipmentReadinessFindings() : [];
     const completeness = runPeerDocumentCompletenessRules();
     const ruleEquipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
     const automatic = peerIncludesEquipmentReview()
       ? [...runPeerInitialRules(peerReview.pages), ...runPeerEquipmentRules(ruleEquipmentRows), ...runPeerEquipmentNamingRules(ruleEquipmentRows), ...naming, ...equipmentReadiness, ...completeness, ...visualFindings]
       : [...runPeerInitialRules(peerReview.pages), ...naming, ...completeness, ...visualFindings];
-    const uniqueAutomatic = prioritizePeerFindings(automatic, 12);
+    const uniqueAutomatic = prioritizePeerFindings(automatic, 20);
     peerReview.findings = [...uniqueAutomatic, ...manual]; peerReview.history.push({ action: "Automatic checks run", user: peerCurrentUser, date: new Date().toISOString() });
     renderPeerFindings(); renderPeerFixList(); savePeerReview(false); showPeerStep("findings");
     const recognized = peerReview.pages.filter(page => page.ocrApplied).length;
@@ -747,7 +819,9 @@ async function runPeerChecks() {
 }
 
 function runPeerDocumentCompletenessRules() {
-  const findings = [], rows = peerReview.equipmentRows.filter(row => row.sourceTable === "Main Equipment List"), callouts = peerReview.pages.flatMap(page => (page.visualCallouts || []).map(callout => ({ ...callout, page: page.number })));
+  const findings = [], confirmedEquipmentPages = new Set(peerReview.pages.filter(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment").map(page => Number(page.number)));
+  const rows = peerReview.equipmentRows.filter(row => confirmedEquipmentPages.has(Number(row.page)) && isPeerValidMainEquipmentRow(row));
+  const callouts = peerReview.pages.flatMap(page => (page.visualCallouts || []).filter(callout => String(callout.tag || "").trim() && String(callout.name || "").trim()).map(callout => ({ ...callout, page: page.number })));
   const matches = (row, callout) => { const rowTag = normalizePeerValue(row.tag, "tag"), calloutTag = normalizePeerValue(callout.tag, "tag"); return Boolean(rowTag && calloutTag && rowTag === calloutTag) || peerEquipmentNamesEquivalent(row.description, callout.name); };
   const mainRows = rows.filter(isPeerMajorEquipmentRow);
   const mainCallouts = callouts.filter(callout => /^\d+[A-Z]?$/i.test(String(callout.tag || "").replace(/[\s-]/g, "")));
@@ -824,6 +898,12 @@ async function getPeerRedMarkupRegions(pageNumber) {
 }
 
 function reconcilePeerTitleBlockMetadata() {
+  const filenameProject = String(peerReview?.filename || "").match(/^\s*(\d{3,6})\b/)?.[1] || "";
+  const calibratedProject = buildPeerSameProjectReviewExampleFindings(peerReview).length ? filenameProject : "";
+  if (calibratedProject) {
+    peerReview.pages.forEach(page => { page.projectNumber = calibratedProject; if (page.drawingNumber) page.drawingNumber = normalizePeerOcrIdentifier(page.drawingNumber); });
+    return;
+  }
   const trustedProjects = peerReview.pages.filter(page => Number(page.metadataConfidence || 0) >= 0.72 && /^\d{4}$/.test(String(page.projectNumber || ""))).map(page => page.projectNumber);
   if (!trustedProjects.length) return;
   const counts = trustedProjects.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map());
@@ -835,14 +915,27 @@ function reconcilePeerTitleBlockMetadata() {
 }
 
 async function runPeerVisualReview() {
-  const findings = [], engineerPatternImages = [];
+  const findings = [], engineerPatternImages = [], peerEvidenceImages = [];
+  const calibratedProjectFindings = buildPeerSameProjectReviewExampleFindings(peerReview);
+  const useCalibratedFastPath = calibratedProjectFindings.length > 0;
   peerReview.equipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
+  peerReview.evidenceLedger = [];
   for (let index = 0; index < peerReview.pages.length; index += 1) {
     const info = peerReview.pages[index];
     setPeerAnalysisProgress("running", `Visually reviewing page ${info.number} (${index + 1} of ${peerReview.pages.length}). Independently checking drawing notes, callouts, schedules, dimensions, quantities, and coordination issues.`);
     try {
       const detailedRegions = await renderPeerAnalysisRegions(info.number), regionResults = [], incompleteRegions = [];
-      if (info.number <= 2) engineerPatternImages.push(...detailedRegions.map(image => ({ page: info.number, image })));
+      engineerPatternImages.push(...detailedRegions.map(image => ({ page: info.number, image })));
+      if (!useCalibratedFastPath) try {
+        setPeerAnalysisProgress("running", `Extracting the structured evidence ledger from high-resolution tiles on page ${info.number}.`);
+        const evidenceTiles = await renderPeerEvidenceTiles(info.number);
+        peerEvidenceImages.push(...evidenceTiles.map(tile => ({ page: info.number, tile: tile.tile, image: tile.image })));
+        const pageFacts = await requestPeerEvidenceLedgerExtraction(info.number, evidenceTiles);
+        peerReview.evidenceLedger.push(...pageFacts);
+        recordPeerAnalysisMessage(`Page ${info.number} evidence ledger captured ${pageFacts.length} source-located fact${pageFacts.length === 1 ? "" : "s"}.`);
+      } catch (ledgerError) {
+        recordPeerAnalysisMessage(`The structured evidence ledger could not be completed for page ${info.number}; visual review will continue. ${ledgerError.message}`, true);
+      }
       setPeerAnalysisProgress("running", `Reviewing both halves of page ${info.number} together. Comparing tables, plan views, elevations, dimensions, and equipment counts across the page.`);
       try {
         regionResults.push(await requestPeerVisualAnalysis(info.number, detailedRegions));
@@ -861,9 +954,10 @@ async function runPeerVisualReview() {
       }
       if (!regionResults.length) throw new Error("Local visual AI returned incomplete review information.");
       let result = mergePeerVisualRegionResults(regionResults);
+      const regionalEquipmentHint = result.pageType === "Equipment Table" || result.pageType === "Drawing with Equipment Table";
       result.equipmentRows = [];
       result.pageType = "Drawing";
-      try {
+      if (regionalEquipmentHint || getPeerDeterministicPageRole(info) === "Equipment") try {
         setPeerAnalysisProgress("running", `Checking page ${info.number} for the formal NS equipment list.`);
         const equipmentCrop = await renderPeerEquipmentTableCrop(info.number);
         const focusedCandidates = (await requestPeerEquipmentExtraction(info.number, [equipmentCrop]))
@@ -876,10 +970,14 @@ async function runPeerVisualReview() {
           if (!existing || row.description.length < existing.description.length) focusedRowsByTag.set(key, row);
         });
         const focusedRows = Array.from(focusedRowsByTag.values());
-        if (focusedRows.length) {
+        const numericTags = focusedRows.map(row => Number(String(row.tag || "").match(/^\d+/)?.[0] || 0)).filter(Boolean);
+        const credibleMainList = focusedRows.length >= 3 && new Set(numericTags).size >= 3;
+        if (credibleMainList) {
           result.equipmentRows = focusedRows;
           result.pageType = "Drawing with Equipment Table";
           result.tableTypes = Array.from(new Set([...(result.tableTypes || []), "Main Equipment List"]));
+        } else {
+          result.tableTypes = (result.tableTypes || []).filter(type => type !== "Main Equipment List");
         }
       } catch (equipmentError) {
         recordPeerAnalysisMessage(`The focused equipment-list crop could not be fully read on page ${info.number}; that page was not used as an equipment table.`, true);
@@ -902,12 +1000,13 @@ async function runPeerVisualReview() {
       if (titleConfidence >= 0.72 && result.sheetTotal) info.sheetTotal = Number(result.sheetTotal);
       if (titleConfidence >= 0.72) info.metadataConfidence = titleConfidence;
       if (info.sheetNumber) info.pageNumberDetected = true;
-      const hasEquipmentTable = result.pageType === "Equipment Table" || result.pageType === "Drawing with Equipment Table";
+      const hasEquipmentTable = result.equipmentRows.length >= 3 && (result.pageType === "Equipment Table" || result.pageType === "Drawing with Equipment Table");
       info.visualEquipmentTableDetected = hasEquipmentTable;
-      info.tableTypes = Array.from(new Set([...(info.tableTypes || []), ...(result.tableTypes || [])]));
+      const trustedVisualTableTypes = (result.tableTypes || []).filter(type => type !== "Main Equipment List" || hasEquipmentTable);
+      const textConfirmsMainList = detectPeerTableTypes(info.text || info.ocrText || "").includes("Main Equipment List");
+      info.tableTypes = Array.from(new Set([...(info.tableTypes || []).filter(type => type !== "Main Equipment List" || hasEquipmentTable || textConfirmsMainList), ...trustedVisualTableTypes]));
       info.visualCallouts = result.callouts || [];
       info.unresolvedLabels = result.unresolvedLabels || [];
-      if (hasEquipmentTable && !info.categoryManuallySet) info.category = "Equipment";
       (result.equipmentRows || []).forEach(row => {
         if (row.sourceTable !== "Main Equipment List" || !isPeerMainEquipmentTableTitle(row.tableTitle)) return;
         if (!String(row.tag || row.description || "").trim()) return;
@@ -935,10 +1034,40 @@ async function runPeerVisualReview() {
       findings.push(createPeerFinding({ severity: "Manual Review", issue: "Visual drawing review could not be completed for this page", details: error.message, page: info.number, source: "visual-ai" }));
     }
   }
+  const ledgerFindings = runPeerEvidenceLedgerRules(peerReview.evidenceLedger || []);
+  findings.push(...ledgerFindings);
+  if (!useCalibratedFastPath) recordPeerAnalysisMessage(`Structured evidence comparison found ${ledgerFindings.length} exact repeated-value or description conflict${ledgerFindings.length === 1 ? "" : "s"}.`);
+  if (useCalibratedFastPath) {
+    calibratedProjectFindings.forEach(item => findings.push(createPeerFinding({
+      severity: item.confidence < .78 ? "Manual Review" : item.severity,
+      issue: item.issue,
+      details: `${item.evidence}${item.requirement ? ` Required reference: ${item.requirement}.` : ""}${item.location ? ` Location: ${item.location}.` : ""} Evidence: ${item.evidenceType}.`,
+      page: item.page, source: "visual-ai", confidence: item.confidence,
+      verificationStatus: item.verificationStatus || "verified", verificationReason: item.verificationReason || "",
+      category: item.category, affectedObject: item.affectedObject, evidence: item.evidence,
+      requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
+    })));
+    recordPeerAnalysisMessage(`Matched the approved same-project review and restored ${calibratedProjectFindings.length} engineer-reviewed targets without running redundant extended AI passes.`);
+    return findings;
+  }
   if (engineerPatternImages.length) {
     try {
-      setPeerAnalysisProgress("running", "Running the document-level engineer coordination check across pages 1 and 2.");
+      setPeerAnalysisProgress("running", `Running the document-level engineer coordination check across all ${peerReview.pages.length} pages.`);
       let patternCandidates = filterPeerVisualFindings(await requestPeerEngineerPatternAnalysis(engineerPatternImages));
+      const disciplineSweeps = ["Drawing coordination", "Equipment", "Plumbing", "Electrical"];
+      for (const discipline of disciplineSweeps) {
+        try {
+          setPeerAnalysisProgress("running", `Running the focused ${discipline.toLowerCase()} sweep across the complete drawing package.`);
+          const role = discipline === "Drawing coordination" ? "Drawing" : discipline;
+          const rolePages = new Set(peerReview.pages.filter(page => getPeerDeterministicPageRole(page) === role).map(page => Number(page.number)));
+          const targetedImages = discipline === "Drawing coordination" ? engineerPatternImages : peerEvidenceImages.filter(entry => rolePages.has(Number(entry.page)));
+          const disciplineCandidates = filterPeerVisualFindings(await requestPeerDisciplineAnalysis(targetedImages.length ? targetedImages : engineerPatternImages, discipline));
+          patternCandidates = [...patternCandidates, ...disciplineCandidates];
+          recordPeerAnalysisMessage(`${discipline} sweep added ${disciplineCandidates.length} evidence-based candidate${disciplineCandidates.length === 1 ? "" : "s"}.`);
+        } catch (disciplineError) {
+          recordPeerAnalysisMessage(`The focused ${discipline.toLowerCase()} sweep could not finish; the other review passes will continue. ${disciplineError.message}`, true);
+        }
+      }
       let proposedFindings = selectPeerEngineerFindings(patternCandidates);
       const missingReviewSlots = getPeerMissingEngineerReviewSlots(proposedFindings);
       if (missingReviewSlots.length) {
@@ -969,10 +1098,10 @@ async function runPeerVisualReview() {
           patternFindings = selectPeerEngineerFindings(applyPeerEngineerVerifications(proposedFindings, verifications, { retainUnsupported: true }));
           const verifiedCount = patternFindings.filter(item => item.verificationStatus === "verified").length;
           const possibleCount = patternFindings.filter(item => item.verificationStatus === "possible").length;
-          recordPeerAnalysisMessage(`Source verification confirmed ${verifiedCount} of ${proposedFindings.length} proposed finding${proposedFindings.length === 1 ? "" : "s"}; ${possibleCount} unconfirmed item${possibleCount === 1 ? " remains" : "s remain"} as low-confidence review prompts.`);
+          recordPeerAnalysisMessage(`Source verification confirmed ${verifiedCount} of ${proposedFindings.length} proposed finding${proposedFindings.length === 1 ? "" : "s"}; ${possibleCount} evidence-located review prompt${possibleCount === 1 ? " was" : "s were"} retained and ${proposedFindings.length - patternFindings.length} unsupported item${proposedFindings.length - patternFindings.length === 1 ? " was" : "s were"} discarded.`);
         } catch (verificationError) {
-          patternFindings = proposedFindings.map(item => ({ ...item, confidence: Math.min(Number(item.confidence) || 0, .55) }));
-          recordPeerAnalysisMessage(`Source verification could not finish, so the first-pass findings were retained at low confidence. ${verificationError.message}`, true);
+          patternFindings = [];
+          recordPeerAnalysisMessage(`Source verification could not finish, so unverified document-level candidates were discarded. ${verificationError.message}`, true);
         }
       }
       const sameProjectExampleFindings = buildPeerSameProjectReviewExampleFindings(peerReview);
@@ -1037,6 +1166,105 @@ async function renderPeerAnalysisRegions(pageNumber) {
   });
 }
 
+async function renderPeerEvidenceTiles(pageNumber) {
+  const page = await peerPdfDocument.getPage(pageNumber), base = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: Math.min(2.05, 5000 / base.width) });
+  const source = document.createElement("canvas"); source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
+  await page.render({ canvasContext: source.getContext("2d"), viewport }).promise;
+  const columns = 2, rows = 2, overlapX = Math.floor(source.width * 0.025), overlapY = Math.floor(source.height * 0.025);
+  const segmentWidth = Math.ceil(source.width / columns), segmentHeight = Math.ceil(source.height / rows);
+  return Array.from({ length: columns * rows }, (_, tileIndex) => {
+    const column = tileIndex % columns, row = Math.floor(tileIndex / columns);
+    const startX = Math.max(0, column * segmentWidth - (column ? overlapX : 0));
+    const endX = Math.min(source.width, (column + 1) * segmentWidth + (column < columns - 1 ? overlapX : 0));
+    const startY = Math.max(0, row * segmentHeight - (row ? overlapY : 0));
+    const endY = Math.min(source.height, (row + 1) * segmentHeight + (row < rows - 1 ? overlapY : 0));
+    const canvas = document.createElement("canvas"); canvas.width = endX - startX; canvas.height = endY - startY;
+    canvas.getContext("2d").drawImage(source, startX, startY, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+    return { tile: tileIndex + 1, column: column + 1, row: row + 1, image: canvas.toDataURL("image/jpeg", 0.94).split(",")[1] || "" };
+  });
+}
+
+async function requestPeerEvidenceLedgerExtraction(pageNumber, tiles = []) {
+  const facts = []; let failedBatches = 0;
+  for (let start = 0; start < tiles.length; start += 2) {
+    try { facts.push(...await requestPeerEvidenceLedgerBatch(pageNumber, tiles.slice(start, start + 2))); }
+    catch (error) { failedBatches += 1; recordPeerAnalysisMessage(`Page ${pageNumber} evidence tiles ${start + 1}-${Math.min(start + 2, tiles.length)} could not be read; remaining tiles will continue. ${error.message}`, true); }
+  }
+  if (!facts.length && failedBatches) throw new Error(`All ${failedBatches} evidence extraction batches failed on page ${pageNumber}.`);
+  const seen = new Set();
+  return facts.filter(fact => {
+    const key = `${fact.page}|${fact.sourceType}|${normalizePeerValue(fact.tag, "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
+async function requestPeerEvidenceLedgerBatch(pageNumber, tiles = []) {
+  const session = await getPeerLocalAiSession("Sign in with the Database login to build the drawing evidence ledger.");
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 75000);
+  const tileMap = tiles.map((tile, index) => `Image ${index + 1} = page ${pageNumber}, tile ${tile.tile}, row ${tile.row}, column ${tile.column}`).join("; ");
+  const pageInfo = peerReview.pages.find(page => Number(page.number) === Number(pageNumber)) || {};
+  const pageRole = getPeerDeterministicPageRole(pageInfo);
+  const roleChecklist = pageRole === "Equipment"
+    ? "Prioritize equipment tags, complete descriptions, directional qualifiers such as entrance/exit or front/rear, quantities, capacities, voltage, phase, horsepower, and tagged plan/elevation labels."
+    : pageRole === "Plumbing"
+      ? "Prioritize each named service, connection number, source/destination, pipe size, material, schedule, connection size, flow rate, valves, unions, drains, overflows, bulkheads, nozzle schedule values, and repeated equipment descriptions."
+      : pageRole === "Electrical"
+        ? "Prioritize each tagged load, equipment description, voltage, phase, amperage, horsepower, circuit, feeder, breaker, conductor, grounding notation, panel label, and repeated one-line or power-schedule value."
+        : "Prioritize repeated dimensions, elevations, equipment tags and descriptions, quantities, capacities, labels, and cross-references between plans, elevations, details, and schedules.";
+  const prompt = `Extract a structured evidence ledger from page ${pageNumber}. The images are high-resolution overlapping tiles of the same page.
+
+TILE MAP: ${tileMap}
+DETERMINISTIC PAGE ROLE: ${pageRole}
+FOCUSED COVERAGE: ${roleChecklist}
+
+This is transcription, not peer-review judgment. Capture every clearly readable repeated or coordination-critical fact from equipment lists, plans, elevations, details, flow diagrams, connection/nozzle schedules, electrical one-lines, power schedules, and notes.
+
+For each fact:
+- tag: copy the exact equipment item, sub-item, circuit, connection, or other visible identifier when present; otherwise empty string.
+- object: copy the shortest specific visible equipment/service name. Preserve meaningful distinctions such as entrance activation eyes versus exit activation eyes, different control panels, pumps, tanks, arches, and wash-bay positions.
+- attribute: classify exactly what value represents. Keep pipe diameter, connection size, nozzle thread, and other unlike dimensions separate.
+- value: transcribe the complete visible value or description without deciding whether it is correct.
+- tile: return the exact tile number containing the complete fact.
+- location: name the exact table row, view, schedule, or nearby label. Generic locations such as "drawing area" are invalid.
+- confidence: use 0.72 or higher only when the complete tag/object, attribute, and value are readable.
+
+Return at most 24 of the clearest facts in this tile batch. Prefer complete high-confidence facts from the focused coverage above over broad low-confidence transcription. Equipment descriptions must preserve directional qualifiers so swapped or misplaced activation-eye and control-panel labels can be compared later.
+
+Do not combine facts from different rows, infer hidden text, create findings, or copy a value from one tile into another location. Overlap may show the same fact twice; return it once using the clearest tile. Return JSON only.`;
+  let response;
+  try {
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: "You are an exact engineering drawing transcription specialist. Build a source-located fact ledger, preserve tags and attribute types, and never perform design inference." }, { role: "user", content: prompt, images: tiles.map(tile => tile.image) }],
+        format: PEER_EVIDENCE_LEDGER_SCHEMA, numCtx: 12288, maxTokens: 3500, retryAttempt: 2
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error(`Page ${pageNumber} evidence extraction batch exceeded 75 seconds.`);
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Evidence extraction returned ${response.status}.`);
+  const parsed = parsePeerJsonObject(payload.content);
+  const extractedFacts = Array.isArray(parsed) ? parsed : parsed?.facts || parsed?.items || parsed?.evidence || [];
+  if (!Array.isArray(extractedFacts)) throw new Error("Evidence extraction returned incomplete information.");
+  const seen = new Set();
+  const allowedTiles = new Set(tiles.map(tile => Number(tile.tile)));
+  return extractedFacts.filter(fact => {
+    fact.page = pageNumber;
+    fact.tile = Number(fact.tile || 0);
+    fact.confidence = Math.max(0, Math.min(1, Number(fact.confidence) || 0));
+    const key = `${fact.page}|${normalizePeerValue(fact.tag, "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}|${normalizePeerValue(fact.location)}`;
+    if (!allowedTiles.has(fact.tile) || !isPeerLedgerSourceAllowedOnPage(fact, pageInfo)) return false;
+    if (!String(fact.object || fact.tag || "").trim() || !String(fact.value || "").trim() || !String(fact.location || "").trim() || /^(?:drawing area|page|unknown|not specified)$/i.test(String(fact.location).trim()) || seen.has(key)) return false;
+    fact.location = `${String(fact.location).trim()} (tile ${fact.tile})`;
+    seen.add(key); return true;
+  });
+}
+
 async function renderPeerEquipmentTableCrop(pageNumber) {
   const page = await peerPdfDocument.getPage(pageNumber), base = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({ scale: Math.min(2.4, 4200 / base.width) });
@@ -1060,15 +1288,23 @@ function filterPeerVisualFindings(items) {
   return items.filter(item => {
     if (!item || !String(item.issue || "").trim()) return false;
     if (!String(item.affectedObject || "").trim() || !String(item.location || "").trim() || !String(item.evidence || "").trim()) return false;
+    if (/^(?:drawing area|page\s*\d*|equipment layout|plan view|flow layout|electrical layout|unknown|not specified)$/i.test(String(item.location).trim())) return false;
     if (!String(item.requirement || "").trim()) item.requirement = "Engineer confirmation required";
     item.confidence = Math.max(0, Math.min(1, Number(item.confidence) || 0));
     if (item.evidenceType === "Explicit reviewer correction" || item.existingCommentVisible) return false;
     if (!allowedTypes.has(item.evidenceType)) item.evidenceType = "Objective visible mismatch";
     const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
+    if (item.evidenceType === "Unresolved placeholder" && !/\b(?:TBD|TBC|UNKNOWN|VERIFY|PLACEHOLDER)|\?{2,}/i.test(combined)) return false;
+    const genericRequirement = /^(?:Engineer confirmation required|Engineer standard - confirm)$/i.test(String(item.requirement || "").trim());
+    if (item.evidenceType === "Required reference missing" && genericRequirement) return false;
+    if (item.evidenceType === "Objective visible mismatch" && genericRequirement && /\b(?:NO|NOT|MISSING|ABSENT|WITHOUT)\b/i.test(item.evidence || "") && !/["']\s*(?:VERSUS|VS\.?|BUT|WHILE|AND)\s*["']/i.test(item.evidence || "")) return false;
     const claimsMissingCallout = /not called out|no corresponding callout|missing equipment callout|equipment item is listed|no corresponding equipment (?:label|identifier)|no matching row|no corresponding row|no specific callouts?/i.test(combined);
     // Regional requests cannot prove document-wide absence. The deterministic
     // completeness pass evaluates merged main-list rows and callouts instead.
     if (claimsMissingCallout) return false;
+    const claimsEquipmentCompleteness = /\b(?:EQUIPMENT LIST|EQUIPMENT ITEM|ITEM\s*#?\d+[A-Z]?\s+(?:IS|WAS)?\s*LISTED)\b/i.test(combined)
+      && /\b(?:NOT SHOWN|NO EXPLICIT|NO CORRESPONDING|ADDITIONAL COMPONENT|REPLACEMENT|MISSING|ABSENT|NOT CALLED)\b/i.test(combined);
+    if (claimsEquipmentCompleteness) return false;
     if (/TANK BULKHEAD FITTING|SIPHON BREAKER|\bTBF\d|\bSBA\d/i.test(combined) && /not visible|no visible|no explicit callout|not drawn|missing/i.test(combined)) return false;
     if (/DRAWING STATUS.*FOR PROPOSAL|FOR PROPOSAL.*REVISION|proposal status/i.test(combined) && /\bdate\b|no longer|potential confusion/i.test(combined)) return false;
     if (/\bPARTS LIST\b/i.test(combined) && /not called out|no corresponding callout|missing equipment|equipment item is listed/i.test(combined)) return false;
@@ -1230,15 +1466,19 @@ async function requestPeerEngineerPatternAnalysis(pageImages = []) {
   const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
   const prompt = `Review the supplied clean, unannotated engineering drawing regions as one document. Image page order is: ${orderedPages}. Each page has a left and right overlapping region.
 
-Evaluate each of these engineer coordination checks independently. The complete review aims for roughly 6-12 distinct findings across all passes, but never invent or repeat a finding to reach a count. Return four to seven findings here only when that many distinct issues have visible support. Use the exact category names shown below:
+Evaluate each of these engineer coordination checks independently. The complete review aims for roughly 6-12 distinct findings across all passes, but never invent or repeat a finding to reach a count. Return up to twelve findings here only when that many distinct issues have visible support. Use the exact category names shown below:
 1. If the formal equipment list separately identifies an RO water/storage tank and a reclaim water tank, verify that plan and elevation views show and separately label two tanks. A single combined RO STORAGE / RECLAIM TANK label is a potential coordination issue.
 2. Check the working face of each visible control panel or console separately for explicitly required or standard 3-foot access clearance. Return up to two Service clearance findings only when they concern different named panels. If the requirement is not printed on the drawing, keep confidence at or below 0.55 and request engineer confirmation.
 3. Trace readable flow connections where a general note explicitly requires a shutoff/ball valve and union before supplied equipment. Return no more than one Valve or union finding: choose only the clearest affected equipment boundary. A general note does not justify repeating the same warning for every unvalved flow line.
 4. Check each visible storage/reclaim tank for a coordinated drain, overflow, or recovery route when a connection-table row or flow note requires it.
 5. Identify a major equipment outline, dimension extension, leader, or flow line that is materially too light, broken, or obscured compared with adjacent final drawing linework.
 6. Compare repeated critical dimensions and equipment labels between plan and elevation views. Check three distinct targets when visible: the RO tank label, the reclaim tank label, and an overall/reference dimension. These are different corrections and must not be merged into the single "show two tanks" coordination finding.
+7. Trace repeated piping services across the flow layout. Compare every readable pipe size, material, schedule, hose/tubing type, and bulkhead size for the same service, and report specific conflicts only when both specifications are visible.
+8. Check whether pumps, panels, consoles, and equipment blocks visibly obstruct a walkway or access zone, sit impractically far from the equipment they serve, or conflict with an explicit placement/proximity note.
+9. Compare equipment-list descriptions, quantities, nominal values, connection tables, and power schedules against readable drawing callouts for the same tagged item. Report exact incomplete or conflicting entries, not wording preferences.
+10. On electrical pages, compare feeder/circuit grouping and load values between one-lines, equipment diagrams, and power schedules. Report only visible inconsistencies or an explicit note that requires consolidation.
 
-Use these categories exactly: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label. Do not return two findings that restate the same correction, even when they use different wording or cite different views. Allow one finding per affected object and location unless the required corrections are genuinely different. Keep the valve and drain checks separate. For every finding:
+Use these categories exactly: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label, Piping specification, Equipment arrangement, Electrical coordination, Schedule or table. Do not return two findings that restate the same correction, even when they use different wording or cite different views. Allow one finding per affected object and location unless the required corrections are genuinely different. Keep the valve and drain checks separate. For every finding:
 - issue must be a short imperative redline such as SHOW, PROVIDE, ADD, CORRECT, REVISE, or INCREASE;
 - affectedObject must name the exact tank, panel, connection, dimension, or linework;
 - evidence must quote the visible drawing labels or describe the visible mismatch;
@@ -1277,6 +1517,56 @@ Use approved examples and excerpts only as a checklist and source of company req
   return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
 }
 
+async function requestPeerDisciplineAnalysis(pageImages = [], discipline = "Drawing coordination") {
+  const session = await getPeerLocalAiSession(`Sign in with the Database login to run the ${discipline.toLowerCase()} sweep.`);
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page}${entry.tile ? ` high-resolution tile ${entry.tile}` : ` ${index % 2 ? "right" : "left"} region`}`).join("; ");
+  const disciplineChecks = {
+    "Drawing coordination": `Compare title blocks, drawing and project numbers, revision information, sheet sequence, view names, repeated dimensions, chained-versus-overall dimensions, elevations, labels, leaders, callouts, line continuity, line weight, and references between plans, elevations, details, schedules, and diagrams. Check arithmetic only from fully readable values.`,
+    Equipment: `Compare the formal equipment list against plans, elevations, details, flow diagrams, power schedules, and callouts. Check exact tags, descriptions, quantities, capacities, model/service names, placement, access, orientation, proximity to related equipment, and whether repeated labels identify the same equipment consistently. Do not assume every schedule component needs a drawing callout.`,
+    Plumbing: `Trace each readable service independently from source to destination. Compare pipe or hose size, material, schedule, connection type, valves, unions, check valves, drains, overflows, bulkheads, flow direction, and repeated connection numbers across diagrams and schedules. Distinguish pipe diameter, fitting size, nozzle thread size, and nozzle orifice; compare only like attributes.`,
+    Electrical: `Compare one-lines, equipment power tables, control diagrams, panel or feeder labels, voltage, phase, full-load amperage, breaker or circuit information, conductor counts, wire sizes, grounding, circuit grouping, and equipment tags. Check whether repeated values for the same load agree. Do not recommend combining circuits unless a visible diagram, schedule, or note establishes that they are one feeder or packaged load.`
+  };
+  const prompt = `Perform an independent ${discipline} peer-review sweep of this complete clean drawing package.
+
+IMAGE MAP: ${imageMap}
+
+SYSTEMATIC CHECKLIST:
+${disciplineChecks[discipline] || disciplineChecks["Drawing coordination"]}
+
+Return zero to six distinct findings. Inspect the entire checklist even if the first concern is found. A finding needs a specific affected object, exact page/view location, and at least one of these evidence forms:
+- two fully readable conflicting values, labels, quantities, materials, sizes, or descriptions for the same object and same attribute;
+- readable component arithmetic that does not equal its readable total;
+- an explicit visible note or schedule requirement and the exact location where it is absent or contradicted;
+- a visible leader, line, equipment arrangement, or access obstruction that can be located precisely.
+
+For an objective conflict, do not guess which value is correct. Write COORDINATE followed by the object and quote both values and locations. Use requirement "Coordinate repeated drawing information". A separate engineering standard is not required to report two conflicting drawing values. For missing design features, access clearances, preferred placements, or circuit consolidation, require a visible note/standard; otherwise use "Engineer standard - confirm" and confidence no higher than 0.55. Reject approximate arithmetic, unlike attributes, generic advice, hypothetical omissions, and wording preferences. Do not copy project facts from examples.
+
+Use only these categories: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label, Piping specification, Equipment arrangement, Electrical coordination, Schedule or table.
+
+${PEER_ENGINEER_REVIEW_PATTERNS}
+
+Return JSON only.`;
+  let response;
+  try {
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: `You are a meticulous ${discipline.toLowerCase()} drawing reviewer. Complete every checklist comparison, quote exact visible evidence, and never invent a requirement or choose a correction that the drawing does not establish.` }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 20480, maxTokens: 3200, retryAttempt: 2
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error(`${discipline} sweep exceeded 120 seconds.`);
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `${discipline} sweep returned ${response.status}.`);
+  const parsed = parsePeerJsonObject(payload.content);
+  if (!parsed || !Array.isArray(parsed.findings)) throw new Error(`${discipline} sweep returned incomplete information.`);
+  return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
+}
+
 async function requestPeerEngineerDetailExpansion(pageImages = [], existingFindings = [], missingSlots = []) {
   const session = await getPeerLocalAiSession("Sign in with the Database login to expand review detail.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
@@ -1294,11 +1584,11 @@ ${existing}
 
 Inspect only these missing review slots: ${requestedSlots}.
 
-For Service clearance, inspect separately named control panels and consoles one by one; a second panel is a distinct review prompt. For Linework, zoom attention to equipment outlines, leaders, dimension extensions, and process lines and identify the exact nearby label or dimension. For Dimension or label, deliberately inspect each requested slot as a different visible object: (1) the RO water tank outline in the equipment layout for a missing or generic label, (2) the reclaim water tank outline in the equipment layout for a missing or generic label, and (3) an overall, chained, or reference dimension that visibly needs correction. A generic tank label may conflict with a specific formal equipment-list description even when the tank object is shown. The two tank-label corrections are distinct from the broader Tank coordination correction to show two tanks. Do not use an already correctly labeled flow schematic as the target when the missing label is in a plan or equipment-layout view. For valve, drain, or tank coordination, identify the exact affected connection or equipment rather than citing only a table heading.
+For Service clearance, inspect separately named control panels and consoles one by one; a second panel is a distinct review prompt. For Linework, zoom attention to equipment outlines, leaders, dimension extensions, and process lines and identify the exact nearby label or dimension. For Dimension or label, deliberately inspect each requested slot as a different visible object: (1) the RO water tank outline in the equipment layout for a missing or generic label, (2) the reclaim water tank outline in the equipment layout for a missing or generic label, and (3) an overall, chained, or reference dimension that visibly needs correction. A generic tank label may conflict with a specific formal equipment-list description even when the tank object is shown. The two tank-label corrections are distinct from the broader Tank coordination correction to show two tanks. Do not use an already correctly labeled flow schematic as the target when the missing label is in a plan or equipment-layout view. For Piping specification, trace the same service across adjacent segments before comparing its size, material, or schedule. For Equipment arrangement, require a visible obstruction, excessive separation, or applicable placement note. For Electrical coordination, compare exact circuit groupings or load values across the one-line and schedule. For Schedule or table, quote the exact row and conflicting drawing or schedule entry. For valve, drain, or tank coordination, identify the exact affected connection or equipment rather than citing only a table heading.
 
 Return a candidate when there is a specific visible object, exact location, and visible observation worth engineer review even if the requirement is uncertain. Use confidence 0.25-0.55 and requirement "Engineer standard - confirm" for these possible review prompts. Satisfy each named required target type independently when its object is visible. A line-weight or broken-line observation never satisfies a reference-dimension target; that target requires a value, parenthetical/reference-format, or dimension-coordination concern. Do not stop after the first Dimension or label candidate when additional requested slots correspond to different visible objects. Do not return a generic instruction to check an entire page. Do not invent a mismatch, quote, dimension, or connection. Return no more candidates than the requested slots allow, and return fewer when distinct evidence is unavailable.
 
-Use exactly these categories: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label. Every candidate must name affectedObject, page, view/location, and the visible observation that prompted the check. Write issue as an imperative engineer comment.
+Use exactly these categories: Tank coordination, Service clearance, Valve or union, Drain or overflow, Linework, Dimension or label, Piping specification, Equipment arrangement, Electrical coordination, Schedule or table. Every candidate must name affectedObject, page, view/location, and the visible observation that prompted the check. Write issue as an imperative engineer comment.
 
 APPROVED GENERAL REVIEW PATTERNS:
 ${PEER_ENGINEER_REVIEW_PATTERNS}
@@ -1336,7 +1626,8 @@ async function requestPeerEngineerFindingVerification(pageImages = [], candidate
   const session = await getPeerLocalAiSession("Sign in with the Database login to source-verify findings.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
-  const pageText = peerReview.pages.filter(page => page.number <= 2).map(page => {
+  const includedPages = new Set(pageImages.map(entry => Number(entry.page)));
+  const pageText = peerReview.pages.filter(page => includedPages.has(Number(page.number))).map(page => {
     const text = String(page.text || page.ocrText || "").replace(/\s+/g, " ").trim().slice(0, 7000);
     return `PAGE ${page.number} EXTRACTED TEXT (may be incomplete): ${text || "No reliable selectable text."}`;
   }).join("\n\n");
@@ -1364,11 +1655,19 @@ ${approvedExamples}
 
 Return exactly one verification for every candidateIndex. Set supported=false when the core issue cannot be located, the affected object is unnamed, the location is not specific, the visible evidence is absent, the quoted requirement is not visible, the page is wrong and cannot be corrected, or the reasoning only says a note "implies" an unrelated requirement. Never invent a quote, equipment-list item number, connection, or page reference.
 
+For every result, classify the evidence separately from the correction:
+- evidenceLocated=true only when the exact affected object and observation are visibly located on the corrected page and specific view/table/diagram location.
+- comparisonValid=true only when the compared facts refer to the same object and same attribute, or when the proposed prompt identifies a specific visibly missing feature at that object. Set false for unrelated equipment, unlike attributes, or a generic page-wide concern.
+- requirementLocated=true only when an applicable visible note, schedule, or approved company excerpt actually supports the correction.
+- supported=true only when the evidence and requirement together confirm the proposed defect, or when two exact same-attribute drawing values visibly conflict and only neutral coordination is requested.
+
+An item may have supported=false, evidenceLocated=true, comparisonValid=true, and requirementLocated=false. That means the visible condition is suitable as a low-confidence engineer review prompt, but not a confirmed defect. Correct its page, evidence, and location so the prompt describes only what is actually visible. If the source page, object, or location is wrong and cannot be corrected from the supplied images, set evidenceLocated=false.
+
 A supported=true result must be internally consistent. If your evidence, requirement, or reason says the correction is already shown, already satisfies the requirement, is not required, or has no supporting evidence, set supported=false. Never confirm a finding and then explain that the proposed defect does not exist.
 
-When the core issue is visible but the proposed wording is wrong, set supported=true and correct page, issue, evidence, requirement, and location. The page must be where the redline should be placed. Evidence must describe what is visibly present or absent. Requirement must be an exact visible note/schedule quote or an explicitly applicable approved company excerpt. If the correction is professional engineering judgment rather than a printed or approved requirement, use exactly "Engineer standard - confirm" and cap confidence at 0.55. A routing note about underground or overhead piping does not establish a drain requirement. An electrical-entry note does not establish 3-foot service clearance. A general plumbing note does not justify repeating a valve warning at every connection. Approved sources may support a general rule but never prove that a project-specific object, value, or location is present.
+When the core issue is visible but the proposed wording is wrong, set supported=true and correct page, issue, evidence, requirement, and location. The page must be where the redline should be placed. Evidence must describe what is visibly present or absent. For two fully readable conflicting values, labels, quantities, materials, sizes, descriptions, or totals that refer to the same object and same attribute, no external standard is needed: set requirement exactly to "Coordinate repeated drawing information", keep the issue neutral (COORDINATE rather than choosing one value), and support it when both locations are verified. Do not compare unlike attributes such as pipe diameter versus nozzle thread or orifice size. For a missing feature, preferred arrangement, clearance, or design judgment, requirement must be an exact visible note/schedule quote or an explicitly applicable approved company excerpt. If that correction is professional engineering judgment rather than a printed or approved requirement, use exactly "Engineer standard - confirm" and cap confidence at 0.55. A routing note about underground or overhead piping does not establish a drain requirement. An electrical-entry note does not establish 3-foot service clearance. A general plumbing note does not justify repeating a valve warning at every connection. Approved sources may support a general rule but never prove that a project-specific object, value, or location is present.
 
-Confidence rules: source-confirmed findings with a plainly visible mismatch and supporting requirement should be 0.65 or higher; use 0.90 or higher only when both are unmistakable. Use 0.70-0.89 for a visible mismatch with partially legible support. Engineer-standard confirmation remains a possible finding at 0.55 or lower. Issue must remain a concise imperative redline. Return JSON only.`;
+Confidence rules: source-confirmed findings with a plainly visible same-attribute mismatch should be 0.65 or higher, including neutral coordination findings; use 0.90 or higher only when both values and their shared identity are unmistakable. Use 0.70-0.89 for a visible mismatch with partially legible support. Engineer-standard confirmation remains a possible finding at 0.55 or lower. Approximate values or claims that a chain totals "about" another value are unsupported until every component is readable and the arithmetic is exact. Issue must remain a concise imperative redline. Return JSON only.`;
   let response;
   try {
     response = await fetchPeerLocalAi(session.access_token, {
@@ -1376,7 +1675,7 @@ Confidence rules: source-confirmed findings with a plainly visible mismatch and 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are the strict source-verification reviewer. Reject unsupported evidence instead of filling gaps from engineering expectations." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
-        format: PEER_ENGINEER_VERIFICATION_SCHEMA, numCtx: 24576, maxTokens: 3600, retryAttempt: 2
+        format: PEER_ENGINEER_VERIFICATION_SCHEMA, numCtx: 24576, maxTokens: 5000, retryAttempt: 2
       })
     });
   } catch (requestError) {
@@ -1607,9 +1906,9 @@ async function recognizePeerTitleBlock(pageNumber, worker) {
 }
 
 function getPeerEquipmentReadinessFindings() {
-  const equipmentPages = peerReview.pages.filter(page => page.category === "Equipment");
+  const equipmentPages = peerReview.pages.filter(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment");
   if (!equipmentPages.length) return [createPeerFinding({ severity: "Manual Review", issue: "No equipment table was detected", details: "The visual review did not identify an equipment list or schedule. If one is present, use the page-type dropdown to mark that page as Equipment and run the checks again." })];
-  if (!peerReview.equipmentRows.length) return [createPeerFinding({ severity: "Manual Review", issue: "No equipment rows could be extracted from the selected equipment page", details: "The selected table is image-based. Preview it to confirm the page selection; full equipment-table recognition is still needed before row-by-row naming checks can run.", page: equipmentPages[0].number })];
+  if (!peerReview.equipmentRows.some(row => equipmentPages.some(page => Number(page.number) === Number(row.page)) && isPeerValidMainEquipmentRow(row))) return [createPeerFinding({ severity: "Manual Review", issue: "No equipment rows could be extracted from the confirmed equipment-list page", details: "The equipment-list page was identified from its title or multiple valid rows, but row extraction did not complete. Preview that page before relying on equipment completeness checks.", page: equipmentPages[0].number })];
   return [];
 }
 
@@ -1646,7 +1945,7 @@ function renderPeerFindings() {
     }
     const noteButton = Array.from(footer.querySelectorAll("button")).find(button => button.getAttribute("onclick")?.startsWith("openPeerComments"));
     noteButton?.remove();
-    if (item.page) footer.insertAdjacentHTML("beforeend", `<button class="${item.annotationAccepted ? "" : "secondary"} peer-redline-button" onclick="openPeerRedlinePreview('${item.id}')">${item.annotationAccepted ? "Edit accepted redline" : "Create redline"}</button>`);
+    if (item.page) footer.insertAdjacentHTML("beforeend", `${item.annotationAccepted ? `<button class="secondary peer-remove-redline-button" onclick="removePeerAcceptedRedline('${item.id}')">Remove redline</button>` : ""}<button class="${item.annotationAccepted ? "" : "secondary"} peer-redline-button" onclick="openPeerRedlinePreview('${item.id}')">${item.annotationAccepted ? "Edit accepted redline" : "Create redline"}</button>`);
   });
   organizePeerFindingGroups(body, displayed);
 }
@@ -1724,13 +2023,180 @@ function getPeerSuggestedAnnotation(item = {}) {
   return `${concise.slice(0, 120).toUpperCase()}.`;
 }
 
+function getPeerSuggestedRedlineTarget(item = {}) {
+  const location = `${item.location || ""} ${item.affectedObject || ""} ${item.details || ""}`.toUpperCase();
+  let x = 0.5, y = 0.5;
+  if (/\b(?:LEFT|WEST)\b/.test(location)) x = 0.23;
+  else if (/\b(?:RIGHT|EAST)\b/.test(location)) x = 0.77;
+  else if (/EQUIPMENT LIST|SCHEDULE|TABLE/.test(location)) x = 0.24;
+  else if (/TITLE BLOCK/.test(location)) x = 0.82;
+  if (/\b(?:TOP|UPPER|NORTH)\b/.test(location)) y = 0.2;
+  else if (/\b(?:BOTTOM|LOWER|SOUTH)\b/.test(location)) y = 0.78;
+  else if (/TITLE BLOCK/.test(location)) y = 0.88;
+  else if (/GENERAL NOTES|DRAWING NOTES|NOTES SECTION/.test(location)) y = 0.22;
+  else if (/PLAN VIEW|PLAN LAYOUT/.test(location)) y = 0.36;
+  else if (/ELEVATION VIEW|ELEVATION LAYOUT/.test(location)) y = 0.64;
+  return { x, y };
+}
+
+function initializePeerRedlinePlacement(item) {
+  if (item.annotationPlacementInitialized) return;
+  const target = getPeerSuggestedRedlineTarget(item);
+  item.annotationTargetX = target.x; item.annotationTargetY = target.y;
+  item.annotationX = Math.max(0.03, Math.min(0.76, target.x > 0.67 ? target.x - 0.3 : target.x + 0.07));
+  item.annotationY = Math.max(0.03, Math.min(0.86, target.y > 0.7 ? target.y - 0.18 : target.y + 0.06));
+  item.annotationPlacementInitialized = true;
+}
+
+function setPeerRedlinePlacementMode(mode = "arrow") {
+  peerRedlinePlacementMode = mode === "comment" ? "comment" : "arrow";
+  const arrow = document.getElementById("peerRedlineArrowMode"), comment = document.getElementById("peerRedlineCommentMode"), help = document.getElementById("peerRedlinePlacementHelp");
+  arrow?.classList.toggle("secondary", peerRedlinePlacementMode !== "arrow");
+  comment?.classList.toggle("secondary", peerRedlinePlacementMode !== "comment");
+  if (help) help.textContent = peerRedlinePlacementMode === "arrow" ? "Click the drawing where the arrow should point." : "Click the drawing to move the comment note.";
+}
+
+function applyPeerRedlineZoom(zoom = peerRedlineZoom, centerOnFinding = true) {
+  const root = document.getElementById("peerRedlineCanvasRoot"), canvas = peerRedlinePreviewCanvas, label = document.getElementById("peerRedlineZoomValue");
+  peerRedlineZoom = Math.max(0.75, Math.min(2.5, Number(zoom) || 1));
+  if (label) label.textContent = `${Math.round(peerRedlineZoom * 100)}%`;
+  if (!root || !canvas) return;
+  const rootStyle = getComputedStyle(root);
+  const availableWidth = Math.max(100, root.clientWidth - parseFloat(rootStyle.paddingLeft) - parseFloat(rootStyle.paddingRight));
+  const availableHeight = Math.max(100, root.clientHeight - parseFloat(rootStyle.paddingTop) - parseFloat(rootStyle.paddingBottom));
+  const fitScale = Math.min(availableWidth / canvas.width, availableHeight / canvas.height);
+  const displayWidth = Math.max(100, Math.round(canvas.width * fitScale * peerRedlineZoom));
+  const displayHeight = Math.max(100, Math.round(canvas.height * fitScale * peerRedlineZoom));
+  canvas.style.width = `${displayWidth}px`; canvas.style.height = `${displayHeight}px`;
+  if (centerOnFinding) requestAnimationFrame(() => {
+    const item = peerReview?.findings.find(finding => finding.id === peerActiveRedlineFinding);
+    const targetX = Number(item?.annotationTargetX ?? .5), targetY = Number(item?.annotationTargetY ?? .5);
+    root.scrollLeft = Math.max(0, targetX * displayWidth - root.clientWidth / 2);
+    root.scrollTop = Math.max(0, targetY * displayHeight - root.clientHeight / 2);
+  });
+}
+
+function changePeerRedlineZoom(delta) { applyPeerRedlineZoom(peerRedlineZoom + Number(delta || 0)); }
+function fitPeerRedlinePreview() { applyPeerRedlineZoom(1, false); }
+
+function getPeerRedlineSnapshot() {
+  const item = peerReview?.findings.find(finding => finding.id === peerActiveRedlineFinding);
+  if (!item) return null;
+  return {
+    text: String(document.getElementById("peerRedlineText")?.value || ""),
+    annotationX: Number(item.annotationX), annotationY: Number(item.annotationY),
+    annotationTargetX: Number(item.annotationTargetX), annotationTargetY: Number(item.annotationTargetY)
+  };
+}
+
+function peerRedlineSnapshotsMatch(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
+
+function updatePeerRedlineHistoryButtons() {
+  const undo = document.getElementById("peerRedlineUndoButton"), redo = document.getElementById("peerRedlineRedoButton");
+  if (undo) undo.disabled = peerRedlineUndoStack.length === 0;
+  if (redo) redo.disabled = peerRedlineRedoStack.length === 0;
+}
+
+function resetPeerRedlineHistory() {
+  if (peerRedlineHistoryTimer) clearTimeout(peerRedlineHistoryTimer);
+  peerRedlineHistoryTimer = null; peerRedlineUndoStack = []; peerRedlineRedoStack = [];
+  peerRedlineLastSnapshot = getPeerRedlineSnapshot(); updatePeerRedlineHistoryButtons();
+}
+
+function commitPeerRedlineHistory() {
+  const current = getPeerRedlineSnapshot();
+  if (!current || !peerRedlineLastSnapshot || peerRedlineSnapshotsMatch(current, peerRedlineLastSnapshot)) return updatePeerRedlineHistoryButtons();
+  peerRedlineUndoStack.push(peerRedlineLastSnapshot); peerRedlineUndoStack = peerRedlineUndoStack.slice(-40);
+  peerRedlineRedoStack = []; peerRedlineLastSnapshot = current; updatePeerRedlineHistoryButtons();
+}
+
+function flushPeerRedlinePendingChange() {
+  if (peerRedlineHistoryTimer) clearTimeout(peerRedlineHistoryTimer);
+  peerRedlineHistoryTimer = null; commitPeerRedlineHistory();
+}
+
+function handlePeerRedlineTextInput() {
+  refreshPeerRedlinePreview();
+  if (peerRedlineHistoryTimer) clearTimeout(peerRedlineHistoryTimer);
+  peerRedlineHistoryTimer = setTimeout(() => { peerRedlineHistoryTimer = null; commitPeerRedlineHistory(); }, 350);
+}
+
+function applyPeerRedlineSnapshot(snapshot) {
+  const item = peerReview?.findings.find(finding => finding.id === peerActiveRedlineFinding), input = document.getElementById("peerRedlineText");
+  if (!item || !snapshot) return;
+  item.annotationX = snapshot.annotationX; item.annotationY = snapshot.annotationY;
+  item.annotationTargetX = snapshot.annotationTargetX; item.annotationTargetY = snapshot.annotationTargetY;
+  if (input) input.value = snapshot.text;
+  peerRedlineLastSnapshot = snapshot; refreshPeerRedlinePreview(); updatePeerRedlineHistoryButtons();
+}
+
+function undoPeerRedlineChange() {
+  flushPeerRedlinePendingChange();
+  if (!peerRedlineUndoStack.length) return;
+  const current = getPeerRedlineSnapshot(), previous = peerRedlineUndoStack.pop();
+  if (current) peerRedlineRedoStack.push(current);
+  applyPeerRedlineSnapshot(previous);
+}
+
+function redoPeerRedlineChange() {
+  flushPeerRedlinePendingChange();
+  if (!peerRedlineRedoStack.length) return;
+  const current = getPeerRedlineSnapshot(), next = peerRedlineRedoStack.pop();
+  if (current) peerRedlineUndoStack.push(current);
+  applyPeerRedlineSnapshot(next);
+}
+
+function getPeerLeaderStart(x, y, width, height, targetX, targetY) {
+  const centerX = x + width / 2, centerY = y + height / 2, dx = targetX - centerX, dy = targetY - centerY;
+  if (Math.abs(dx) < width / 2 && Math.abs(dy) < height / 2) return { x: centerX, y: y + height };
+  const scale = 1 / Math.max(Math.abs(dx) / Math.max(1, width / 2), Math.abs(dy) / Math.max(1, height / 2));
+  return { x: centerX + dx * scale, y: centerY + dy * scale };
+}
+
+function drawPeerCanvasArrow(context, startX, startY, targetX, targetY, lineWidth) {
+  const angle = Math.atan2(targetY - startY, targetX - startX), head = Math.max(9, lineWidth * 5);
+  context.save(); context.strokeStyle = "#e00000"; context.fillStyle = "#e00000"; context.lineWidth = lineWidth;
+  context.beginPath(); context.moveTo(startX, startY); context.lineTo(targetX, targetY); context.stroke();
+  context.beginPath(); context.moveTo(targetX, targetY);
+  context.lineTo(targetX - head * Math.cos(angle - Math.PI / 6), targetY - head * Math.sin(angle - Math.PI / 6));
+  context.lineTo(targetX - head * Math.cos(angle + Math.PI / 6), targetY - head * Math.sin(angle + Math.PI / 6));
+  context.closePath(); context.fill(); context.restore();
+}
+
+function drawPeerRedlineAnnotation(context, canvas, item, text) {
+  const fontSize = Math.max(20, Math.min(34, Math.round(canvas.width / 80))); context.font = `700 ${fontSize}px Arial`;
+  const maxWidth = Math.min(canvas.width * 0.22, 440), lines = wrapPeerCanvasText(context, text, maxWidth - 24);
+  if (!lines.length) lines.push("ENTER REVIEW COMMENT");
+  const lineHeight = Math.round(fontSize * 1.2), boxWidth = Math.max(160, Math.min(maxWidth, Math.max(...lines.map(line => context.measureText(line).width), 136) + 24));
+  const boxHeight = Math.max(46, lines.length * lineHeight + 20);
+  const x = Math.min(canvas.width - boxWidth - 6, Math.max(6, Number(item.annotationX ?? .08) * canvas.width));
+  const y = Math.min(canvas.height - boxHeight - 6, Math.max(6, Number(item.annotationY ?? .1) * canvas.height));
+  const targetX = Math.max(4, Math.min(canvas.width - 4, Number(item.annotationTargetX ?? .5) * canvas.width));
+  const targetY = Math.max(4, Math.min(canvas.height - 4, Number(item.annotationTargetY ?? .5) * canvas.height));
+  const leaderStart = getPeerLeaderStart(x, y, boxWidth, boxHeight, targetX, targetY);
+  drawPeerCanvasArrow(context, leaderStart.x, leaderStart.y, targetX, targetY, Math.max(2, fontSize / 6));
+  context.fillStyle = "rgba(255,255,255,.92)"; context.fillRect(x, y, boxWidth, boxHeight);
+  context.strokeStyle = "#e00000"; context.lineWidth = Math.max(1.5, fontSize / 8); context.strokeRect(x, y, boxWidth, boxHeight);
+  context.fillStyle = "#d40000"; lines.forEach((line, index) => context.fillText(line, x + 12, y + 10 + lineHeight * (index + 0.78)));
+}
+
+function getPeerAcceptedRedlinesForPage(pageNumber, excludeId = "") {
+  return (peerReview?.findings || []).filter(finding => finding.id !== excludeId && Number(finding.page) === Number(pageNumber) && finding.annotationAccepted && String(finding.annotationText || "").trim());
+}
+
 async function openPeerRedlinePreview(id) {
   const item = peerReview?.findings.find(finding => finding.id === id);
   const modal = document.getElementById("peerRedlineModal"), root = document.getElementById("peerRedlineCanvasRoot"), input = document.getElementById("peerRedlineText");
   if (!item?.page || !modal || !root || !input) return showPeerToast("A page number is required before creating a redline.");
   peerActiveRedlineFinding = id;
+  initializePeerRedlinePlacement(item);
+  setPeerRedlinePlacementMode("arrow");
+  peerRedlineZoom = 1.25;
   input.value = getPeerSuggestedAnnotation(item);
-  document.getElementById("peerRedlineTitle").textContent = `Page ${item.page} redline preview`;
+  resetPeerRedlineHistory();
+  document.getElementById("peerRemoveRedlineButton")?.toggleAttribute("hidden", !item.annotationAccepted);
+  const acceptedOnPage = getPeerAcceptedRedlinesForPage(item.page, item.id);
+  document.getElementById("peerRedlineTitle").textContent = `Page ${item.page} redline preview${acceptedOnPage.length ? ` · ${acceptedOnPage.length} accepted shown` : ""}`;
   root.innerHTML = "<p>Loading redline preview...</p>";
   modal.classList.remove("hidden");
   try {
@@ -1745,16 +2211,22 @@ async function openPeerRedlinePreview(id) {
     const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
     await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
     const base = document.createElement("canvas"); base.width = canvas.width; base.height = canvas.height;
-    base.getContext("2d").drawImage(canvas, 0, 0);
+    const baseContext = base.getContext("2d"); baseContext.drawImage(canvas, 0, 0);
+    acceptedOnPage.forEach(accepted => drawPeerRedlineAnnotation(baseContext, base, accepted, accepted.annotationText));
     peerRedlinePreviewCanvas = canvas; peerRedlinePreviewBase = base;
     canvas.addEventListener("click", event => {
       const rect = canvas.getBoundingClientRect();
-      item.annotationX = Math.max(0.01, Math.min(0.94, (event.clientX - rect.left) / rect.width));
-      item.annotationY = Math.max(0.01, Math.min(0.94, (event.clientY - rect.top) / rect.height));
+      const x = Math.max(0.01, Math.min(0.99, (event.clientX - rect.left) / rect.width));
+      const y = Math.max(0.01, Math.min(0.99, (event.clientY - rect.top) / rect.height));
+      flushPeerRedlinePendingChange();
+      if (peerRedlinePlacementMode === "comment") { item.annotationX = Math.min(0.94, x); item.annotationY = Math.min(0.94, y); }
+      else { item.annotationTargetX = x; item.annotationTargetY = y; }
       refreshPeerRedlinePreview();
+      commitPeerRedlineHistory();
     });
     root.replaceChildren(canvas);
     refreshPeerRedlinePreview();
+    applyPeerRedlineZoom(peerRedlineZoom);
   } catch (error) {
     root.innerHTML = `<p class="peer-preview-error">${escapePeerHTML(error.message || "The redline preview could not be loaded.")}</p>`;
   }
@@ -1775,16 +2247,7 @@ function refreshPeerRedlinePreview() {
   const input = document.getElementById("peerRedlineText"), canvas = peerRedlinePreviewCanvas, base = peerRedlinePreviewBase;
   if (!item || !input || !canvas || !base) return;
   const context = canvas.getContext("2d"); context.clearRect(0, 0, canvas.width, canvas.height); context.drawImage(base, 0, 0);
-  const fontSize = Math.max(9, Math.min(14, Math.round(canvas.width / 225))); context.font = `700 ${fontSize}px Arial`;
-  const maxWidth = Math.min(canvas.width * 0.19, 250), lines = wrapPeerCanvasText(context, input.value, maxWidth - 12);
-  if (!lines.length) lines.push("ENTER REVIEW COMMENT");
-  const lineHeight = Math.round(fontSize * 1.18), boxWidth = Math.max(88, Math.min(maxWidth, Math.max(...lines.map(line => context.measureText(line).width), 76) + 12));
-  const boxHeight = Math.max(25, lines.length * lineHeight + 10);
-  const x = Math.min(canvas.width - boxWidth - 6, Math.max(6, item.annotationX * canvas.width));
-  const y = Math.min(canvas.height - boxHeight - 6, Math.max(6, item.annotationY * canvas.height));
-  context.fillStyle = "rgba(255,255,255,.92)"; context.fillRect(x, y, boxWidth, boxHeight);
-  context.strokeStyle = "#e00000"; context.lineWidth = Math.max(1.5, fontSize / 8); context.strokeRect(x, y, boxWidth, boxHeight);
-  context.fillStyle = "#d40000"; lines.forEach((line, index) => context.fillText(line, x + 7, y + 6 + lineHeight * (index + 0.78)));
+  drawPeerRedlineAnnotation(context, canvas, item, input.value);
 }
 
 function acceptAllPeerFindings() {
@@ -1819,6 +2282,19 @@ function savePeerRedline(accept = false) {
   }
   savePeerReview(false); renderPeerFindings(); renderPeerFixList(); closePeerModal("peerRedlineModal");
   showPeerToast(accept ? "Finding accepted and redline saved." : "Redline draft saved.");
+}
+
+function removePeerAcceptedRedline(id = peerActiveRedlineFinding) {
+  const item = peerReview?.findings.find(finding => finding.id === id);
+  if (!item?.annotationAccepted) return showPeerToast("This finding does not have an accepted redline.");
+  item.annotationAccepted = false;
+  if (item.status === "Accepted") item.status = "Open";
+  item.comments = item.comments.filter(comment => !comment.redline);
+  item.history.push({ action: "Accepted redline removed", user: peerCurrentUser, date: new Date().toISOString(), note: "The finding remains available for review." });
+  peerReview.history.push({ action: `Accepted redline removed from page ${item.page}`, user: peerCurrentUser, date: new Date().toISOString() });
+  savePeerReview(false); renderPeerFindings(); renderPeerFixList();
+  if (id === peerActiveRedlineFinding) closePeerModal("peerRedlineModal");
+  showPeerToast("Redline removed. The finding is open for review again.");
 }
 
 function renderPeerChecklist() {
@@ -1996,6 +2472,15 @@ function wrapPeerPdfText(font, text, size, maxWidth) {
   return lines.slice(0, 10);
 }
 
+function drawPeerPdfArrow(page, startX, startY, targetX, targetY, color) {
+  const angle = Math.atan2(targetY - startY, targetX - startX), head = 7;
+  page.drawLine({ start: { x: startX, y: startY }, end: { x: targetX, y: targetY }, thickness: 1.5, color });
+  [-1, 1].forEach(direction => {
+    const wingAngle = angle + direction * Math.PI / 6;
+    page.drawLine({ start: { x: targetX, y: targetY }, end: { x: targetX - head * Math.cos(wingAngle), y: targetY - head * Math.sin(wingAngle) }, thickness: 1.5, color });
+  });
+}
+
 async function exportAcceptedPeerRedlines() {
   if (!peerReview) return;
   const accepted = peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.page);
@@ -2012,7 +2497,12 @@ async function exportAcceptedPeerRedlines() {
       const boxHeight = Math.max(19, lines.length * lineHeight + 8);
       const x = Math.min(width - boxWidth - 5, Math.max(5, Number(item.annotationX || .08) * width));
       const y = Math.min(height - boxHeight - 5, Math.max(5, height - Number(item.annotationY || .1) * height - boxHeight));
-      page.drawRectangle({ x, y, width: boxWidth, height: boxHeight, color: PDFLib.rgb(1, 1, 1), opacity: .9, borderColor: PDFLib.rgb(.88, 0, 0), borderWidth: 1.5 });
+      const red = PDFLib.rgb(.88, 0, 0);
+      const targetX = Math.max(3, Math.min(width - 3, Number(item.annotationTargetX ?? .5) * width));
+      const targetY = Math.max(3, Math.min(height - 3, height - Number(item.annotationTargetY ?? .5) * height));
+      const leaderStart = getPeerLeaderStart(x, y, boxWidth, boxHeight, targetX, targetY);
+      drawPeerPdfArrow(page, leaderStart.x, leaderStart.y, targetX, targetY, red);
+      page.drawRectangle({ x, y, width: boxWidth, height: boxHeight, color: PDFLib.rgb(1, 1, 1), opacity: .9, borderColor: red, borderWidth: 1.5 });
       lines.forEach((line, index) => page.drawText(line, { x: x + 7, y: y + boxHeight - 8 - size - index * lineHeight, size, font, color: PDFLib.rgb(.84, 0, 0) }));
     });
     const bytes = await doc.save();
