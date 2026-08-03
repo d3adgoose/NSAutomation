@@ -305,23 +305,25 @@ function getPeerFindingLearningKey(item = {}) {
     .filter(Boolean).join("|");
 }
 
-function recordPeerFindingFeedback(item = {}, status = item.status) {
+function recordPeerFindingFeedback(item = {}, status = item.status, options = {}) {
   if (!item || item.source === "manual") return;
   const outcome = status === "Accepted" ? "accepted" : ["False Positive", "Not Applicable"].includes(status) ? "rejected" : "";
   if (!outcome) return;
+  if (outcome === "accepted" && !options.finalized) return;
   const key = getPeerFindingLearningKey(item); if (!key) return;
   const note = String(item.resolutionNote || item.comments?.at(-1)?.text || "").trim();
   const entry = {
     key, outcome, category: getPeerFindingCategoryKey(item), affectedObject: getPeerFindingAffectedObject(item),
     issue: String(item.annotationText || item.issue || "").trim(), evidence: getPeerFindingEvidence(item),
     location: getPeerFindingLocation(item), reason: note || (outcome === "rejected" ? "Engineer rejected this proposed finding." : "Engineer accepted this finding."),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(), finalized: outcome === "accepted", approvalTrigger: options.trigger || "", approvedSignature: options.signature || ""
   };
   try {
     const entries = readPeerFindingFeedback().filter(existing => existing.key !== key);
     entries.unshift(entry);
     localStorage.setItem(PEER_FINDING_FEEDBACK_KEY, JSON.stringify(entries.slice(0, 80)));
-  } catch {}
+    return true;
+  } catch { return false; }
 }
 
 function getPeerFindingFeedbackPrompt() {
@@ -686,6 +688,30 @@ function getPeerDeterministicPageRole(page = {}) {
   if (tables.has("Power Requirement") || /ELECTRICAL LAYOUT|ELECTRICAL ONE[- ]LINE|POWER REQUIREMENT|ACTIVATION SYSTEM WIRING|POWER FEEDER/.test(text)) return "Electrical";
   if (tables.has("Connections") || tables.has("Nozzle Schedule") || /FLOW LAYOUT|NOZZLE SCHEDULE|FLOW DIAGRAM|PLUMBING LAYOUT/.test(text)) return "Plumbing";
   return "Drawing";
+}
+
+function getPeerApprovedExampleSignature(item = {}) {
+  return JSON.stringify([item.annotationText, item.evidence, item.requirement, item.location, item.page].map(value => String(value || "").trim()));
+}
+
+function savePeerAcceptedCorrectionsAsApprovedExamples(trigger = "review-complete") {
+  if (!peerReview) return 0;
+  let saved = 0;
+  peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.status === "Accepted").forEach(item => {
+    const signature = getPeerApprovedExampleSignature(item);
+    if (item.approvedExampleSignature === signature) return;
+    if (!recordPeerFindingFeedback(item, "Accepted", { finalized: true, trigger, signature })) return;
+    item.approvedExampleSignature = signature; item.approvedExampleSavedAt = new Date().toISOString(); saved += 1;
+  });
+  if (saved) peerReview.history.push({ action: `${saved} accepted correction${saved === 1 ? "" : "s"} saved as approved examples`, user: peerCurrentUser, date: new Date().toISOString(), note: trigger === "final-pdf" ? "Saved after the accepted-redline PDF was built." : "Saved after the peer review was marked complete." });
+  return saved;
+}
+
+function removePeerApprovedFindingFeedback(item = {}) {
+  if (!item.approvedExampleSignature) return;
+  const key = getPeerFindingLearningKey(item);
+  try { localStorage.setItem(PEER_FINDING_FEEDBACK_KEY, JSON.stringify(readPeerFindingFeedback().filter(entry => entry.key !== key || entry.approvedSignature !== item.approvedExampleSignature))); } catch {}
+  delete item.approvedExampleSignature; delete item.approvedExampleSavedAt;
 }
 
 function isPeerLedgerSourceAllowedOnPage(fact = {}, page = {}) {
@@ -1912,6 +1938,30 @@ function getPeerEquipmentReadinessFindings() {
   return [];
 }
 
+function getPeerFindingDetailValue(details = "", label = "") {
+  const match = String(details).match(new RegExp(`${label}:\\s*(.*?)(?=\\s+(?:Required reference|Location|Verification note|Evidence):|$)`, "i"));
+  return String(match?.[1] || "").trim().replace(/[.]+$/, "");
+}
+
+function getPeerFindingConfidenceReason(item = {}) {
+  if (item.verificationReason) return item.verificationReason;
+  if (item.verificationStatus === "verified") return "Source-verified against the visible drawing evidence and cited reference.";
+  if (Number.isFinite(Number(item.confidence)) && Number(item.confidence) >= .92) return "High-confidence match between readable drawing information and the applicable reference.";
+  if (item.confidence !== null && item.confidence !== undefined) return "The affected location was identified, but engineer confirmation is still recommended.";
+  if (item.source === "manual") return "Entered manually by the reviewer.";
+  return "Created by a deterministic drawing rule; confirm the extracted source values before accepting.";
+}
+
+function renderPeerStructuredFinding(item = {}) {
+  const details = String(item.details || "");
+  const evidence = String(item.evidence || "").trim() || details.split(/\s+Required reference:/i)[0].trim() || [item.listValue, item.comparedValue].filter(Boolean).join(" compared with ") || "Review the cited drawing information.";
+  const action = String(item.annotationText || getPeerSuggestedAnnotation(item) || item.issue || "Verify this item").trim();
+  const location = String(item.location || getPeerFindingDetailValue(details, "Location") || (item.page ? `Page ${item.page}` : "Drawing package")).trim();
+  const reference = String(item.requirement || getPeerFindingDetailValue(details, "Required reference") || (item.source === "manual" ? "Reviewer direction" : "Drawing package comparison")).trim();
+  const confidenceReason = getPeerFindingConfidenceReason(item);
+  return `<h3>${escapePeerHTML(item.issue)}</h3><div class="peer-finding-detail-grid"><section><small>Evidence</small><p>${escapePeerHTML(evidence)}</p></section><section><small>Required action</small><p>${escapePeerHTML(action)}</p></section><section><small>Location</small><p>${escapePeerHTML(location)}</p></section><section><small>Reference</small><p>${escapePeerHTML(reference)}</p></section><section class="peer-finding-confidence-reason"><small>Confidence reason</small><p>${escapePeerHTML(confidenceReason)}</p></section></div>${item.listValue || item.comparedValue ? `<div class="peer-value-compare"><div><small>Equipment table</small><strong>${escapePeerHTML(item.listValue || "Not provided")}</strong></div><span class="peer-compare-arrow" aria-hidden="true">â†’</span><div><small>Drawing / compared source</small><strong>${escapePeerHTML(item.comparedValue || "Not provided")}</strong></div></div>` : ""}`;
+}
+
 function renderPeerFindings() {
   const body = document.getElementById("peerFindingsBody"); if (!body || !peerReview) return;
   const search = String(document.getElementById("peerFindingSearch")?.value || "").trim().toLowerCase();
@@ -1930,6 +1980,8 @@ function renderPeerFindings() {
   Array.from(body.querySelectorAll(":scope > .peer-finding-card")).forEach((card, index) => {
     const item = displayed[index], footer = card.querySelector(".peer-finding-card-actions");
     if (!item || !footer) return;
+    const content = card.querySelector(".peer-finding-content");
+    if (content) content.innerHTML = renderPeerStructuredFinding(item);
     if (item.verificationStatus === "possible") {
       const confidenceBadge = card.querySelector(".peer-confidence");
       if (confidenceBadge) confidenceBadge.textContent = `Possible - ${Math.round(Number(item.confidence || 0) * 100)}% confidence`;
@@ -2258,7 +2310,6 @@ function acceptAllPeerFindings() {
   items.forEach(item => {
     item.status = "Accepted";
     item.history.push({ action: "Finding accepted", user: peerCurrentUser, date, note: "Accepted from the Findings list." });
-    recordPeerFindingFeedback(item, "Accepted");
   });
   peerReview.history.push({ action: `${items.length} findings accepted`, user: peerCurrentUser, date });
   savePeerReview(false);
@@ -2278,7 +2329,6 @@ function savePeerRedline(accept = false) {
     if (existing) { existing.text = text; existing.editedAt = new Date().toISOString(); existing.editedBy = peerCurrentUser; }
     else item.comments.push({ id: peerId("comment"), text, redline: true, user: peerCurrentUser, date: new Date().toISOString() });
     item.history.push({ action: "Finding and redline accepted", user: peerCurrentUser, date: new Date().toISOString(), note: text });
-    recordPeerFindingFeedback(item, "Accepted");
   }
   savePeerReview(false); renderPeerFindings(); renderPeerFixList(); closePeerModal("peerRedlineModal");
   showPeerToast(accept ? "Finding accepted and redline saved." : "Redline draft saved.");
@@ -2288,6 +2338,7 @@ function removePeerAcceptedRedline(id = peerActiveRedlineFinding) {
   const item = peerReview?.findings.find(finding => finding.id === id);
   if (!item?.annotationAccepted) return showPeerToast("This finding does not have an accepted redline.");
   item.annotationAccepted = false;
+  removePeerApprovedFindingFeedback(item);
   if (item.status === "Accepted") item.status = "Open";
   item.comments = item.comments.filter(comment => !comment.redline);
   item.history.push({ action: "Accepted redline removed", user: peerCurrentUser, date: new Date().toISOString(), note: "The finding remains available for review." });
@@ -2409,9 +2460,11 @@ function completePeerReview() {
   peerReview.status = "Complete";
   peerReview.completedAt = new Date().toISOString();
   peerReview.history.push({ action: "Review marked complete", user: peerCurrentUser, date: peerReview.completedAt, note: unresolved ? `${unresolved} finding${unresolved === 1 ? "" : "s"} remained open.` : "All findings were resolved." });
+  const approvedExamples = savePeerAcceptedCorrectionsAsApprovedExamples("review-complete");
   savePeerReview(false);
   renderPeerSummary();
-  showPeerToast(unresolved ? `Review marked complete. ${unresolved} finding${unresolved === 1 ? "" : "s"} remain open.` : "Review marked complete. All findings are resolved.");
+  const learningMessage = approvedExamples ? ` ${approvedExamples} accepted correction${approvedExamples === 1 ? " was" : "s were"} saved as approved examples.` : "";
+  showPeerToast((unresolved ? `Review marked complete. ${unresolved} finding${unresolved === 1 ? "" : "s"} remain open.` : "Review marked complete. All findings are resolved.") + learningMessage);
 }
 function readPeerReviews() { try { const reviews = JSON.parse(localStorage.getItem(PEER_STORAGE_KEY) || "[]"); return Array.isArray(reviews) ? reviews : []; } catch { return []; } }
 
@@ -2458,7 +2511,16 @@ function renderPeerSummary() { if (!peerReview) return; document.getElementById(
 function populatePeerFixFilter() { const select = document.getElementById("peerFixFilter"); PEER_FIX_STATUSES.forEach(status => select?.add(new Option(status, status))); }
 function populatePeerFindingFilter() { const select = document.getElementById("peerFindingStatus"); PEER_FINDING_STATUSES.forEach(status => select?.add(new Option(status, status))); }
 
-function openPeerExportModal() { if (!peerReview) return; document.getElementById("peerExportModal").classList.remove("hidden"); }
+function openPeerExportModal() {
+  if (!peerReview) return;
+  const accepted = peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.page).length;
+  const unresolved = peerReview.findings.filter(item => ["Open", "In Progress", "Needs Clarification"].includes(item.status)).length;
+  const summary = document.getElementById("peerExportSummary"), markedButton = document.getElementById("peerExportMarkedButton"), markedDescription = document.getElementById("peerExportMarkedDescription");
+  if (summary) summary.innerHTML = `<span><strong>${peerReview.findings.length}</strong> total findings</span><span><strong>${accepted}</strong> accepted redline${accepted === 1 ? "" : "s"}</span><span><strong>${unresolved}</strong> unresolved</span><span><strong>${escapePeerHTML(peerReview.status || "In Progress")}</strong> review status</span>`;
+  if (markedButton) markedButton.disabled = accepted === 0;
+  if (markedDescription) markedDescription.textContent = accepted ? `Build the original drawing with ${accepted} accepted redline${accepted === 1 ? "" : "s"} placed on the reviewed pages.` : "Accept at least one redline before building the marked drawing.";
+  document.getElementById("peerExportModal")?.classList.remove("hidden");
+}
 function getPeerReportRows() { return peerReview.findings.map(item => ({ Severity: item.severity, "Equipment Tag": item.equipmentTag, Issue: item.issue, "Equipment List Value": item.listValue, "Compared Value": item.comparedValue, Page: item.page || "", Status: item.status, Comments: item.comments.map(comment => `${comment.user}: ${comment.text}`).join(" | "), "Resolution Note": item.resolutionNote })); }
 function exportPeerExcel() { const workbook = XLSX.utils.book_new(); const summary = [{ Project: peerReview.project, Filename: peerReview.filename, "Review Type": PEER_REVIEW_TYPES[peerReview.type].label, Reviewer: peerReview.reviewer, Date: new Date(peerReview.createdAt).toLocaleDateString(), "Final Status": peerReview.status }]; XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summary), "Summary"); XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(getPeerReportRows()), "Findings"); XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(peerReview.checklist.map(item => ({ Item: item.title, Response: item.response, Comments: item.comments }))), "Checklist"); XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(getPeerFixItems().map(item => ({ ...item, ...(peerReview.fixStates[item.id] || {}) }))), "Fix List"); XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(peerReview.history), "History"); XLSX.writeFile(workbook, `${peerExportBaseName()}.xlsx`); closePeerModal("peerExportModal"); }
 async function exportPeerPDF() { const doc = await PDFLib.PDFDocument.create(); const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica), bold = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold); let page, y; const addPage = () => { page = doc.addPage([612, 792]); y = 755; }; const line = (text, options = {}) => { const size = options.size || 9, max = options.max || 92; String(text || "").match(new RegExp(`.{1,${max}}(?:\\s|$)|\\S+`, "g"))?.forEach(part => { if (y < 45) addPage(); page.drawText(part.trim(), { x: options.x || 42, y, size, font: options.bold ? bold : font, color: PDFLib.rgb(0.12, 0.18, 0.23) }); y -= size + 4; }); }; addPage(); line("N/S Automation Peer Review Report", { size: 17, bold: true }); y -= 5; line(`Project: ${peerReview.project || "Not selected"}`); line(`Filename: ${peerReview.filename}`); line(`Review Type: ${PEER_REVIEW_TYPES[peerReview.type].label}`); line(`Reviewer: ${peerReview.reviewer}`); line(`Date: ${new Date(peerReview.createdAt).toLocaleDateString()}`); line(`Final Status: ${peerReview.status}`); y -= 10; line("Findings", { size: 13, bold: true }); getPeerReportRows().forEach((item, index) => { line(`${index + 1}. [${item.Severity}] ${item.Issue}`, { bold: true }); line(`Tag: ${item["Equipment Tag"] || "-"} | Page: ${item.Page || "-"} | Status: ${item.Status}`); line(`Values: ${item["Equipment List Value"] || "-"} / ${item["Compared Value"] || "-"}`); line(`Comments: ${item.Comments || "-"} | Resolution: ${item["Resolution Note"] || "-"}`); y -= 5; }); y -= 6; line("Checklist", { size: 13, bold: true }); peerReview.checklist.forEach(item => line(`${item.title} — ${item.response || "Not answered"}. ${item.comments}`)); y -= 6; line("Resolution History", { size: 13, bold: true }); peerReview.history.forEach(item => line(`${formatPeerDate(item.date)} — ${item.user}: ${item.action}${item.note ? ` — ${item.note}` : ""}`)); const bytes = await doc.save(); downloadPeerFile(bytes, `${peerExportBaseName()}.pdf`, "application/pdf"); closePeerModal("peerExportModal"); }
@@ -2506,8 +2568,11 @@ async function exportAcceptedPeerRedlines() {
       lines.forEach((line, index) => page.drawText(line, { x: x + 7, y: y + boxHeight - 8 - size - index * lineHeight, size, font, color: PDFLib.rgb(.84, 0, 0) }));
     });
     const bytes = await doc.save();
+    const approvedExamples = savePeerAcceptedCorrectionsAsApprovedExamples("final-pdf");
+    savePeerReview(false);
     downloadPeerFile(bytes, `${(peerReview.filename || "Peer Review").replace(/\.pdf$/i, "")} - Accepted Redlines.pdf`, "application/pdf");
     closePeerModal("peerExportModal");
+    showPeerToast(`Accepted-redline PDF built.${approvedExamples ? ` ${approvedExamples} correction${approvedExamples === 1 ? " was" : "s were"} saved as approved examples.` : " Approved examples were already current."}`);
   } catch (error) { showPeerToast(error.message || "The accepted redline PDF could not be created."); }
 }
 
