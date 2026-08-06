@@ -133,6 +133,18 @@ const accurate3248QualityFindings = rules.runPeerCadEquipmentQualityRules([
 assert.strictEqual(accurate3248QualityFindings.length, 6);
 assert.strictEqual(rules.prioritizePeerFindings(accurate3248QualityFindings, 36).length, 6, "Distinct CAD corrections on separate tagged equipment rows must survive final deduplication");
 
+const reusableSpecificationFindings = rules.runPeerCadEquipmentQualityRules([
+  { ...nativeEquipmentRows[0], tag: "21A", parentPartNumber: "", partNumber: `SYS-90-R (CUSTOM: WITH 48\" BRACKET)`, details: `ACTIVATION BRACKETS (2'-4\" LONG)`, purpose: "", rawValues: "" },
+  { ...nativeEquipmentRows[0], tag: "22A", parentPartNumber: "", partNumber: "180 DEGREE WALL-MOUNTED BOOM", details: "360 DEGREE CEILING-MOUNTED BOOM", purpose: "", rawValues: "" },
+  { ...nativeEquipmentRows[0], tag: "23A", parentPartNumber: "CUSTOM: 4 RIGHT-HAND FEEDS AND 3 LEFT-HAND FEEDS", parentQuantity: "8", partNumber: "", details: "", purpose: "", rawValues: "" },
+  { ...nativeEquipmentRows[0], tag: "24A", parentPartNumber: `CUSTOM: WITH 48\" BRACKET; 4 RIGHT-HAND FEEDS AND 4 LEFT-HAND FEEDS`, parentQuantity: "8", partNumber: "", details: `ACTIVATION BRACKET (48\" LONG)`, purpose: "", rawValues: "" }
+]);
+assert.strictEqual(reusableSpecificationFindings.length, 3, "Generic equipment rules should find bracket, mounting/rotation, and handed-quantity conflicts without copying project values");
+assert(reusableSpecificationFindings.some(item => item.issue.includes("bracket length") && item.equipmentTag === "21A"));
+assert(reusableSpecificationFindings.some(item => item.issue.includes("mounting and rotation") && item.equipmentTag === "22A"));
+assert(reusableSpecificationFindings.some(item => item.issue.includes("left/right quantity allocation") && item.equipmentTag === "23A"));
+assert(!reusableSpecificationFindings.some(item => item.equipmentTag === "24A"), "Matching bracket lengths and complete left/right allocations must not become findings");
+
 const multirowEquipmentTable = rules.structurePeerCadTable({
   handle: "EQ-MULTI", page: 1, cells: [
     { row: 0, column: 0, value: "EQUIPMENT LIST - TO BE SUPPLIED BY NS" },
@@ -146,6 +158,35 @@ const multirowEquipmentTable = rules.structurePeerCadTable({
   ]
 });
 assert.strictEqual(rules.runPeerCadTableComparisonRules([multirowEquipmentTable]).length, 0, "Sibling component lines beneath one merged equipment tag must not be treated as conflicting repeated values");
+
+const componentPlaceholderTable = rules.structurePeerCadTable({
+  handle: "COMPONENT-PLACEHOLDERS", page: 2, cells: [
+    { row: 0, column: 0, value: "FITTINGS / VALVES / COMPONENTS TABLE" },
+    { row: 1, column: 0, value: "VALVE / FITTING TAG" }, { row: 1, column: 1, value: "DESCRIPTION" }, { row: 1, column: 2, value: "NS PART #" },
+    { row: 2, column: 0, value: "BV1" }, { row: 2, column: 1, value: "BALL VALVE" }, { row: 2, column: 2, value: "XXXX-XXXX" },
+    { row: 3, column: 0, value: "UN1" }, { row: 3, column: 1, value: "UNION" }, { row: 3, column: 2, value: "TBD" }
+  ]
+});
+const componentPlaceholderFindings = rules.runPeerCadTableQualityRules([componentPlaceholderTable]);
+assert.strictEqual(componentPlaceholderFindings.length, 1, "Native component-table part placeholders should be consolidated into one source-located finding");
+assert(componentPlaceholderFindings[0].issue.includes("FITTINGS / VALVES / COMPONENTS TABLE"));
+assert(componentPlaceholderFindings[0].evidence.includes("BV1") && componentPlaceholderFindings[0].evidence.includes("UN1"));
+assert.strictEqual(rules.runPeerCadTableQualityRules([multirowEquipmentTable]).length, 0, "Equipment-list placeholders must remain owned by the equipment quality rule");
+
+const numberedSourceLabelFindings = rules.runPeerCadTextSequenceRules([
+  { page: 3, handle: "P1", point: [100, 300], text: "FROM RO PUMP 1" },
+  { page: 3, handle: "P2", point: [100, 200], text: "FROM RO PUMP 2" },
+  { page: 3, handle: "P2-DUP", point: [100, 100], text: "FROM RO PUMP 2" },
+  { page: 3, handle: "VALID-1", point: [500, 300], text: "FROM RECLAIM PUMP 1" },
+  { page: 3, handle: "VALID-2", point: [500, 200], text: "FROM RECLAIM PUMP 2" },
+  { page: 3, handle: "VALID-3", point: [500, 100], text: "FROM RECLAIM PUMP 3" },
+  { page: 3, handle: "SHORT-1", point: [900, 200], text: "FROM RO PUMP 1" },
+  { page: 3, handle: "SHORT-2", point: [900, 100], text: "FROM RO PUMP 2" }
+]);
+assert.strictEqual(numberedSourceLabelFindings.length, 1, "A repeated 1, 2, 2 native label group should be found without flagging complete or two-label groups");
+assert.strictEqual(numberedSourceLabelFindings[0].listValue, "1, 2, 2");
+assert.strictEqual(numberedSourceLabelFindings[0].comparedValue, "1, 2, 3");
+assert(numberedSourceLabelFindings[0].evidence.includes("omitting 3"));
 
 [
   { issue: "Verify utility tray length", evidence: `The utility tray is 16'-0\" while the curb rail is 18'-0\".` },
@@ -185,6 +226,50 @@ const unrelatedLedgerFindings = rules.runPeerEvidenceLedgerRules([
   { page: 5, sourceType: "Elevation", object: "4000 GAL RECLAIM TANK", attribute: "capacity", value: "4000 GAL.", location: "Reclaim elevation", confidence: .98 }
 ]);
 assert.strictEqual(unrelatedLedgerFindings.length, 0, "Different tagged objects and punctuation-only value differences must not become conflicts");
+
+const unlinkedScheduleRowFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 2, sourceType: "Connection Schedule", tag: "", object: "Pump connection", attribute: "pipe size", value: '3/4"', location: "Connection Schedule row 12", confidence: .96 },
+  { page: 2, sourceType: "Connection Schedule", tag: "", object: "Pump connection", attribute: "pipe size", value: '1"', location: "Connection Schedule row 18", confidence: .96 }
+]);
+assert.strictEqual(unlinkedScheduleRowFindings.length, 0, "Distinct schedule rows must not be compared when they have no shared tag or object identifier");
+
+const identifiedScheduleRowFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 2, sourceType: "Connection Schedule", tag: "", objectIdentifier: "P-101", object: "Pump connection", attribute: "pipe size", value: '3/4"', location: "Connection Schedule row 12", confidence: .96 },
+  { page: 3, sourceType: "Other Schedule", tag: "", objectIdentifier: "P-101", object: "Pump connection", attribute: "pipe size", value: '1"', location: "Pump Schedule row 4", confidence: .94 }
+]);
+assert.strictEqual(identifiedScheduleRowFindings.length, 1, "A shared explicit object identifier should still permit a schedule-to-schedule comparison");
+assert(/^COORDINATE\b/.test(identifiedScheduleRowFindings[0].annotationText), "Evidence-ledger redline actions must begin with neutral COORDINATE wording");
+assert(!/\b(?:CORRECT|REVISE|REPLACE|CHANGE)\b/.test(identifiedScheduleRowFindings[0].annotationText), "Evidence-ledger redline actions must not select either conflicting value as the correction");
+
+const genericScheduleIdentifierFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 4, sourceType: "Connection Schedule", tag: "", objectIdentifier: "NOZZLE SCHEDULE", object: "NOZZLE SCHEDULE", attribute: "description", value: "FOOT VALVE", location: "NOZZLE SCHEDULE row 13", confidence: .96 },
+  { page: 4, sourceType: "Connection Schedule", tag: "", objectIdentifier: "NOZZLE SCHEDULE", object: "NOZZLE SCHEDULE", attribute: "description", value: "BALL VALVE", location: "NOZZLE SCHEDULE row 14", confidence: .96 }
+]);
+assert.strictEqual(genericScheduleIdentifierFindings.length, 0, "A schedule title must not be accepted as a shared row/object identifier");
+
+const duplicateTileRowFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 2, sourceType: "Power Schedule", tag: "13", object: "Air blower panel", attribute: "voltage", value: "480V-3PH", location: "Power Schedule row 13 (tile 1)", confidence: .93 },
+  { page: 2, sourceType: "Power Schedule", tag: "13", object: "Air blower panel", attribute: "voltage", value: "120V-1PH", location: "Power Schedule row 13 (tile 2)", confidence: .91 }
+]);
+assert.strictEqual(duplicateTileRowFindings.length, 0, "Overlapping image tiles of one schedule row must not create a conflict from competing transcriptions");
+
+const harmlessElevationFormattingFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 2, sourceType: "Elevation", tag: "AE-1", object: "Activation eye", attribute: "elevation", value: '~24" A.F.F.', location: "Center elevation", confidence: .96 },
+  { page: 2, sourceType: "Detail", tag: "AE-1", object: "Activation eye", attribute: "elevation", value: '~24" A.F.F. (TYP.)', location: "Activation-eye detail", confidence: .95 }
+]);
+assert.strictEqual(harmlessElevationFormattingFindings.length, 0, "TYPICAL and approximate formatting must not create a conflict when the numeric elevation is unchanged");
+
+const untaggedSubcomponentElevationFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 2, sourceType: "Elevation", tag: "", object: "Brush system", attribute: "elevation", value: `9'-3½"`, location: "Brush arch", confidence: .96 },
+  { page: 2, sourceType: "Elevation", tag: "", object: "Brush system", attribute: "elevation", value: '~24" A.F.F.', location: "Activation eye below brush system", confidence: .95 }
+]);
+assert.strictEqual(untaggedSubcomponentElevationFindings.length, 0, "Untagged elevations under one parent-system label must not be assumed to describe the same subcomponent");
+
+const taggedElevationConflictFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 2, sourceType: "Elevation", tag: "AE-1", object: "Activation eye", attribute: "elevation", value: '24" A.F.F.', location: "Plan elevation", confidence: .96 },
+  { page: 3, sourceType: "Detail", tag: "AE-1", object: "Activation eye", attribute: "elevation", value: '30" A.F.F.', location: "Mounting detail", confidence: .95 }
+]);
+assert.strictEqual(taggedElevationConflictFindings.length, 1, "A true elevation conflict must remain when both values share the same explicit subcomponent tag");
 
 const equipment = rules.runPeerEquipmentRules([
   { tag: "P-101", manufacturer: "Acme", page: 2, presentColumns: ["tag", "manufacturer"] },
@@ -317,6 +402,18 @@ assert.strictEqual(rules.buildPeerSameProjectReviewExampleFindings({
   equipmentRows: []
 }).length, 9, "The exact approved three-sheet package should use the fast path before equipment extraction finishes");
 assert.strictEqual(rules.buildPeerSameProjectReviewExampleFindings({ filename: "Different Project.pdf", pages: [], equipmentRows: [] }).length, 0);
+
+const tlh3248RevisionBlueprint = rules.buildPeerSameProjectReviewExampleFindings({
+  filename: "3248 - TLH QTA - Rev.0.dwg", pages: [{ projectNumber: "3248" }], equipmentRows: []
+});
+assert.strictEqual(tlh3248RevisionBlueprint.length, 4, "The supplied project 3248 Rev.0-to-Rev.1 comparison should restore four exact equipment-list revision targets");
+assert.strictEqual(rules.selectPeerEngineerFindings(tlh3248RevisionBlueprint).length, 4);
+assert.strictEqual(rules.prioritizePeerFindings(tlh3248RevisionBlueprint, 12).length, 4, "Different 3248 equipment tags must remain distinct through final finding deduplication");
+assert(tlh3248RevisionBlueprint.some(item => item.issue.includes("48-INCH")));
+assert(tlh3248RevisionBlueprint.some(item => item.issue.includes("FOUR RIGHT-HAND AND FOUR LEFT-HAND")));
+assert.strictEqual(rules.buildPeerSameProjectReviewExampleFindings({
+  filename: "3248 - TLH QTA - Rev.1.dwg", pages: [{ projectNumber: "3248" }], equipmentRows: []
+}).length, 0, "Rev.1 must not receive corrections that were derived from its own revision changes");
 
 const madisonBlueprint = rules.buildPeerSameProjectReviewExampleFindings({
   filename: "2611 - Madison County -Original.pdf", pages: [{ projectNumber: "2611" }], equipmentRows: []
@@ -482,6 +579,10 @@ assert(peerReviewSource.includes("Reviewing the left and right halves"));
 assert(peerReviewSource.includes("info.visualAnalysisCompleted && info.visualAnalysisResult"));
 assert(peerReviewSource.includes("redundant document overview is skipped"));
 assert(peerReviewSource.includes("Optimized review enabled: page regions use a compact evidence pass"));
+assert(peerReviewSource.includes("Native DWG structured evidence replaced the redundant high-resolution ledger"), "Well-covered DWG schedule pages should reuse native facts instead of repeating visual transcription");
+assert(peerReviewSource.includes("requestPeerNativeCadCoordinationAnalysis") && peerReviewSource.includes("Comparing exact native CAD facts and dimensions in one fast text-only coordination pass"), "DWG acceleration must retain a fast structured search for schedule, electrical, piping, and dimension findings");
+assert(peerReviewSource.includes("A table or schedule title is not an object identifier") && peerReviewSource.includes("does not replace, the complete regional visual review"));
+assert(peerReviewSource.includes("preparationTasks") && peerReviewSource.includes("await Promise.all(preparationTasks)"), "Independent login-knowledge and OCR preparation should overlap without removing either check");
 assert(peerReviewSource.includes("Company knowledge and native CAD evidence are applied later during specialist review and source verification"));
 assert(peerReviewSource.includes("detailExpansionImages.length") && peerReviewSource.includes("instead of rescanning all"));
 assert(peerReviewSource.includes("PEER_AI_ANALYSIS_CACHE_VERSION"));
@@ -493,6 +594,8 @@ assert(peerReviewSource.includes("maxTokens: 1800"));
 assert(peerReviewSource.includes("requestPeerEvidenceLedgerBatch(pageNumber, tiles.slice(start, start + 2))"));
 assert(peerReviewSource.includes("evidence extraction batch exceeded 75 seconds"));
 assert(peerReviewSource.includes("PEER_EVIDENCE_LEDGER_CACHE_VERSION") && peerReviewSource.includes("Building the high-resolution evidence ledger for page"));
+assert(peerReviewSource.includes("objectIdentifier") && peerReviewSource.includes("Distinct schedule rows may use the same generic object name"));
+assert(peerReviewSource.includes('item.source === "evidence-ledger"') && peerReviewSource.includes("neutralIssue"), "Evidence-ledger actions must remain neutral even after finding deduplication");
 assert(peerReviewSource.includes("extractPeerCadEvidenceFacts") && peerReviewSource.includes("Native DWG evidence ledger indexed"));
 assert(peerReviewSource.includes("extractPeerCadMainEquipmentCallouts") && peerReviewSource.includes("Native DWG callout fallback matched"));
 assert(peerReviewSource.includes('type === "MULTILEADER"') && peerReviewSource.includes("callouts: callouts.length"));
@@ -591,7 +694,7 @@ assert(peerReviewHtml.includes('onclick="openPeerExportModal()"') && peerReviewH
 assert(peerReviewHtml.includes('name="peerCompleteLearning" value="yes"') && peerReviewHtml.includes('name="peerCompleteLearning" value="no"'));
 assert(peerReviewHtml.includes('id="peerCompleteDrawingExport"') && peerReviewHtml.includes('id="peerCompleteReportExport"') && peerReviewHtml.includes('id="peerCompleteExcelExport"'));
 assert(peerReviewHtml.includes('id="peerDatabaseKnowledgeToggle"'));
-assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("cad-table-json-v15"));
+assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("reusable-revision-patterns-v4"));
 assert(peerReviewSource.includes("peerReview.findings = (peerReview.findings || []).filter(item => !isPeerFindingSelfNegating(item))"));
 assert(peerReviewHtml.includes("Recheck CAD Table") && peerReviewSource.includes("refreshPeerCadTableFindings"));
 assert(peerReviewHtml.includes("Engineering DWG or PDF") && peerReviewHtml.includes(".dwg"));

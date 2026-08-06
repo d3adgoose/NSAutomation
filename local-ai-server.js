@@ -18,6 +18,11 @@ const MAX_REQUEST_BYTES = 28 * 1024 * 1024;
 const MAX_DWG_BYTES = 80 * 1024 * 1024;
 const activeOllamaControllers = new Map();
 const cadPeerProgressJobs = new Map();
+const authenticatedUserCache = new Map();
+const AUTHENTICATED_USER_CACHE_MS = 2 * 60 * 1000;
+const SELECTED_MODEL_CACHE_MS = 30 * 1000;
+let selectedModelCache = null;
+let localAiWarmupPromise = null;
 const ALLOWED_BROWSER_ORIGINS = new Set([
   "http://127.0.0.1:5500",
   "http://localhost:5500",
@@ -47,6 +52,11 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
 async function authenticatedUser(req) {
   const authorization = String(req.headers.authorization || "");
   if (!authorization.startsWith("Bearer ")) return null;
+  const cacheKey = crypto.createHash("sha256").update(authorization).digest("hex");
+  const now = Date.now();
+  const cached = authenticatedUserCache.get(cacheKey);
+  if (cached?.expiresAt > now) return cached.user;
+  if (cached) authenticatedUserCache.delete(cacheKey);
   let response;
   try {
     response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
@@ -59,17 +69,46 @@ async function authenticatedUser(req) {
     throw error;
   }
   if (!response.ok) return null;
-  return response.json();
+  const user = await response.json();
+  authenticatedUserCache.set(cacheKey, { user, expiresAt: now + AUTHENTICATED_USER_CACHE_MS });
+  if (authenticatedUserCache.size > 24) {
+    for (const [key, entry] of authenticatedUserCache) {
+      if (entry.expiresAt <= now || authenticatedUserCache.size > 16) authenticatedUserCache.delete(key);
+    }
+  }
+  return user;
 }
 
 async function selectLocalAiModel() {
+  const now = Date.now();
+  if (selectedModelCache?.expiresAt > now) return selectedModelCache.value;
   const response = await fetch(`${OLLAMA_URL}/api/tags`);
   if (!response.ok) throw new Error("Ollama is not available.");
   const data = await response.json();
   const installed = new Set((data.models || []).flatMap(item => [item.name, item.model]).filter(Boolean));
-  if (installed.has(FAST_MODEL)) return { ready: true, model: FAST_MODEL, preferred: true };
-  if (installed.has(FALLBACK_MODEL)) return { ready: true, model: FALLBACK_MODEL, preferred: false };
-  return { ready: false, model: FAST_MODEL, preferred: true };
+  const selected = installed.has(FAST_MODEL)
+    ? { ready: true, model: FAST_MODEL, preferred: true }
+    : installed.has(FALLBACK_MODEL)
+      ? { ready: true, model: FALLBACK_MODEL, preferred: false }
+      : { ready: false, model: FAST_MODEL, preferred: true };
+  selectedModelCache = { value: selected, expiresAt: now + (selected.ready ? SELECTED_MODEL_CACHE_MS : 3000) };
+  return selected;
+}
+
+function warmLocalAiModel(model) {
+  if (!model || localAiWarmupPromise) return localAiWarmupPromise;
+  localAiWarmupPromise = fetch(`${OLLAMA_URL}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt: "", stream: false, keep_alive: "30m" })
+  }).then(response => {
+    if (!response.ok) throw new Error(`Ollama warmup returned ${response.status}.`);
+    return response.json();
+  }).catch(error => {
+    console.warn(`Local AI model warmup did not finish: ${error.message}`);
+    return null;
+  }).finally(() => { localAiWarmupPromise = null; });
+  return localAiWarmupPromise;
 }
 
 function readJson(req) {
@@ -332,6 +371,7 @@ async function handleAi(req, res) {
       const running = runningResponse.ok ? await runningResponse.json() : {};
       loaded = (running.models || []).some(item => item.name === selected.model || item.model === selected.model);
     } catch { /* Installed status remains useful if the running-model check fails. */ }
+    if (selected.ready && !loaded) void warmLocalAiModel(selected.model);
     return send(res, 200, { ...selected, loaded, user: user.email || user.id });
   }
 

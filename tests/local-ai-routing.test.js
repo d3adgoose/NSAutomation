@@ -40,6 +40,10 @@ assert(localAiServer.includes("worker-src 'self' blob: https://cdnjs.cloudflare.
   "The local gateway CSP must allow the configured PDF.js worker.");
 assert(localAiServer.includes('req.method === "DELETE"') && localAiServer.includes("activeOllamaControllers"),
   "Canceling Local AI must abort the active Ollama request on the local gateway.");
+assert(localAiServer.includes("warmLocalAiModel") && localAiServer.includes('`${OLLAMA_URL}/api/generate`') && localAiServer.includes('prompt: ""'),
+  "The Local AI readiness check must warm the selected model before the user starts a review.");
+assert(localAiServer.includes("authenticatedUserCache") && localAiServer.includes("selectedModelCache"),
+  "Repeated review requests must reuse short-lived authentication and installed-model checks.");
 assert(localAiServer.includes('/api/cad-peer-review') && localAiServer.includes('handleCadPeerReview(req, res)'),
   "The local gateway must expose native DWG conversion for Peer Review.");
 assert(localAiServer.includes('searchParams.get("filename")') && localAiServer.includes('accoreconsole.exe'),

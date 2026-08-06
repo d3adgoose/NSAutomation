@@ -12,8 +12,8 @@ const PEER_DATABASE_KNOWLEDGE_ENABLED_KEY = "ns-peer-review-database-knowledge-e
 const PEER_PARTS_STORAGE_KEY = "nsPartsDatabaseV1";
 const PEER_DATABASE_TABLES = Object.freeze({ master: "parts_master", aliases: "part_number_aliases", usage: "drawing_usage", documents: "documents" });
 const PEER_DATABASE_DOCUMENTS_BUCKET = "document-library";
-const PEER_AI_ANALYSIS_CACHE_VERSION = "20260805-compact-regional-review-v6";
-const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-native-ledger-v1";
+const PEER_AI_ANALYSIS_CACHE_VERSION = "20260806-reusable-revision-patterns-v7";
+const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-native-dwg-ledger-v3";
 const COMPANY_AI_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
 const COMPANY_AI_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
 const PEER_BUILT_IN_KNOWLEDGE = `BUILT-IN PEER REVIEW REFERENCE
@@ -71,6 +71,15 @@ EXPECTED FINDING: Request relocation and cite the visible objects and applicable
 
 SOURCE EXAMPLE: A schedule or equipment-list description is visibly incomplete, uses a placeholder such as nominal, or conflicts with a readable drawing callout or another schedule value for the same item.
 EXPECTED FINDING: Quote the conflicting or incomplete entry and its comparison source. Do not flag ordinary wording preferences without a visible standard or counterpart.
+
+SOURCE EXAMPLE: The same tagged bracket, support, or activation-eye assembly has different readable lengths in its custom part designation, equipment details, plan dimension, or elevation dimension.
+EXPECTED FINDING: Coordinate the bracket length and quote both current-drawing values and locations. Compare only dimensions tied to the same explicit tag or assembly; never import a length from another project.
+
+SOURCE EXAMPLE: The same tagged boom, panel, bracket, or equipment support is described with conflicting mounting modes or rotations, such as wall versus ceiling mounting or different degree values.
+EXPECTED FINDING: Coordinate the mounting/rotation description using neutral wording. Require both specifications to be readable and tied to the same tagged item.
+
+SOURCE EXAMPLE: A scheduled multi-unit item gives a total quantity and explicit left-hand/right-hand counts that do not add to that total, or the same tagged item is assigned opposite handedness in two locations.
+EXPECTED FINDING: Quote the total and directional allocation, check the arithmetic exactly, and coordinate the handedness. Do not assume an uncounted right-hand-only description is wrong merely because the quantity is greater than one.
 
 SOURCE EXAMPLE: Two electrical circuits feed parts of one packaged system even though a readable diagram or schedule indicates they should share one feeder, or a load value conflicts between the one-line and power schedule.
 EXPECTED FINDING: Identify the exact circuits or load values and both locations. Never recommend combining circuits solely because they are adjacent.
@@ -176,11 +185,11 @@ const PEER_EVIDENCE_LEDGER_SCHEMA = {
           page: { type: "integer" }, tile: { type: "integer" },
           discipline: { type: "string", enum: ["Drawing", "Equipment", "Plumbing", "Electrical"] },
           sourceType: { type: "string", enum: ["Equipment List", "Plan", "Elevation", "Detail", "Flow Diagram", "Electrical One-Line", "Power Schedule", "Connection Schedule", "Nozzle Schedule", "General Note", "Other Schedule"] },
-          tag: { type: "string" }, object: { type: "string" },
+          tag: { type: "string" }, objectIdentifier: { type: "string" }, object: { type: "string" },
           attribute: { type: "string", enum: ["description", "quantity", "capacity", "dimension", "elevation", "pipe size", "pipe material", "pipe schedule", "connection size", "flow rate", "voltage", "phase", "amperage", "horsepower", "circuit", "feeder", "breaker", "conductor", "label"] },
           value: { type: "string" }, location: { type: "string" }, confidence: { type: "number" }
         },
-        required: ["page", "tile", "discipline", "sourceType", "tag", "object", "attribute", "value", "location", "confidence"]
+        required: ["page", "tile", "discipline", "sourceType", "tag", "objectIdentifier", "object", "attribute", "value", "location", "confidence"]
       }
     }
   },
@@ -1521,9 +1530,9 @@ function deletePeerEquipmentRow(id) {
 function refreshPeerCadTableFindings(showResult = true) {
   if (!peerReview?.cadData) return showResult ? showPeerToast("Native CAD table data is not available for this review.") : 0;
   extractPeerEquipmentRows();
-  const replacementSources = new Set(["cad-equipment-quality", "cad-table-comparison"]);
+  const replacementSources = new Set(["cad-equipment-quality", "cad-table-comparison", "cad-table-quality"]);
   const existingCadFindings = new Map(peerReview.findings.filter(item => replacementSources.has(item.source)).map(item => [`${item.source}|${item.page}|${normalizePeerValue(item.equipmentTag || "", "tag")}|${normalizePeerValue(item.issue || "")}`, item]));
-  const fresh = [...runPeerCadEquipmentQualityRules(peerReview.equipmentRows.filter(row => row.source === "native-cad")), ...runPeerCadTableComparisonRules(peerReview.cadData.tables || [])].map(item => {
+  const fresh = [...runPeerCadEquipmentQualityRules(peerReview.equipmentRows.filter(row => row.source === "native-cad")), ...runPeerCadTableComparisonRules(peerReview.cadData.tables || []), ...runPeerCadTableQualityRules(peerReview.cadData.tables || [])].map(item => {
     const previous = existingCadFindings.get(`${item.source}|${item.page}|${normalizePeerValue(item.equipmentTag || "", "tag")}|${normalizePeerValue(item.issue || "")}`);
     if (previous) return { ...item, id: previous.id, status: previous.status, comments: previous.comments, resolutionNote: previous.resolutionNote, history: previous.history, annotationAccepted: previous.annotationAccepted };
     return item;
@@ -1554,18 +1563,21 @@ async function runPeerChecks() {
       const stats = peerReview.cadData.stats || {};
       recordPeerAnalysisMessage(`Native DWG evidence ready: ${stats.blocks || 0} blocks, ${stats.attributes || 0} block attributes, ${stats.tables || 0} native tables${stats.tableCells ? ` with ${stats.tableCells} structured cells` : " using vector-text fallback"}, ${stats.callouts || 0} numbered multileaders, and ${stats.dimensions || 0} dimensions indexed before visual review.`);
     }
-    if (isPeerDatabaseKnowledgeEnabled()) {
+    const preparationTasks = [];
+    if (isPeerDatabaseKnowledgeEnabled()) preparationTasks.push((async () => {
       const companyKnowledge = await preloadPeerDatabaseKnowledge();
       const readableFiles = (companyKnowledge.documents || []).filter(item => item.storage_path).length;
       recordPeerAnalysisMessage(`Company knowledge ready before drawing analysis: ${(companyKnowledge.master || []).length} current parts, ${(companyKnowledge.aliases || []).length} part relationships, ${(companyKnowledge.usage || []).length} prior drawing-usage records, and ${readableFiles} database file${readableFiles === 1 ? "" : "s"} available for relevance matching.`);
-    }
+    })());
     const imageOnlyPages = peerReview.pages.filter(page => (!page.text?.trim() || page.ocrApplied) && page.ocrVersion !== 2);
-    if (imageOnlyPages.length) {
+    if (imageOnlyPages.length) preparationTasks.push((async () => {
       try { await recognizePeerTitleBlocks(imageOnlyPages); }
       catch (error) {
         setPeerAnalysisProgress("running", `Title-block OCR is unavailable, so the review is continuing with Local Visual AI. ${error.message || "Image-only title-block values may need manual confirmation."}`);
       }
-    }
+    })());
+    if (preparationTasks.length > 1) recordPeerAnalysisMessage("Loading company knowledge and reading image-only title blocks together to reduce preparation time without skipping either check.");
+    await Promise.all(preparationTasks);
     recordPeerAnalysisMessage("Reviewing the clean drawing independently. Existing reviewer annotations are not required or expected.");
     const visualFindings = await runPeerVisualReview();
     reconcilePeerTitleBlockMetadata();
@@ -1611,7 +1623,7 @@ async function runPeerChecks() {
 function runPeerCadRules(cad) {
   if (!cad) return [];
   const nativeEquipmentRows = peerReview.equipmentRows.filter(row => row.source === "native-cad");
-  const findings = [...runPeerCadEquipmentQualityRules(nativeEquipmentRows), ...runPeerCadTableComparisonRules(cad.tables || [])], pageForItem = item => Number(item.page || 0) || (() => { const index = cad.layouts.indexOf(item.layout); return index >= 0 ? index + 1 : 0; })();
+  const findings = [...runPeerCadEquipmentQualityRules(nativeEquipmentRows), ...runPeerCadTableComparisonRules(cad.tables || []), ...runPeerCadTableQualityRules(cad.tables || []), ...runPeerCadTextSequenceRules(cad.texts || [])], pageForItem = item => Number(item.page || 0) || (() => { const index = cad.layouts.indexOf(item.layout); return index >= 0 ? index + 1 : 0; })();
   const tagPattern = /^(?:[A-Z]{1,8}[- ]?\d{1,4}[A-Z]?|\d{1,3}[A-Z]?)$/i;
   cad.tables.forEach(table => {
     const rows = new Map(); table.cells.forEach(cell => { if (!rows.has(cell.row)) rows.set(cell.row, []); rows.get(cell.row)[cell.column] = String(cell.value || "").trim(); });
@@ -1892,7 +1904,14 @@ async function runPeerVisualReview() {
   const calibratedProjectFindings = buildPeerSameProjectReviewExampleFindings(peerReview);
   const useCalibratedFastPath = calibratedProjectFindings.length > 0;
   peerReview.equipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
-  peerReview.evidenceLedger = extractPeerCadEvidenceFacts(peerReview.cadData || {}, peerReview.equipmentRows || []);
+  const nativeEvidenceFacts = extractPeerCadEvidenceFacts(peerReview.cadData || {}, peerReview.equipmentRows || []);
+  const nativeEvidenceFactsByPage = new Map();
+  nativeEvidenceFacts.forEach(fact => {
+    const pageNumber = Number(fact.page || 0);
+    if (!nativeEvidenceFactsByPage.has(pageNumber)) nativeEvidenceFactsByPage.set(pageNumber, []);
+    nativeEvidenceFactsByPage.get(pageNumber).push(fact);
+  });
+  peerReview.evidenceLedger = nativeEvidenceFacts;
   peerReview.coverageReport = createPeerCoverageReport();
   recordPeerAnalysisMessage("Optimized review enabled: page regions use a compact evidence pass; full CAD and company knowledge remain available to specialist sweeps and source verification.");
   if (peerReview.evidenceLedger.length) recordPeerAnalysisMessage(`Native DWG evidence ledger indexed ${peerReview.evidenceLedger.length} source-located table fact${peerReview.evidenceLedger.length === 1 ? "" : "s"} before visual review.`);
@@ -1906,9 +1925,16 @@ async function runPeerVisualReview() {
       engineerPatternImages.push({ page: info.number, image: overviewImage });
       if (!useCalibratedFastPath) try {
         let pageFacts;
+        const nativePageFacts = nativeEvidenceFactsByPage.get(Number(info.number)) || [];
+        const nativeCadReplacesVisualLedger = String(peerReview.sourceFormat || "").toLowerCase() === "dwg"
+          && Boolean(peerReview.cadData?.stats?.indexedRecords || peerReview.cadData?.stats?.totalRecords);
         if (info.evidenceLedgerCompleted && info.evidenceLedgerVersion === PEER_EVIDENCE_LEDGER_CACHE_VERSION && Array.isArray(info.evidenceLedgerFacts)) {
           pageFacts = info.evidenceLedgerFacts.map(fact => ({ ...fact }));
           setPeerAnalysisProgress("running", `Reusing ${pageFacts.length} cached source-located fact${pageFacts.length === 1 ? "" : "s"} for page ${info.number}.`);
+        } else if (nativeCadReplacesVisualLedger) {
+          pageFacts = [];
+          const stats = peerReview.cadData?.stats || {};
+          recordPeerAnalysisMessage(`Native DWG structured evidence replaced the redundant high-resolution ledger on page ${info.number}; ${nativePageFacts.length} tagged schedule fact${nativePageFacts.length === 1 ? "" : "s"}, ${stats.dimensions || 0} package dimension${stats.dimensions === 1 ? "" : "s"}, and ${stats.callouts || 0} numbered callout${stats.callouts === 1 ? "" : "s"} remain available alongside the complete regional visual review.`);
         } else if (peerReview.maximumSweep !== false) {
           setPeerAnalysisProgress("running", `Building the high-resolution evidence ledger for page ${info.number}.`);
           const evidenceTiles = await renderPeerEvidenceTiles(info.number);
@@ -2071,7 +2097,7 @@ async function runPeerVisualReview() {
   }
   const uniqueLedgerFacts = new Map();
   (peerReview.evidenceLedger || []).forEach(fact => {
-    const key = `${Number(fact.page || 0)}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
+    const key = `${Number(fact.page || 0)}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.objectIdentifier || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
     if (!uniqueLedgerFacts.has(key)) uniqueLedgerFacts.set(key, fact);
   });
   peerReview.evidenceLedger = Array.from(uniqueLedgerFacts.values());
@@ -2097,6 +2123,31 @@ async function runPeerVisualReview() {
   if (engineerPatternImages.length) {
     try {
       let patternCandidates = [];
+      if (peerReview.cadData && nativeEvidenceFacts.length) {
+        const nativeSweepCacheKey = "Native CAD coordination";
+        const cachedNativeSweep = peerReview.disciplineSweepCache[nativeSweepCacheKey];
+        try {
+          let nativeCandidates;
+          if (Array.isArray(cachedNativeSweep)) {
+            nativeCandidates = cachedNativeSweep.map(item => ({ ...item }));
+            recordPeerAnalysisMessage(`Reused ${nativeCandidates.length} cached native-CAD coordination candidate${nativeCandidates.length === 1 ? "" : "s"}.`);
+          } else {
+            setPeerAnalysisProgress("running", "Comparing exact native CAD facts and dimensions in one fast text-only coordination pass.");
+            const rawNativeCandidates = await requestPeerNativeCadCoordinationAnalysis(nativeEvidenceFacts, peerReview.cadData);
+            nativeCandidates = retainPeerGroundedReviewPrompts(rawNativeCandidates);
+            peerReview.disciplineSweepCache[nativeSweepCacheKey] = nativeCandidates.map(item => ({ ...item }));
+            savePeerReview(false);
+            await persistPeerAnalysisCache();
+            recordPeerAnalysisMessage(`Native CAD coordination retained ${nativeCandidates.length} of ${rawNativeCandidates.length} exact-source candidate${rawNativeCandidates.length === 1 ? "" : "s"}.`);
+          }
+          patternCandidates.push(...nativeCandidates);
+          peerReview.coverageReport.disciplineSweeps[nativeSweepCacheKey] = { status: "complete", candidates: nativeCandidates.length };
+        } catch (nativeSweepError) {
+          peerReview.coverageReport.disciplineSweeps[nativeSweepCacheKey] = { status: "incomplete", candidates: 0 };
+          recordPeerIncompleteCheck("Native CAD coordination sweep incomplete", nativeSweepError.message);
+          recordPeerAnalysisMessage(`The fast native-CAD coordination pass could not finish; all regional and discipline reviews will continue. ${nativeSweepError.message}`, true);
+        }
+      }
       recordPeerAnalysisMessage("Starting focused discipline sweeps directly; the redundant document overview is skipped for faster local-model throughput.");
       peerReview.coverageReport.candidatesGenerated += patternCandidates.length;
       const selectedRoles = new Set(peerReview.pages.map(page => getPeerDeterministicPageRole(page)));
@@ -2370,7 +2421,7 @@ async function requestPeerEvidenceLedgerExtraction(pageNumber, tiles = []) {
   if (!facts.length && failedBatches) throw new Error(`All ${failedBatches} evidence extraction batches failed on page ${pageNumber}.`);
   const seen = new Set();
   return facts.filter(fact => {
-    const key = `${fact.page}|${fact.sourceType}|${normalizePeerValue(fact.tag, "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
+    const key = `${fact.page}|${fact.sourceType}|${normalizePeerValue(fact.tag, "tag")}|${normalizePeerValue(fact.objectIdentifier, "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
     if (seen.has(key)) return false;
     seen.add(key); return true;
   });
@@ -2383,7 +2434,7 @@ async function requestPeerEvidenceLedgerBatch(pageNumber, tiles = []) {
   const pageInfo = peerReview.pages.find(page => Number(page.number) === Number(pageNumber)) || {};
   const pageRole = getPeerDeterministicPageRole(pageInfo);
   const roleChecklist = pageRole === "Equipment"
-    ? "Prioritize equipment tags, complete descriptions, directional qualifiers such as entrance/exit or front/rear, quantities, capacities, voltage, phase, horsepower, and tagged plan/elevation labels."
+    ? "Prioritize equipment tags, complete descriptions, directional qualifiers such as entrance/exit, front/rear, and left/right, explicit handed-unit counts, quantities, capacities, voltage, phase, horsepower, bracket/support lengths, mounting modes, rotation angles, custom part qualifiers, and tagged plan/elevation labels."
     : pageRole === "Plumbing"
       ? "Prioritize each named service, connection number, source/destination, pipe size, material, schedule, connection size, flow rate, valves, unions, drains, overflows, bulkheads, nozzle schedule values, and repeated equipment descriptions."
       : pageRole === "Electrical"
@@ -2399,6 +2450,7 @@ This is transcription, not peer-review judgment. Capture every clearly readable 
 
 For each fact:
 - tag: copy the exact equipment item, sub-item, circuit, connection, or other visible identifier when present; otherwise empty string.
+- objectIdentifier: copy a second explicit row/object identifier such as a pump ID, panel ID, circuit ID, connection number, or equipment code when present; otherwise empty string. Never create one from the row number alone.
 - object: copy the shortest specific visible equipment/service name. Preserve meaningful distinctions such as entrance activation eyes versus exit activation eyes, different control panels, pumps, tanks, arches, and wash-bay positions.
 - attribute: classify exactly what value represents. Keep pipe diameter, connection size, nozzle thread, and other unlike dimensions separate.
 - value: transcribe the complete visible value or description without deciding whether it is correct.
@@ -2408,7 +2460,7 @@ For each fact:
 
 Return at most 24 of the clearest facts in this tile batch. Prefer complete high-confidence facts from the focused coverage above over broad low-confidence transcription. Equipment descriptions must preserve directional qualifiers so swapped or misplaced activation-eye and control-panel labels can be compared later.
 
-Do not combine facts from different rows, infer hidden text, create findings, or copy a value from one tile into another location. Overlap may show the same fact twice; return it once using the clearest tile. Return JSON only.`;
+Do not combine facts from different rows, infer hidden text, create findings, or copy a value from one tile into another location. Distinct schedule rows may use the same generic object name; preserve their explicit tag or objectIdentifier so they are compared only when that identifier is shared. Overlap may show the same fact twice; return it once using the clearest tile. Return JSON only.`;
   let response;
   try {
     response = await fetchPeerLocalAi(session.access_token, {
@@ -2433,7 +2485,7 @@ Do not combine facts from different rows, infer hidden text, create findings, or
     fact.page = pageNumber;
     fact.tile = Number(fact.tile || 0);
     fact.confidence = Math.max(0, Math.min(1, Number(fact.confidence) || 0));
-    const key = `${fact.page}|${normalizePeerValue(fact.tag, "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}|${normalizePeerValue(fact.location)}`;
+    const key = `${fact.page}|${normalizePeerValue(fact.tag, "tag")}|${normalizePeerValue(fact.objectIdentifier, "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}|${normalizePeerValue(fact.location)}`;
     if (!allowedTiles.has(fact.tile) || !isPeerLedgerSourceAllowedOnPage(fact, pageInfo)) return false;
     if (!String(fact.object || fact.tag || "").trim() || !String(fact.value || "").trim() || !String(fact.location || "").trim() || /^(?:drawing area|page|unknown|not specified)$/i.test(String(fact.location).trim()) || seen.has(key)) return false;
     fact.location = `${String(fact.location).trim()} (tile ${fact.tile})`;
@@ -2672,6 +2724,54 @@ Tank bulkhead fittings are components, not separate tanks. Never use TBF1, TBFI,
   return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
 }
 
+async function requestPeerNativeCadCoordinationAnalysis(facts = [], cad = {}) {
+  const session = await getPeerLocalAiSession("Sign in with the Database login to compare native CAD evidence.");
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 45000);
+  const factLines = facts.slice(0, 420).map(fact => [
+    `PAGE ${Number(fact.page || 0)}`,
+    String(fact.sourceType || "Native CAD"),
+    `TAG ${String(fact.tag || fact.objectIdentifier || "none")}`,
+    `OBJECT ${String(fact.object || "unnamed")}`,
+    `ATTRIBUTE ${String(fact.attribute || "")}`,
+    `VALUE ${String(fact.value || "")}`,
+    `LOCATION ${String(fact.location || "")}`
+  ].join(" | ")).join("\n").slice(0, 30000);
+  const dimensionLines = (cad.dimensions || []).slice(0, 160).map(item =>
+    `PAGE ${Number(item.page || 0)} | DIMENSION HANDLE ${item.handle || "unknown"} | LAYER ${item.layer || "unknown"} | TEXT ${item.text || ""} | MEASUREMENT ${item.measurement || ""}`
+  ).join("\n").slice(0, 9000);
+  const prompt = `Review the exact native AutoCAD facts below for objective drawing coordination issues. This is a fast structured pass that supplements, but does not replace, the complete regional visual review.
+
+NATIVE TAGGED FACTS:
+${factLines || "No tagged facts were extracted."}
+
+NATIVE DIMENSIONS:
+${dimensionLines || "No native dimensions were extracted."}
+
+Return up to 12 distinct candidates. Compare only facts that share the same explicit tag or object identifier and the same attribute. A table or schedule title is not an object identifier. Never compare separate schedule rows, different components beneath one parent system, different equipment tags, pipe diameter versus fitting/nozzle size, or a dimension handle with another handle merely because their values differ.
+
+Use neutral COORDINATE wording for two conflicting values and requirement exactly "Coordinate repeated drawing information"; never choose which value is correct. Preserve genuine spelling errors, unresolved placeholders, conflicting tagged descriptions, quantities, capacities, electrical ratings, pipe specifications, repeated tagged dimensions, bracket/support lengths, mounting modes, rotations, and explicit left/right allocations. For a directional allocation, compare its exact counted sum with the scheduled quantity; an uncounted one-sided description is not a defect by itself. Do not claim a missing visual feature, clearance, lineweight problem, obstruction, or equipment placement from text alone; those remain the responsibility of the visual passes.
+
+Use only these categories: Dimension or label, Piping specification, Electrical coordination, Schedule or table. Every candidate must quote exact values and native locations. Return an empty findings array when the structured evidence does not establish a conflict. Return JSON only.`;
+  let response;
+  try {
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: "You are a conservative native-CAD coordination reviewer. Compare exact tagged facts only, preserve every grounded issue, and reject unrelated rows or subcomponents." }, { role: "user", content: prompt }],
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 16384, maxTokens: 2600, retryAttempt: 2
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error("Native CAD coordination exceeded 45 seconds.");
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Native CAD coordination returned ${response.status}.`);
+  const parsed = parsePeerJsonObject(payload.content);
+  if (!parsed || !Array.isArray(parsed.findings)) throw new Error("Native CAD coordination returned incomplete information.");
+  return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
+}
+
 async function requestPeerEngineerPatternAnalysis(pageImages = []) {
   const session = await getPeerLocalAiSession("Sign in with the Database login to run engineer coordination checks.");
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
@@ -2768,11 +2868,11 @@ async function requestPeerDisciplineAnalysis(pageImages = [], discipline = "Draw
   const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
   const disciplineChecks = {
     "Drawing coordination": `Compare title blocks, drawing and project numbers, revision information, sheet sequence, view names, repeated dimensions, chained-versus-overall dimensions, elevations, labels, leaders, callouts, line continuity, line weight, and references between plans, elevations, details, schedules, and diagrams. Check arithmetic only from fully readable values.`,
-    Equipment: `Compare the formal equipment list against plans, elevations, details, flow diagrams, power schedules, and callouts. Check exact tags, descriptions, quantities, capacities, model/service names, placement, access, orientation, proximity to related equipment, and whether repeated labels identify the same equipment consistently. Do not assume every schedule component needs a drawing callout.`,
+    Equipment: `Compare the formal equipment list against plans, elevations, details, flow diagrams, power schedules, and callouts. Check exact tags, descriptions, quantities, capacities, model/service names, placement, access, orientation, proximity to related equipment, bracket/support lengths, custom part qualifiers, mounting modes, rotation angles, and explicit left/right quantity allocations. Report only same-tag conflicts or exact allocation arithmetic; do not assume every schedule component needs a drawing callout.`,
     Plumbing: `Trace each readable service independently from source to destination. Compare pipe or hose size, material, schedule, connection type, valves, unions, check valves, drains, overflows, bulkheads, flow direction, and repeated connection numbers across diagrams and schedules. Distinguish pipe diameter, fitting size, nozzle thread size, and nozzle orifice; compare only like attributes.`,
     Electrical: `Compare one-lines, equipment power tables, control diagrams, panel or feeder labels, voltage, phase, full-load amperage, breaker or circuit information, conductor counts, wire sizes, grounding, circuit grouping, and equipment tags. Check whether repeated values for the same load agree. Do not recommend combining circuits unless a visible diagram, schedule, or note establishes that they are one feeder or packaged load.`,
     "Dimensions and clearances": `Check overall dimensions against readable chains, repeated plan/elevation dimensions, reference or parenthetical formatting, equipment spacing, access zones, working faces, maintenance paths, elevations, and dimension leaders. Without a printed or approved clearance requirement, retain a precisely located concern only as Engineer standard - confirm at confidence 0.55 or lower.`,
-    "Schedules and descriptions": `Compare equipment descriptions, activation-eye direction, entrance/exit and driver/passenger designations, quantities, capacities, models, connection rows, power rows, note wording, and drawing callouts for the same tag or object. Preserve directional qualifiers and report swapped or misplaced descriptions when both assignments are readable.`,
+    "Schedules and descriptions": `Compare equipment descriptions, activation-eye direction, entrance/exit, driver/passenger, and left/right designations, quantities and directional allocations, capacities, models, bracket/support lengths, custom part qualifiers, mounting modes, rotation angles, connection rows, power rows, note wording, and drawing callouts for the same explicit tag or object. Preserve directional qualifiers and report swapped, misplaced, or conflicting descriptions only when both assignments are readable.`,
     Constructability: `Inspect visible equipment arrangement, access routes, wet-area panel placement, pump-to-tank proximity, wall-mounted component notes, pipe routing, drain paths, installation space, and physical clashes. Use an explicit note or approved standard when available; otherwise keep a specific visible arrangement concern at confidence 0.55 or lower for engineer judgment.`
   };
   const prompt = `Perform an independent ${discipline} peer-review sweep of this complete clean drawing package.
@@ -3362,6 +3462,10 @@ async function openPeerPagePreview(pageNumber) {
 function getPeerSuggestedAnnotation(item = {}) {
   if (item.annotationText) return item.annotationText;
   const combined = `${item.issue || ""} ${item.details || ""}`;
+  if (item.source === "evidence-ledger" || /^Coordinate repeated drawing information$/i.test(String(item.requirement || ""))) {
+    const neutralIssue = /^Coordinate\b/i.test(String(item.issue || "")) ? String(item.issue) : `Coordinate the conflicting values for ${item.affectedObject || item.equipmentTag || "this item"}`;
+    return `${neutralIssue.replace(/[.]+$/, "").toUpperCase()}.`;
+  }
   const quotedSubject = String(item.details || "").match(/['"]([^'"]{3,80})['"]/)?.[1] || "";
   const subject = getPeerEquipmentShortDescription(item.listValue || item.comparedValue || quotedSubject || item.equipmentTag || "THIS ITEM").toUpperCase();
   if (/placeholder/i.test(item.issue) && (item.listValue || item.comparedValue)) return `REPLACE "${item.listValue || item.comparedValue}" WITH FINAL PROJECT VALUE.`;
