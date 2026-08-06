@@ -428,22 +428,41 @@ function runPeerCadTableQualityRules(tables = []) {
   tables.forEach(rawTable => {
     const table = structurePeerCadTable(rawTable);
     if (isPeerCadEquipmentTable(table)) return;
-    const placeholders = table.cells.filter(cell => cell.attribute === "part number"
-      && /(?:X{2,}|TBD|TO BE DETERMINED)/i.test(String(cell.value || ""))
+    const partNumberCells = table.cells.filter(cell => cell.attribute === "part number"
+      && String(cell.value || "").trim()
       && String(cell.tag || cell.directTag || "").trim());
+    const placeholders = partNumberCells.filter(cell => /(?:X{2,}|TBD|TO BE DETERMINED)/i.test(String(cell.value || "")));
     if (!placeholders.length) return;
     const tags = Array.from(new Set(placeholders.map(cell => String(cell.tag || cell.directTag || "").trim()).filter(Boolean)));
     const values = Array.from(new Set(placeholders.map(cell => String(cell.value || "").trim()).filter(Boolean)));
     const rows = Array.from(new Set(placeholders.map(cell => Number(cell.row) + 1))).sort((left, right) => left - right);
     const shownTags = tags.length > 8 ? `${tags.slice(0, 8).join(", ")}, and ${tags.length - 8} more` : tags.join(", ");
     const location = `Page ${Number(table.page || 1)}, ${table.title}, row${rows.length === 1 ? "" : "s"} ${rows.join(", ")}`;
+    const xPatternCounts = new Map();
+    placeholders.filter(cell => /X{2,}/i.test(String(cell.value || ""))).forEach(cell => {
+      const pattern = String(cell.value || "").trim().toUpperCase().replace(/X/g, "X");
+      xPatternCounts.set(pattern, (xPatternCounts.get(pattern) || 0) + 1);
+    });
+    const repeatedXPatternCount = Math.max(0, ...xPatternCounts.values());
+    const xPlaceholderCount = Array.from(xPatternCounts.values()).reduce((total, count) => total + count, 0);
+    const placeholderRatio = placeholders.length / Math.max(1, partNumberCells.length);
+    const likelyTemplateConvention = placeholders.length >= 3
+      && repeatedXPatternCount >= 3
+      && xPlaceholderCount / placeholders.length >= .8
+      && placeholderRatio >= .25;
     findings.push(createPeerFinding({
-      severity: "Warning", equipmentTag: tags.join(", "), source: "cad-table-quality", confidence: .99, verificationStatus: "verified",
+      severity: likelyTemplateConvention ? "Manual Review" : "Warning", equipmentTag: tags.join(", "), source: "cad-table-quality",
+      confidence: likelyTemplateConvention ? .72 : .99, verificationStatus: likelyTemplateConvention ? "possible" : "verified",
+      verificationReason: likelyTemplateConvention ? "A standardized X-pattern repeats across a substantial portion of this component schedule, so the source proves the placeholders exist but does not prove that this project requires every value to be resolved." : "",
       evidenceType: "Unresolved placeholder", category: "Schedule or table", affectedObject: `${table.title} part-number cells`, page: Number(table.page || 0),
-      issue: `Replace unresolved part-number placeholders in ${table.title}`, listValue: values.join(", "), comparedValue: "Final approved part numbers",
+      issue: likelyTemplateConvention ? `Confirm the placeholder-part-number convention in ${table.title}` : `Replace unresolved part-number placeholders in ${table.title}`,
+      listValue: values.join(", "), comparedValue: likelyTemplateConvention ? "Approved exception or resolved part numbers" : "Final approved part numbers",
       evidence: `${location} contains unresolved part-number placeholder${placeholders.length === 1 ? "" : "s"} for ${shownTags}.`,
-      requirement: "Issued component schedules should use resolved part numbers or explicit approved exceptions.",
-      details: `${placeholders.length} native part-number cell${placeholders.length === 1 ? "" : "s"} remain unresolved for ${shownTags}.`, location
+      requirement: likelyTemplateConvention ? "Confirm whether the repeated placeholder format is an approved project convention; replace only values that are required to be final." : "Issued component schedules should use resolved part numbers or explicit approved exceptions.",
+      details: likelyTemplateConvention
+        ? `${placeholders.length} native part-number cells use a repeated template-style placeholder for ${shownTags}. Confirm the schedule convention before treating every cell as a defect.`
+        : `${placeholders.length} native part-number cell${placeholders.length === 1 ? "" : "s"} remain unresolved for ${shownTags}.`,
+      location
     }));
   });
   return findings;
@@ -950,11 +969,13 @@ function isPeerFindingSelfNegating(item = {}) {
     .map(value => String(value || ""))
     .join(" ")
     .replace(/\s+/g, " ");
+  const explicitNeutralConflict = hasPeerExplicitVisualComparison(item)
+    && /\b(?:COORDINATE|VERIFY|CONFLICT|MISMATCH|INCONSISTENT|DIFFERENT)\b/i.test(String(item.issue || ""));
   if (/\b(?:label(?:s)?|callout(?:s)?|value(?:s)?|rating(?:s)?|dimension(?:s)?) (?:are|is|appear|appears) (?:fully )?(?:consistent|matching|identical|the same)\b/i.test(combined)) return true;
   if (/\bno (?:visible )?(?:conflict|mismatch|discrepancy|inconsistency)(?: exists| is shown| is visible)?\b/i.test(combined)) return true;
-  if (/\b(?:not|isn't|is not) (?:a )?(?:(?:confirmed|supported|visible) )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not (?:visibly )?(?:show|confirm|support|establish) (?:a )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not constitute (?:a )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\blacks? (?:confirmed|visible|source) evidence.{0,80}\b(?:defect|correction|conflict|mismatch|discrepancy)\b|\brequired correction was not confirmed\b|\bacceptable variation\b|\bno visible requirement\b.{0,160}\b(?:mandates?|requires?|establishes?)\b/i.test(combined)) return true;
-  if (/\bmay be intentional\b.*\b(?:confirm|confirmation)\b/i.test(combined)) return true;
-  if (/\bmay need\b.*\b(?:confirm|confirmation)\b/i.test(combined)) return true;
+  if (/\b(?:not|isn't|is not) (?:a )?(?:(?:confirmed|supported|visible) )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not (?:visibly )?(?:show|confirm|support|establish) (?:a )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not constitute (?:a )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\blacks? (?:confirmed|visible|source) evidence.{0,80}\b(?:defect|correction|conflict|mismatch|discrepancy)\b|\brequired correction was not confirmed\b|\bacceptable variation\b|\bno visible requirement\b.{0,160}\b(?:mandates?|requires?|establishes?)\b/i.test(combined) && !explicitNeutralConflict) return true;
+  if (/\bmay be intentional\b.*\b(?:confirm|confirmation)\b/i.test(combined) && !explicitNeutralConflict) return true;
+  if (/\bmay need\b.*\b(?:confirm|confirmation)\b/i.test(combined) && !explicitNeutralConflict) return true;
   if (/\bUTILITY TRAY\b/i.test(combined) && /\bCURB RAIL\b/i.test(combined)) return true;
   if (/\bPROVIDED BY OWNER\b/i.test(combined) && /\b(?:NO|WITHOUT|LACKS?)\b.{0,100}\b(?:FORMAL )?(?:MAIN )?EQUIPMENT LIST\b/i.test(combined)) return true;
   if (/\bGFCI?\b/i.test(combined) && /\b(?:NO|WITHOUT|LACKS?)\b.{0,100}\b(?:EQUIPMENT|POWER) (?:ROW|LIST|TABLE|SCHEDULE|LINKAGE|REFERENCE)\b/i.test(combined)) return true;
@@ -963,8 +984,47 @@ function isPeerFindingSelfNegating(item = {}) {
   return false;
 }
 
+function hasPeerExplicitVisualComparison(item = {}) {
+  const issue = String(item.issue || ""), evidence = String(item.evidence || "");
+  const combined = `${issue} ${evidence}`.replace(/\s+/g, " ");
+  if (!/\b(?:CONFLICT|MISMATCH|INCONSISTENT|DIFFERENT|DIFFERS?|VERSUS|VS\.?|WHILE|BUT|WHEREAS|COORDINATE)\b/i.test(combined)) return false;
+  const quotedValues = Array.from(evidence.matchAll(/["“]([^"”\r\n]{1,120})["”]/g))
+    .map(match => normalizePeerValue(match[1]))
+    .filter(Boolean);
+  if (new Set(quotedValues).size >= 2) return true;
+  const ratedValues = Array.from(evidence.matchAll(/\b\d+(?:\.\d+)?\s*(?:HP|V|VAC|VDC|A|AMP|AMPS|PH|PSI|GPM|CFM|RPM|DEG(?:REE)?S?)\b/gi))
+    .map(match => normalizePeerValue(match[0]))
+    .filter(Boolean);
+  return new Set(ratedValues).size >= 2;
+}
+
+function isPeerNonConflictDisclaimerFinding(item = {}) {
+  const combined = [item.issue, item.evidence, item.details, item.requirement]
+    .map(value => String(value || ""))
+    .join(" ")
+    .replace(/\s+/g, " ");
+  const hasDrawingDisclaimer = /\b(?:FOR (?:DEPICTION|REFERENCE|SCHEMATIC|ILLUSTRATION) PURPOSES? ONLY|DOES NOT REPRESENT (?:THE )?ACTUAL|NOT TO SCALE|DIAGRAMMATIC(?:ALLY)? ONLY)\b/i.test(combined);
+  const claimsConflict = /\b(?:CONFLICT|MISMATCH|DISCREPANCY|INCONSISTEN|AMBIGU|MAY IMPLY|POTENTIAL(?:LY)? CONFUS)\w*\b/i.test(combined);
+  return hasDrawingDisclaimer && claimsConflict && !hasPeerExplicitVisualComparison(item);
+}
+
+function isPeerCrossScopeVisualComparison(item = {}) {
+  const combined = [item.issue, item.evidence, item.details, item.location, item.requirement]
+    .map(value => String(value || ""))
+    .join(" ")
+    .replace(/\s+/g, " ");
+  const buildings = new Set(Array.from(combined.matchAll(/\bBUILDING\s+([A-Z0-9]+)\b/gi)).map(match => match[1].toUpperCase()));
+  const bays = new Set(Array.from(combined.matchAll(/\bWASH\s+BAY\s+([A-Z0-9]+)\b/gi)).map(match => match[1].toUpperCase()));
+  const distinctScopes = buildings.size >= 2 || bays.size >= 2;
+  if (!distinctScopes) return false;
+  const treatsRepeatedTagAsSameObject = /\bSAME\s+(?:VALVE|COMPONENT|TAG|EQUIPMENT|DEVICE|INSTRUMENT|PUMP|TANK|PANEL)\b|\b(?:VALVE|COMPONENT|TAG|DEVICE|INSTRUMENT)\s+[A-Z]{1,8}[- ]?\d+[A-Z]?\b.{0,180}\b(?:ALSO|BOTH|REPEATED|DUPLICATE)\b/i.test(combined);
+  const projectWideIdentity = /\b(?:PROJECT-WIDE|GLOBAL|SAME PHYSICAL|SHARED ACROSS (?:BUILDINGS|BAYS))\b/i.test(String(item.requirement || ""));
+  return treatsRepeatedTagAsSameObject && !projectWideIdentity;
+}
+
 function isPeerFindingGrounded(item = {}) {
   if (isPeerFindingSelfNegating(item)) return false;
+  if (isPeerNonConflictDisclaimerFinding(item) || isPeerCrossScopeVisualComparison(item)) return false;
   if (item.source === "manual" || item.confidence === null || item.confidence === undefined) return true;
   if (item.source !== "visual-ai") return Boolean(Number(item.page || 0) && String(item.issue || "").trim() && (getPeerFindingEvidence(item) || item.listValue || item.comparedValue));
   return Boolean(Number(item.page || 0) && getPeerFindingAffectedObject(item) && getPeerFindingLocation(item) && getPeerFindingEvidence(item));
@@ -1347,4 +1407,4 @@ function runPeerEquipmentRules(rows = []) {
   return findings;
 }
 
-if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, runPeerCadTableQualityRules, runPeerCadTextSequenceRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, isPeerFindingSelfNegating, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };
+if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, runPeerCadTableQualityRules, runPeerCadTextSequenceRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, hasPeerExplicitVisualComparison, isPeerNonConflictDisclaimerFinding, isPeerCrossScopeVisualComparison, isPeerFindingSelfNegating, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };

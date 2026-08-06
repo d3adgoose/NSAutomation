@@ -173,6 +173,21 @@ assert(componentPlaceholderFindings[0].issue.includes("FITTINGS / VALVES / COMPO
 assert(componentPlaceholderFindings[0].evidence.includes("BV1") && componentPlaceholderFindings[0].evidence.includes("UN1"));
 assert.strictEqual(rules.runPeerCadTableQualityRules([multirowEquipmentTable]).length, 0, "Equipment-list placeholders must remain owned by the equipment quality rule");
 
+const conventionalPlaceholderTable = rules.structurePeerCadTable({
+  handle: "COMPONENT-CONVENTION", page: 4, cells: [
+    { row: 0, column: 0, value: "FITTINGS / VALVES / COMPONENTS TABLE" },
+    { row: 1, column: 0, value: "VALVE / FITTING TAG" }, { row: 1, column: 1, value: "DESCRIPTION" }, { row: 1, column: 2, value: "NS PART #" },
+    ...["BV1", "BV2", "UN1", "CV1"].flatMap((tag, index) => [
+      { row: index + 2, column: 0, value: tag }, { row: index + 2, column: 1, value: "COMPONENT" }, { row: index + 2, column: 2, value: "XXXX-XXXX" }
+    ]),
+    { row: 6, column: 0, value: "PG1" }, { row: 6, column: 1, value: "PRESSURE GAUGE" }, { row: 6, column: 2, value: "5014-0030" }
+  ]
+});
+const conventionalPlaceholderFinding = rules.runPeerCadTableQualityRules([conventionalPlaceholderTable])[0];
+assert.strictEqual(conventionalPlaceholderFinding.severity, "Manual Review", "A repeated template-style component placeholder should request confirmation instead of asserting that every row is defective");
+assert.strictEqual(conventionalPlaceholderFinding.verificationStatus, "possible");
+assert(conventionalPlaceholderFinding.issue.startsWith("Confirm"));
+
 const numberedSourceLabelFindings = rules.runPeerCadTextSequenceRules([
   { page: 3, handle: "P1", point: [100, 300], text: "FROM RO PUMP 1" },
   { page: 3, handle: "P2", point: [100, 200], text: "FROM RO PUMP 2" },
@@ -453,6 +468,32 @@ assert.strictEqual(rules.applyPeerEngineerVerifications([matchingDimensionCandid
   location: "Pages 1 and 2", reason: "No correction is needed."
 }], { retainUnsupported: true }).length, 0, "A verifier must not retain a mismatch when its own evidence says the values match");
 
+const uncertainExplicitConflict = {
+  issue: "Coordinate the horsepower values", affectedObject: "pump 6B", location: "Equipment List row 19",
+  evidence: `The equipment row shows "5HP" while the control description shows "10HP"; one value may be intentional, so confirm the intended rating.`,
+  requirement: "Engineer confirmation required", confidence: .4, evidenceType: "Objective visible mismatch"
+};
+assert.strictEqual(rules.hasPeerExplicitVisualComparison(uncertainExplicitConflict), true);
+assert.strictEqual(rules.isPeerFindingSelfNegating(uncertainExplicitConflict), false, "An explicit two-value conflict should survive as a neutral review prompt even when the intended correction is uncertain");
+assert.strictEqual(rules.isPeerFindingSelfNegating({ ...uncertainExplicitConflict, issue: "Verify the horsepower", evidence: `The row and control description both show "5HP"; no visible conflict exists.` }), true, "A finding that concludes the values match must still be discarded");
+
+const disclaimerPseudoConflict = {
+  source: "visual-ai", page: 3, affectedObject: "3000 gallon RO tank", location: "Building A tank schematic",
+  issue: "The tank label may imply a discrepancy with the note", evidence: `The tank is labeled "3000 GAL RO TANK" near the note "TANK BULKHEAD LOCATIONS ARE FOR DEPICTION PURPOSE ONLY AND DO NOT REPRESENT THE ACTUAL LOCATIONS".`,
+  requirement: "Engineer confirmation required", evidenceType: "Objective visible mismatch", confidence: .5
+};
+assert.strictEqual(rules.isPeerNonConflictDisclaimerFinding(disclaimerPseudoConflict), true, "A depiction-only bulkhead note must not be compared with an equipment identity label");
+assert.strictEqual(rules.isPeerFindingGrounded(disclaimerPseudoConflict), false);
+
+const crossBuildingTagComparison = {
+  source: "visual-ai", page: 3, affectedObject: "SV1", location: "Building A and Building B, Wash Bay 1",
+  issue: "Coordinate the same valve SV1", evidence: `Building A shows valve SV1 at "FROM RECLAIM PUMP 1", while Building B also shows valve SV1 at "FROM RO PUMP 2".`,
+  requirement: "Coordinate repeated drawing information", evidenceType: "Objective visible mismatch", confidence: .7
+};
+assert.strictEqual(rules.isPeerCrossScopeVisualComparison(crossBuildingTagComparison), true, "A local component tag repeated in distinct buildings must not establish that both symbols are the same physical object");
+assert.strictEqual(rules.isPeerFindingGrounded(crossBuildingTagComparison), false);
+assert.strictEqual(rules.isPeerCrossScopeVisualComparison({ ...crossBuildingTagComparison, requirement: "Project-wide tags identify the SAME PHYSICAL valve shared across buildings" }), false, "An explicit project-wide identity requirement may establish a cross-scope comparison");
+
 const unsupportedDrainCandidate = {
   source: "visual-ai", page: 2, location: "Flow layout", confidence: .35,
   category: "Drain or overflow", affectedObject: "Reclaim tank", issue: "ADD DRAIN",
@@ -512,6 +553,7 @@ assert.strictEqual(prioritizedFindings.length, 12, "Possible findings should be 
 assert.strictEqual(prioritizedFindings.filter(item => item.verificationStatus === "verified").length, 5);
 
 const peerReviewSource = fs.readFileSync(path.join(__dirname, "..", "peer-review.js"), "utf8");
+assert.strictEqual((peerReviewSource.match(/equipmentTag: item\.equipmentTag, issue: item\.issue/g) || []).length, 2, "Both calibrated-finding handoffs must preserve equipment tags before final deduplication");
 assert(peerReviewSource.includes("Reviewing the left and right halves"));
 assert(peerReviewSource.includes("/\\bPARTS LIST\\b/i.test(combined)"));
 assert(peerReviewSource.includes("Regional requests cannot prove document-wide absence"));
@@ -568,6 +610,8 @@ assert(peerReviewSource.includes("supported ${supportedInBatch} of ${batchCandid
 assert(peerReviewSource.includes("retainPeerGroundedReviewPrompts"));
 assert(peerReviewSource.includes("isPeerUnsupportedMissingDesignFeature") && peerReviewSource.includes("if (isPeerUnsupportedMissingDesignFeature(item)) return false;"));
 assert(peerReviewSource.includes("strict automatic filter could not confirm the requirement or comparison"));
+assert(peerReviewSource.includes("FINDING ARRAY RULE") && peerReviewSource.includes("self-rejecting and ${retention.unsupported || 0} unsupported"));
+assert(peerReviewSource.includes('item.source !== "visual-ai" && item.evidenceType === "Objective visible mismatch"'), "Unverified regional visual findings must not be classified as Strong evidence solely from model confidence");
 assert(peerReviewSource.includes("mathematically )?correct"));
 assert(peerReviewSource.includes("highlySpeculative ? 0.1 : 0.25"));
 assert(peerReviewSource.includes("Return up to six distinct potential findings supported by exact visible evidence"));
@@ -694,7 +738,7 @@ assert(peerReviewHtml.includes('onclick="openPeerExportModal()"') && peerReviewH
 assert(peerReviewHtml.includes('name="peerCompleteLearning" value="yes"') && peerReviewHtml.includes('name="peerCompleteLearning" value="no"'));
 assert(peerReviewHtml.includes('id="peerCompleteDrawingExport"') && peerReviewHtml.includes('id="peerCompleteReportExport"') && peerReviewHtml.includes('id="peerCompleteExcelExport"'));
 assert(peerReviewHtml.includes('id="peerDatabaseKnowledgeToggle"'));
-assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("reusable-revision-patterns-v4"));
+assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("visual-relationship-validation-v1"));
 assert(peerReviewSource.includes("peerReview.findings = (peerReview.findings || []).filter(item => !isPeerFindingSelfNegating(item))"));
 assert(peerReviewHtml.includes("Recheck CAD Table") && peerReviewSource.includes("refreshPeerCadTableFindings"));
 assert(peerReviewHtml.includes("Engineering DWG or PDF") && peerReviewHtml.includes(".dwg"));

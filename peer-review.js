@@ -12,7 +12,7 @@ const PEER_DATABASE_KNOWLEDGE_ENABLED_KEY = "ns-peer-review-database-knowledge-e
 const PEER_PARTS_STORAGE_KEY = "nsPartsDatabaseV1";
 const PEER_DATABASE_TABLES = Object.freeze({ master: "parts_master", aliases: "part_number_aliases", usage: "drawing_usage", documents: "documents" });
 const PEER_DATABASE_DOCUMENTS_BUCKET = "document-library";
-const PEER_AI_ANALYSIS_CACHE_VERSION = "20260806-reusable-revision-patterns-v7";
+const PEER_AI_ANALYSIS_CACHE_VERSION = "20260806-visual-relationship-validation-v1";
 const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-native-dwg-ledger-v3";
 const COMPANY_AI_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
 const COMPANY_AI_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
@@ -1824,7 +1824,9 @@ function classifyPeerFindingTier(item = {}) {
   if (item.verificationStatus === "possible" && confidence <= .25) return "Review idea";
   const hasEvidence = Boolean(String(item.evidence || item.details || item.listValue || item.comparedValue || "").trim());
   const hasLocation = Boolean(String(item.location || "").trim() || Number(item.page));
-  const objective = item.verificationStatus === "verified" || (item.evidenceType === "Objective visible mismatch" && confidence >= .65) || (item.severity === "Error" && (item.listValue || item.comparedValue));
+  const objective = item.verificationStatus === "verified"
+    || (item.source !== "visual-ai" && item.evidenceType === "Objective visible mismatch" && confidence >= .65)
+    || (item.source !== "visual-ai" && item.severity === "Error" && (item.listValue || item.comparedValue));
   if (objective) return "Confirmed";
   if (hasEvidence && hasLocation) return "Evidence-located";
   return "Review idea";
@@ -2087,7 +2089,8 @@ async function runPeerVisualReview() {
         evidence: item.evidence, requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
       })));
       const acceptedCount = acceptedRegionalFindings.length;
-      recordPeerAnalysisMessage(`Page ${info.number} visual review ${incompleteRegions.length ? "partially completed" : "completed"} with ${acceptedCount} potential item${acceptedCount === 1 ? "" : "s"} across all confidence levels.`);
+      const retention = acceptedRegionalFindings.retentionStats || {};
+      recordPeerAnalysisMessage(`Page ${info.number} visual review ${incompleteRegions.length ? "partially completed" : "completed"} with ${acceptedCount} potential item${acceptedCount === 1 ? "" : "s"} across all confidence levels (${retention.strict || 0} direct, ${retention.fallback || 0} evidence-located review prompt${retention.fallback === 1 ? "" : "s"}; ${retention.selfNegating || 0} self-rejecting and ${retention.unsupported || 0} unsupported candidate${retention.unsupported === 1 ? "" : "s"} removed).`);
     } catch (error) {
       console.warn(`Visual review failed for page ${info.number}:`, error);
       peerReview.coverageReport.uncoveredAreas.push(`Page ${info.number}, visual review incomplete`);
@@ -2107,12 +2110,14 @@ async function runPeerVisualReview() {
   if (useCalibratedFastPath) {
     calibratedProjectFindings.forEach(item => findings.push(createPeerFinding({
       severity: item.confidence < .78 ? "Manual Review" : item.severity,
-      issue: item.issue,
+      equipmentTag: item.equipmentTag, issue: item.issue,
+      listValue: item.listValue, comparedValue: item.comparedValue,
       details: `${item.evidence}${item.requirement ? ` Required reference: ${item.requirement}.` : ""}${item.location ? ` Location: ${item.location}.` : ""} Evidence: ${item.evidenceType}.`,
       page: item.page, source: "visual-ai", confidence: item.confidence,
       verificationStatus: item.verificationStatus || "verified", verificationReason: item.verificationReason || "",
       category: item.category, affectedObject: item.affectedObject, evidence: item.evidence,
-      requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
+      requirement: item.requirement, location: item.location, evidenceType: item.evidenceType,
+      reviewTier: item.reviewTier, relatedPages: item.relatedPages
     })));
     recordPeerAnalysisMessage(`Matched the approved same-project review and restored ${calibratedProjectFindings.length} engineer-reviewed targets without running redundant extended AI passes.`);
     peerReview.coverageReport.candidatesGenerated += calibratedProjectFindings.length;
@@ -2332,12 +2337,14 @@ async function runPeerVisualReview() {
       }
       patternFindings.forEach(item => findings.push(createPeerFinding({
         severity: item.confidence < .78 ? "Manual Review" : item.severity,
-        issue: item.issue,
+        equipmentTag: item.equipmentTag, issue: item.issue,
+        listValue: item.listValue, comparedValue: item.comparedValue,
         details: `${item.evidence}${item.requirement ? ` Required reference: ${item.requirement}.` : ""}${item.location ? ` Location: ${item.location}.` : ""}${item.verificationStatus === "possible" ? ` Verification note: ${item.verificationReason} Treat this as a review idea, not a confirmed defect.` : ""} Evidence: ${item.evidenceType}.`,
         page: item.page, source: "visual-ai", confidence: item.confidence,
         verificationStatus: item.verificationStatus || "unverified", verificationReason: item.verificationReason || "",
         category: item.category, affectedObject: item.affectedObject, evidence: item.evidence,
-        requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
+        requirement: item.requirement, location: item.location, evidenceType: item.evidenceType,
+        reviewTier: item.reviewTier, relatedPages: item.relatedPages
       })));
       recordPeerAnalysisMessage(`Document-level engineer coordination found ${patternCandidates.length} candidate${patternCandidates.length === 1 ? "" : "s"}; ${patternFindings.length} distinct source-checked item${patternFindings.length === 1 ? " was" : "s were"} retained.`);
     } catch (patternError) {
@@ -2528,6 +2535,7 @@ function filterPeerVisualFindings(items) {
     if (!String(item.requirement || "").trim()) item.requirement = "Engineer confirmation required";
     item.confidence = Math.max(0, Math.min(1, Number(item.confidence) || 0));
     if (item.evidenceType === "Explicit reviewer correction" || item.existingCommentVisible) return false;
+    if (isPeerNonConflictDisclaimerFinding(item) || isPeerCrossScopeVisualComparison(item)) return false;
     if (!allowedTypes.has(item.evidenceType)) item.evidenceType = "Objective visible mismatch";
     const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
     if (item.evidenceType === "Unresolved placeholder" && !/\b(?:TBD|TBC|UNKNOWN|VERIFY|PLACEHOLDER)|\?{2,}/i.test(combined)) return false;
@@ -2617,11 +2625,14 @@ async function requestPeerVisualAnalysis(pageNumber, imageInput, retryAttempt = 
       ? "Review only flow, plumbing, connection, pipe/hose/tubing, material, schedule, valve, union, drain, overflow, nozzle, and service-label coordination on this page. Do not perform equipment-list completeness or electrical-circuit checks here."
       : selectedRole === "Electrical"
         ? "Review only power, circuit, feeder, conductor, voltage, phase, amperage, breaker, control-panel, one-line, wiring-note, and electrical-schedule coordination on this page. Do not perform plumbing-flow or equipment-list completeness checks here."
-        : "Review general drawing coordination, title blocks, dimensions, labels, leaders, linework, notes, and references on this page. Do not assume an Equipment, Plumbing, or Electrical discipline that the reviewer did not assign.";
+      : "Review general drawing coordination, title blocks, dimensions, labels, leaders, linework, notes, and references on this page. Do not assume an Equipment, Plumbing, or Electrical discipline that the reviewer did not assign.";
+  const findingArrayRule = `FINDING ARRAY RULE: Never use a finding object to describe a check that passed, matching values, no visible conflict, no defect, or a merely hypothetical concern; omit that object entirely. When two exact readable values for the same named object and same attribute differ, return a neutral COORDINATE finding even if either value could be intentional. Quote both values and both precise locations, set requirement to "Coordinate repeated drawing information," and lower confidence when the intended correction is unknown. A note saying geometry, bulkhead locations, or a schematic is for depiction/reference only or does not represent actual locations is a drawing disclaimer, not a conflict with the nearby equipment label. Treat equipment and component instances in different buildings or wash bays as different physical objects; a repeated local component tag alone does not establish a project-wide conflict.`;
   const compactPrompt = `Review the supplied ${selectedRole} region from page ${pageNumber} of a clean N/S Corporation engineering drawing.
 
 AUTHORITATIVE REVIEW CATEGORY: ${selectedRole}
 ${roleChecklist}
+
+${findingArrayRule}
 
 Return up to six distinct potential findings supported by exact visible evidence. Check every readable note, callout, tag, value, quantity, dimension, leader, and applicable table entry in this region. Keep an honestly low-confidence item when a specific visible condition is worth engineer review, but never invent a requirement, missing object, conflict, or correction.
 
@@ -2636,6 +2647,8 @@ Return one complete JSON object only. Include every required property; use empty
 
 AUTHORITATIVE REVIEW CATEGORY: ${selectedRole}
 ${roleChecklist}
+
+${findingArrayRule}
 
 Perform the review independently. No reviewer comments, redlines, corrected revision, or answer key will be supplied. You are creating the proposed review annotations from the original drawing. Retain only issues supported by explicit visible evidence: an unresolved UNKNOWN/TBD/placeholder, an objective visible mismatch between two readable values/callouts, a quantity or equipment-count mismatch between a table and the plan/elevation views, a conflicting dimension between views, a missing clearance or access dimension explicitly required by a visible note or approved company knowledge, or a required reference explicitly demanded by a readable note but absent from the same visible region. Write each issue as a concise, actionable proposed annotation and state the exact visible evidence and location. Do not decide that equipment is missing from the drawing; a separate document-wide rule performs that check after all regions and pages are merged.
 
@@ -2831,6 +2844,7 @@ Use approved examples and excerpts only as a checklist and source of company req
 }
 
 function retainPeerGroundedReviewPrompts(items = []) {
+  const selfNegating = items.filter(item => isPeerFindingSelfNegating(item));
   const eligible = items.filter(item => !isPeerFindingSelfNegating(item));
   const strict = filterPeerVisualFindings(eligible);
   const retained = new Set(strict);
@@ -2839,6 +2853,7 @@ function retainPeerGroundedReviewPrompts(items = []) {
     if (![item.issue, item.affectedObject, item.evidence, item.location].every(value => String(value || "").trim())) return false;
     if (/^(?:drawing area|page\s*\d*|unknown|not specified)$/i.test(String(item.location).trim())) return false;
     if (isPeerUnsupportedMissingDesignFeature(item)) return false;
+    if (isPeerNonConflictDisclaimerFinding(item) || isPeerCrossScopeVisualComparison(item)) return false;
     const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
     if (/\b(?:mathematically )?correct\b|\bvalues? (?:sum|total) to the (?:same|shown)\b|\bno (?:correction|change) (?:is )?(?:needed|required)\b/i.test(combined)) return false;
     return true;
@@ -2858,7 +2873,12 @@ function retainPeerGroundedReviewPrompts(items = []) {
         : "The visual source and location were identified, but the strict automatic filter could not confirm the requirement or comparison."
     };
   });
-  return mergePeerDuplicateFindings([...strict, ...fallback]);
+  const merged = mergePeerDuplicateFindings([...strict, ...fallback]);
+  Object.defineProperty(merged, "retentionStats", { value: {
+    raw: items.length, strict: strict.length, fallback: fallback.length,
+    selfNegating: selfNegating.length, unsupported: Math.max(0, items.length - selfNegating.length - strict.length - fallback.length)
+  }, enumerable: false });
+  return merged;
 }
 
 async function requestPeerDisciplineAnalysis(pageImages = [], discipline = "Drawing coordination") {
