@@ -16,6 +16,151 @@ assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "MOVE THE CON
 assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "COMBINE THESE CIRCUITS", evidence: "Two circuits feed the same packaged brush system.", requirement: "The one-line identifies one system feeder." }), "Electrical coordination");
 assert.strictEqual(rules.inferPeerEngineerFindingCategory({ issue: "REVISE DESCRIPTION", evidence: "The equipment table description conflicts with the drawing callout.", requirement: "Use the matching tagged description." }), "Schedule or table");
 assert.strictEqual(rules.normalizePeerLedgerValue('1"', "pipe size"), rules.normalizePeerLedgerValue("1 inch", "pipe size"));
+assert.strictEqual(rules.cleanPeerCadCellValue(" | CONNECTION SIZE (%%C) | "), "CONNECTION SIZE ( DIA )");
+assert.strictEqual(rules.getPeerCoverageCompletionState({ pagesTotal: 1, pagesReviewed: 1, regionsExpected: 2, regionsReviewed: 2, disciplineSweeps: { Equipment: { status: "complete" } } }).state, "complete");
+const partialCoverage = rules.getPeerCoverageCompletionState({ pagesTotal: 1, pagesReviewed: 1, regionsFailed: 0, disciplineSweeps: { Equipment: { status: "incomplete" } }, incompleteChecks: [{ label: "Missing-target recheck timed out" }] });
+assert.strictEqual(partialCoverage.state, "partial");
+assert(partialCoverage.reasons.includes("Missing-target recheck timed out") && partialCoverage.reasons.includes("Equipment specialist sweep incomplete"));
+
+const cadConnectionTable = rules.structurePeerCadTable({
+  handle: "A100", page: 2, cells: [
+    { row: 0, column: 0, value: "CONNECTIONS TABLE" },
+    { row: 1, column: 0, value: "FLOW LINE #" },
+    { row: 1, column: 1, value: "DESCRIPTION" },
+    { row: 1, column: 2, value: "CONNECTION SIZE" },
+    { row: 2, column: 0, value: "17" },
+    { row: 2, column: 1, value: "FRESHWATER TANK SUPPLY" },
+    { row: 2, column: 2, value: '1"' }
+  ]
+});
+const cadFittingTable = rules.structurePeerCadTable({
+  handle: "B200", page: 3, cells: [
+    { row: 0, column: 0, value: "FITTINGS, VALVES, AND COMPONENTS TABLE" },
+    { row: 1, column: 0, value: "LOCATION OF FLOW LINE #" },
+    { row: 1, column: 1, value: "DESCRIPTION" },
+    { row: 1, column: 2, value: "CONNECTION SIZE" },
+    { row: 2, column: 0, value: "17" },
+    { row: 2, column: 1, value: "FRESHWATER TANK SUPPLY" },
+    { row: 2, column: 2, value: '3/4"' }
+  ]
+});
+const structuredConnectionSize = cadConnectionTable.cells.find(cell => cell.row === 2 && cell.column === 2);
+assert.strictEqual(structuredConnectionSize.heading, "CONNECTION SIZE");
+assert.strictEqual(structuredConnectionSize.tag, "17");
+assert.strictEqual(structuredConnectionSize.attribute, "connection size");
+const cadTableFindings = rules.runPeerCadTableComparisonRules([cadConnectionTable, cadFittingTable]);
+assert.strictEqual(cadTableFindings.length, 1, "Native CAD tables should deterministically flag the same tag and attribute when their values conflict");
+assert.strictEqual(cadTableFindings[0].source, "cad-table-comparison");
+assert.strictEqual(cadTableFindings[0].confidence, .98);
+const matchingCadFittingTable = rules.structurePeerCadTable({ ...cadFittingTable, cells: cadFittingTable.cells.map(cell => ({ ...cell, value: cell.row === 2 && cell.column === 2 ? '1"' : cell.value })) });
+assert.strictEqual(rules.runPeerCadTableComparisonRules([cadConnectionTable, matchingCadFittingTable]).length, 0, "Matching native CAD values must not become findings");
+
+const nativeEquipmentTable = rules.structurePeerCadTable({
+  handle: "EQ100", page: 1, cells: [
+    { row: 0, column: 0, value: "EQUIPMENT LIST - TO BE SUPPLIED BY NS" },
+    { row: 1, column: 0, value: "ITEM #" }, { row: 1, column: 1, value: "PART / ITEM DESCRIPTION" },
+    { row: 1, column: 2, value: "QTY." }, { row: 1, column: 3, value: "SUB ASM ITEM #" },
+    { row: 1, column: 4, value: "SUB ASM NS PART #" }, { row: 1, column: 5, value: "VOLTAGE" },
+    { row: 1, column: 6, value: "QTY. PER SUB-ASM" },
+    { row: 2, column: 0, value: "1" }, { row: 2, column: 1, value: "BRUSH SYSTEM PACKAGE" },
+    { row: 2, column: 2, value: "8" }, { row: 2, column: 3, value: "1A" },
+    { row: 2, column: 4, value: "ECO-100" }, { row: 2, column: 5, value: "480V-3PH" }, { row: 2, column: 6, value: "1" },
+    { row: 3, column: 0, value: "" }, { row: 3, column: 1, value: "" },
+    { row: 3, column: 2, value: "" }, { row: 3, column: 3, value: "1B" },
+    { row: 3, column: 4, value: "CTRL-100" }, { row: 3, column: 5, value: "480V-3PH" }, { row: 3, column: 6, value: "" },
+    { row: 4, column: 0, value: "2" }, { row: 4, column: 1, value: "FLOODER ARCH" },
+    { row: 4, column: 2, value: "8" }, { row: 4, column: 3, value: "---" },
+    { row: 4, column: 4, value: "FLOOD-ARCH" }, { row: 4, column: 5, value: "N/A" }, { row: 4, column: 6, value: "1" }
+  ]
+});
+const nativeEquipmentRows = rules.extractPeerCadEquipmentRows([nativeEquipmentTable]);
+assert.deepStrictEqual(nativeEquipmentRows.map(row => row.tag), ["1A", "1B", "2"]);
+assert.strictEqual(nativeEquipmentRows[1].description, "BRUSH SYSTEM PACKAGE", "Merged parent descriptions must carry into subassembly equipment rows");
+assert.strictEqual(nativeEquipmentRows[1].partNumber, "CTRL-100");
+assert.strictEqual(nativeEquipmentRows[1].quantity, "1", "Merged QTY. PER SUB-ASM values must carry into adjacent sibling rows");
+assert.strictEqual(nativeEquipmentRows[1].quantitySource, "merged-inherited");
+assert.strictEqual(rules.runPeerCadEquipmentQualityRules(nativeEquipmentRows).some(item => item.issue.includes("equipment quantity for 1B")), false, "A merged quantity must not become a blank-quantity finding");
+assert.strictEqual(nativeEquipmentRows[2].quantity, "1");
+const signatureOnlyEquipmentTable = rules.structurePeerCadTable({ ...nativeEquipmentTable, title: "", cells: nativeEquipmentTable.cells.filter(cell => cell.row !== 0) });
+assert.strictEqual(rules.isPeerCadEquipmentTable(signatureOnlyEquipmentTable), true, "Equipment tables must remain recognizable when a saved CAD record has lost its merged title cell");
+assert.strictEqual(rules.extractPeerCadEquipmentRows([signatureOnlyEquipmentTable]).length, 3, "Header signatures must recover equipment rows from older saved CAD table structures");
+
+const nativeEvidenceFacts = rules.extractPeerCadEvidenceFacts({ tables: [nativeEquipmentTable, cadConnectionTable] }, nativeEquipmentRows);
+assert(nativeEvidenceFacts.length >= 10, "Native equipment and schedule tables should seed the evidence ledger before visual AI runs");
+assert(nativeEvidenceFacts.every(fact => fact.source === "native-cad" && fact.location && fact.confidence === .99));
+assert(nativeEvidenceFacts.some(fact => fact.sourceType === "Equipment List" && fact.tag === "1A" && fact.attribute === "description"));
+assert(nativeEvidenceFacts.some(fact => fact.sourceType.includes("CONNECTIONS TABLE") && fact.tag === "17" && fact.attribute === "connection size"));
+
+const nativeMainCallouts = rules.extractPeerCadMainEquipmentCallouts({ callouts: [
+  { page: 1, tag: "1A", handle: "C1" }, { page: 1, tag: "1A", handle: "C1-DUP" },
+  { page: 3, tag: "1B", handle: "C2-WRONG-PAGE" }, { page: 2, tag: "2", handle: "C3" },
+  { page: 1, tag: "99", handle: "C4-NOT-IN-LIST" }
+] }, nativeEquipmentRows, [1, 2]);
+assert.deepStrictEqual(nativeMainCallouts.map(callout => callout.tag), ["1A", "2"], "Native callouts must be deduplicated, restricted to equipment pages, and matched to formal equipment-list tags");
+assert(nativeMainCallouts.every(callout => callout.source === "native-cad-callout" && callout.name));
+
+const equipmentQualityFindings = rules.runPeerCadEquipmentQualityRules([{
+  ...nativeEquipmentRows[0], quantity: "", partNumber: "XXXX-XXXX",
+  details: "5HP CONTROL PANEL - RECOMMENED CLEARANCE",
+  purpose: "10HP PUMP CONTROLS", rawValues: "SECTINO | RECOMMENED"
+}]);
+assert.strictEqual(equipmentQualityFindings.length, 5, "Native equipment quality rules should report placeholders, blank quantities, conflicting ratings, and each visible wording error");
+assert(equipmentQualityFindings.every(item => item.source === "cad-equipment-quality" && item.confidence === .99));
+assert(equipmentQualityFindings.some(item => item.issue.includes("part-number placeholder")));
+assert(equipmentQualityFindings.some(item => item.issue.includes("equipment quantity")));
+assert(equipmentQualityFindings.some(item => item.issue.includes("horsepower")));
+assert(equipmentQualityFindings.some(item => item.issue.includes('"SECTINO"')));
+
+const consolidatedPlaceholderFindings = rules.runPeerCadEquipmentQualityRules([
+  { ...nativeEquipmentRows[0], tag: "11", partNumber: "XXXX-XXXX" },
+  { ...nativeEquipmentRows[0], tag: "12", partNumber: "XXXX-XXXX" },
+  { ...nativeEquipmentRows[0], tag: "13", partNumber: "TBD" },
+  { ...nativeEquipmentRows[0], tag: "16", partNumber: "XXXX-XXXX", parentPartNumber: "XXXX-XXXX" }
+]);
+assert.strictEqual(consolidatedPlaceholderFindings.filter(item => item.evidenceType === "Unresolved placeholder").length, 1, "All affected equipment-list placeholder rows should be consolidated into one finding");
+assert(consolidatedPlaceholderFindings[0].issue.includes("11, 12, 13, and 16"), "The consolidated placeholder finding must identify every affected item");
+assert.strictEqual(consolidatedPlaceholderFindings[0].listValue, "XXXX-XXXX, TBD");
+assert.strictEqual(consolidatedPlaceholderFindings[0].comparedValue, "Final approved part number");
+
+const accurate3248QualityFindings = rules.runPeerCadEquipmentQualityRules([
+  { ...nativeEquipmentRows[0], tag: "11", nativeRowNumber: 29, partNumber: "XXXX-XXXX", rawValues: "XXXX-XXXX" },
+  { ...nativeEquipmentRows[0], tag: "1C", nativeRowNumber: 4, partNumber: "SCR-100", rawValues: "CURB RAIL SECTINO" },
+  { ...nativeEquipmentRows[0], tag: "5", nativeRowNumber: 14, description: "UTILITY TRAY", partNumber: "UT-ECO", rawValues: "SUPPORTED WITH A STANDS." },
+  { ...nativeEquipmentRows[0], tag: "6B", nativeRowNumber: 18, partNumber: "N/A", details: "5HP RECLAIM PUMP CONTROL PANEL", purpose: "10HP PUMP CONTROLS", rawValues: "5HP | 10HP" },
+  { ...nativeEquipmentRows[0], tag: "7", nativeRowNumber: 22, partNumber: "PMP-002RP", rawValues: "CUSTOM: ONE SHARED SKIDS" },
+  { ...nativeEquipmentRows[0], tag: "10", nativeRowNumber: 27, partNumber: "4008-0034", rawValues: "RECOMMENED: AXEON S-200" }
+]);
+assert.strictEqual(accurate3248QualityFindings.length, 6);
+assert.strictEqual(rules.prioritizePeerFindings(accurate3248QualityFindings, 36).length, 6, "Distinct CAD corrections on separate tagged equipment rows must survive final deduplication");
+
+const multirowEquipmentTable = rules.structurePeerCadTable({
+  handle: "EQ-MULTI", page: 1, cells: [
+    { row: 0, column: 0, value: "EQUIPMENT LIST - TO BE SUPPLIED BY NS" },
+    { row: 1, column: 0, value: "ITEM #" }, { row: 1, column: 1, value: "PART / ITEM DESCRIPTION" },
+    { row: 1, column: 2, value: "SUB ASM ITEM #" }, { row: 1, column: 3, value: "SUB ASM NS PART #" },
+    { row: 1, column: 4, value: "QTY. PER SUB-ASM" },
+    { row: 2, column: 0, value: "1" }, { row: 2, column: 1, value: "BRUSH SYSTEM PACKAGE" },
+    { row: 2, column: 2, value: "1C" }, { row: 2, column: 3, value: "SCR-100" }, { row: 2, column: 4, value: "52'-6\"" },
+    { row: 3, column: 0, value: "" }, { row: 3, column: 1, value: "" },
+    { row: 3, column: 2, value: "" }, { row: 3, column: 3, value: "SCR-100-1" }, { row: 3, column: 4, value: "" }
+  ]
+});
+assert.strictEqual(rules.runPeerCadTableComparisonRules([multirowEquipmentTable]).length, 0, "Sibling component lines beneath one merged equipment tag must not be treated as conflicting repeated values");
+
+[
+  { issue: "Verify utility tray length", evidence: `The utility tray is 16'-0\" while the curb rail is 18'-0\".` },
+  { issue: "Verify pump rating", evidence: "The pump label and callout are consistent, but no equipment list row confirms it." },
+  { issue: "Verify owner drum", evidence: "CHEMICAL DRUM (PROVIDED BY OWNER) has no formal main equipment list row." },
+  { issue: "Verify GFCI linkage", evidence: "GFCI symbols are shown without explicit reference to a corresponding equipment row." },
+  { issue: "Verify tank wiring", evidence: "SEE WIRING NOTE #7 may imply the tank requirements are not fully detailed." },
+  { issue: "Verify carbon filter access", evidence: "The CARBON FILTER has no visible clearance or access space.", requirement: "Engineer confirmation required" }
+].forEach(item => assert.strictEqual(rules.isPeerFindingSelfNegating(item), true, `Expected a non-defect observation to be rejected: ${item.issue}`));
+assert.strictEqual(rules.isPeerFindingSelfNegating({ issue: "Coordinate RO tank capacity", evidence: "The same RO tank is labeled 3000 GAL in plan and 4000 GAL in elevation.", requirement: "Coordinate repeated drawing information" }), false);
+assert.strictEqual(rules.isPeerFindingSelfNegating({
+  issue: "Verify - Correct the conflicting dimension or label at the overall tank outline",
+  evidence: "The source was located, but the required correction was not confirmed.",
+  verificationReason: "The proposed finding is not a confirmed defect because the drawing does not visibly show conflicting dimensions or labels and lacks confirmed evidence to support a defect."
+}), true, "A source-verification explanation that denies the proposed defect must never survive as a finding");
 
 const evidenceLedgerFindings = rules.runPeerEvidenceLedgerRules([
   { page: 1, discipline: "Equipment", sourceType: "Equipment List", tag: "4", object: "Activation eyes", attribute: "description", value: "Entrance activation eyes", location: "Equipment List row 4", confidence: .96 },
@@ -30,6 +175,16 @@ assert.strictEqual(evidenceLedgerFindings.length, 3, "The ledger should catch de
 assert(evidenceLedgerFindings.some(item => item.issue.includes("description") && item.equipmentTag === "4"));
 assert(evidenceLedgerFindings.some(item => item.category === "Piping specification"));
 assert(evidenceLedgerFindings.some(item => item.category === "Electrical coordination"));
+
+const unrelatedLedgerFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 1, sourceType: "Plan", tag: "CA3", object: "Wash bay", attribute: "length", value: `50'-0"`, location: "Building A CA3", confidence: .98 },
+  { page: 1, sourceType: "Plan", tag: "CA1", object: "Wash bay", attribute: "length", value: `52'-6"`, location: "Building A CA1", confidence: .98 },
+  { page: 5, sourceType: "Elevation", tag: "FS1", object: "Flow switch", attribute: "label", value: "FS1", location: "Reclaim system", confidence: .98 },
+  { page: 5, sourceType: "Elevation", tag: "FS3", object: "Flow switch", attribute: "label", value: "FS3", location: "Flooder arch", confidence: .98 },
+  { page: 3, sourceType: "Plan", object: "4000 GAL RECLAIM TANK", attribute: "capacity", value: "4000 GAL", location: "Reclaim plan", confidence: .98 },
+  { page: 5, sourceType: "Elevation", object: "4000 GAL RECLAIM TANK", attribute: "capacity", value: "4000 GAL.", location: "Reclaim elevation", confidence: .98 }
+]);
+assert.strictEqual(unrelatedLedgerFindings.length, 0, "Different tagged objects and punctuation-only value differences must not become conflicts");
 
 const equipment = rules.runPeerEquipmentRules([
   { tag: "P-101", manufacturer: "Acme", page: 2, presentColumns: ["tag", "manufacturer"] },
@@ -66,6 +221,13 @@ const sharedDrawingSeries = [
 ];
 assert(!rules.runPeerInitialRules(sharedDrawingSeries).some(item => item.issue.includes("duplicate drawing")));
 assert(!rules.runPeerNamingConventionRules(sharedDrawingSeries, "1543 - Example - Rev.0.pdf").some(item => item.issue.includes("duplicate drawing")));
+
+const uncertainOcrPrefixPages = [
+  { number: 1, drawingNumber: "WS-1.0", projectNumber: "3248", metadataConfidence: .98 },
+  { number: 2, drawingNumber: "WS-2.0", projectNumber: "3248", metadataConfidence: .98 },
+  { number: 3, drawingNumber: "FL-3.0", projectNumber: "3248", ocrApplied: true, metadataConfidence: .99 }
+];
+assert(!rules.runPeerNamingConventionRules(uncertainOcrPrefixPages, "3248 - Example.pdf").some(item => item.issue.includes("different naming prefix")), "An uncertain OCR title-block prefix must not become a confirmed naming defect");
 
 const repeatedDrawingSheet = sharedDrawingSeries.map(page => ({ ...page }));
 repeatedDrawingSheet[1].sheetNumber = 1;
@@ -203,6 +365,16 @@ assert.strictEqual(rules.applyPeerEngineerVerifications([unsupportedDrainCandida
   candidateIndex: 0, supported: false, confidence: .2,
   reason: "There is no visible evidence that a drain is required, and the equipment list does not specify a drain requirement."
 }], { retainUnsupported: true }).length, 0, "A prompt with explicitly absent evidence or requirement should not survive as a possible finding");
+const selfDisprovingMaterialCandidate = {
+  source: "visual-ai", page: 4, location: "Connections table and nozzle schedule", confidence: .55,
+  category: "Piping specification", affectedObject: "Freshwater rinse arch", issue: "Correct pipe size or material",
+  evidence: "The two schedules show different values.", requirement: "Coordinate repeated drawing information"
+};
+assert.strictEqual(rules.applyPeerEngineerVerifications([selfDisprovingMaterialCandidate], [{
+  candidateIndex: 0, supported: false, evidenceLocated: true, comparisonValid: true, page: 4,
+  evidence: "The values describe different system components.", location: "Page 4 schedules", confidence: .35,
+  reason: "The proposed finding is not a defect. It is an acceptable variation, and no visible requirement mandates that the values be identical."
+}], { retainUnsupported: true }).length, 0, "A verifier's explicit not-a-defect conclusion must discard the candidate");
 assert(verifiedAndPossibleFindings.some(item => item.issue.startsWith("Verify - ")));
 
 const broadVerificationCandidates = rules.selectPeerVerificationCandidates([
@@ -243,12 +415,12 @@ assert.strictEqual(prioritizedFindings.length, 12, "Possible findings should be 
 assert.strictEqual(prioritizedFindings.filter(item => item.verificationStatus === "verified").length, 5);
 
 const peerReviewSource = fs.readFileSync(path.join(__dirname, "..", "peer-review.js"), "utf8");
-assert(peerReviewSource.includes("retrying each half separately"));
+assert(peerReviewSource.includes("Reviewing the left and right halves"));
 assert(peerReviewSource.includes("/\\bPARTS LIST\\b/i.test(combined)"));
 assert(peerReviewSource.includes("Regional requests cannot prove document-wide absence"));
 assert(peerReviewSource.includes("if (claimsMissingCallout) return false"));
 assert(peerReviewSource.includes("PART / ITEM DESCRIPTION"));
-assert(peerReviewSource.includes("Reviewing both halves of page"));
+assert(peerReviewSource.includes("for reliable local-model throughput"));
 assert(peerReviewSource.includes("confidence 0.35 or higher"));
 assert(peerReviewSource.includes("openPeerRedlinePreview"));
 assert(peerReviewSource.includes("exportAcceptedPeerRedlines"));
@@ -265,6 +437,7 @@ assert(peerReviewSource.includes("removePeerAcceptedRedline"));
 assert(peerReviewSource.includes('item.status === "Accepted"'));
 assert(peerReviewSource.includes("togglePeerFindingAccepted"));
 assert(peerReviewSource.includes('if (!accepted && item.annotationAccepted) return removePeerAcceptedRedline(id)'));
+assert(peerReviewSource.includes('peerReview.findings.filter(item => item.status === "Accepted").map'));
 assert(peerReviewSource.includes("drawPeerPdfArrow"));
 assert(peerReviewSource.includes("applyPeerRedlineZoom"));
 assert(peerReviewSource.includes("changePeerRedlineZoom"));
@@ -273,7 +446,8 @@ assert(peerReviewSource.includes("redoPeerRedlineChange"));
 assert(peerReviewSource.includes("peerRedlineUndoStack"));
 assert(peerReviewSource.includes("requestPeerEngineerPatternAnalysis"));
 assert(peerReviewSource.includes("requestPeerDisciplineAnalysis"));
-assert(peerReviewSource.includes('"Dimensions and clearances", "Schedules and descriptions", "Constructability"'));
+assert(peerReviewSource.includes("AUTHORITATIVE REVIEW CATEGORY"));
+assert(peerReviewSource.includes("Review only equipment-list") && peerReviewSource.includes("Do not perform plumbing-flow or electrical-circuit checks here"));
 assert(peerReviewSource.includes('Coordinate repeated drawing information'));
 assert(peerReviewSource.includes("Do not compare unlike attributes such as pipe diameter versus nozzle thread or orifice size"));
 assert(peerReviewSource.includes("document-level engineer coordination"));
@@ -284,23 +458,63 @@ assert(peerReviewSource.includes("Source verification confirmed"));
 assert(peerReviewSource.includes("unsupported item") && peerReviewSource.includes("discarded"));
 assert(peerReviewSource.includes("retainUnsupported: true"));
 assert(peerReviewSource.includes("evidenceLocated") && peerReviewSource.includes("comparisonValid") && peerReviewSource.includes("requirementLocated"));
-assert(peerReviewSource.includes("unverified document-level candidates were discarded"));
+assert(peerReviewSource.includes("retained as low-confidence engineer review prompts instead of being discarded"));
+assert(peerReviewSource.includes("verificationBatchSize = 4"));
+assert(peerReviewSource.includes("failedDisciplineBatches"));
+assert(peerReviewSource.includes("failedVerificationBatches"));
+assert(peerReviewSource.includes("remaining detail-expansion batches will be skipped"));
+assert(peerReviewSource.includes("remaining missing-target batches will be skipped"));
+assert(peerReviewSource.includes("remaining ${discipline.toLowerCase()} batches will be skipped"));
+assert(peerReviewSource.includes("Skipped the missing-target recheck because detail-expansion batch 1 timed out"));
+assert(peerReviewSource.includes("Extra-detail review exceeded 60 seconds"));
+assert(peerReviewSource.includes("supported ${supportedInBatch} of ${batchCandidates.length}"));
+assert(peerReviewSource.includes("retainPeerGroundedReviewPrompts"));
+assert(peerReviewSource.includes("isPeerUnsupportedMissingDesignFeature") && peerReviewSource.includes("if (isPeerUnsupportedMissingDesignFeature(item)) return false;"));
+assert(peerReviewSource.includes("strict automatic filter could not confirm the requirement or comparison"));
+assert(peerReviewSource.includes("mathematically )?correct"));
+assert(peerReviewSource.includes("highlySpeculative ? 0.1 : 0.25"));
+assert(peerReviewSource.includes("Return up to six distinct potential findings supported by exact visible evidence"));
+assert(peerReviewSource.includes("if (peerCheckRunning) return showPeerToast"));
+assert(peerReviewSource.includes("peerCheckRunning = true"));
+assert(peerReviewSource.includes("info.evidenceLedgerCompleted && info.evidenceLedgerVersion === PEER_EVIDENCE_LEDGER_CACHE_VERSION"));
+assert(peerReviewSource.includes("Balanced review skipped the uncached high-resolution evidence ledger"));
+assert(peerReviewSource.includes("Reviewing the left and right halves"));
+assert(peerReviewSource.includes("info.visualAnalysisCompleted && info.visualAnalysisResult"));
+assert(peerReviewSource.includes("redundant document overview is skipped"));
+assert(peerReviewSource.includes("Optimized review enabled: page regions use a compact evidence pass"));
+assert(peerReviewSource.includes("Company knowledge and native CAD evidence are applied later during specialist review and source verification"));
+assert(peerReviewSource.includes("detailExpansionImages.length") && peerReviewSource.includes("instead of rescanning all"));
+assert(peerReviewSource.includes("PEER_AI_ANALYSIS_CACHE_VERSION"));
+assert(peerReviewSource.includes("peerReview.disciplineSweepCache[discipline]"));
+assert(peerReviewSource.includes("getPeerDisciplineTargetPageNumbers"));
+assert(peerReviewSource.includes("instead of rescanning every page"));
+assert(peerReviewSource.includes("disciplineImageBatchSize = 2"));
+assert(peerReviewSource.includes("maxTokens: 1800"));
 assert(peerReviewSource.includes("requestPeerEvidenceLedgerBatch(pageNumber, tiles.slice(start, start + 2))"));
 assert(peerReviewSource.includes("evidence extraction batch exceeded 75 seconds"));
+assert(peerReviewSource.includes("PEER_EVIDENCE_LEDGER_CACHE_VERSION") && peerReviewSource.includes("Building the high-resolution evidence ledger for page"));
+assert(peerReviewSource.includes("extractPeerCadEvidenceFacts") && peerReviewSource.includes("Native DWG evidence ledger indexed"));
+assert(peerReviewSource.includes("extractPeerCadMainEquipmentCallouts") && peerReviewSource.includes("Native DWG callout fallback matched"));
+assert(peerReviewSource.includes('type === "MULTILEADER"') && peerReviewSource.includes("callouts: callouts.length"));
 assert(peerReviewSource.includes("getPeerDeterministicPageRole"));
 assert(peerReviewSource.includes("credibleMainList"));
 assert(peerReviewSource.includes("claimsEquipmentCompleteness"));
 assert(peerReviewSource.includes("Possible - ${Math.round"));
+assert(peerReviewSource.includes("rightConfidence - leftConfidence"));
 assert(peerReviewSource.includes("requestPeerEngineerDetailExpansion"));
 assert(peerReviewSource.includes("buildPeerDocumentKnowledgeContext"));
 assert(peerReviewSource.includes("Expanding review detail"));
 assert(peerReviewSource.includes("PEER_FINDING_FEEDBACK_KEY"));
-assert(peerReviewSource.includes("recordPeerFindingFeedback(item, status)"));
+assert(!peerReviewSource.includes("recordPeerFindingFeedback(item, status);"), "Finding decisions must remain staged until the review is completed");
 assert(peerReviewSource.includes("savePeerAcceptedCorrectionsAsApprovedExamples"));
-assert(peerReviewSource.includes('trigger === "final-pdf"'));
+assert(peerReviewSource.includes("savePeerReviewDecisionsAsKnowledge"));
+assert(!peerReviewSource.includes('savePeerAcceptedCorrectionsAsApprovedExamples("final-pdf")'));
+assert(peerReviewSource.includes("async function completePeerReview()") && peerReviewSource.includes("buildPeerReviewedDrawingPdf(false)"));
+assert(peerReviewSource.includes('"completed drawing PDF"') && peerReviewSource.includes("completedExportName"));
 assert(peerReviewSource.includes("renderPeerStructuredFinding"));
 assert(peerReviewSource.includes("Confidence reason"));
-assert(peerReviewSource.includes("peerExportMarkedButton"));
+assert(peerReviewSource.includes("peerCompleteReportExport") && peerReviewSource.includes("peerCompleteExcelExport"));
+assert(peerReviewSource.includes("allowLearning ? savePeerReviewDecisionsAsKnowledge()") && peerReviewSource.includes("removePeerReviewDecisionsFromKnowledge"));
 assert(peerReviewSource.includes("accepted redline${accepted === 1"));
 assert(!peerReviewSource.includes('recordPeerFindingFeedback(item, "Accepted");'));
 assert(peerReviewSource.includes("one finding per affected object and location"));
@@ -317,15 +531,46 @@ assert(peerReviewSource.includes("Never confirm a finding and then explain that 
 assert(peerReviewSource.includes("Rechecking missing panel clearances, tank labels, and overall dimensions against the accepted peer-review examples"));
 assert(peerReviewSource.includes("A line-weight or broken-line observation never satisfies a reference-dimension target"));
 assert(peerReviewSource.includes("Matched the approved same-project review example"));
-assert(peerReviewSource.includes('const defaultCategory = number === 2 ? "Plumbing" : number === 3 ? "Electrical" : "Drawing"'));
+assert(peerReviewSource.includes('const defaultCategory = "Drawing"'));
+assert(peerReviewSource.includes("applyPeerCadSheetMetadata"));
+assert(peerReviewSource.includes("Applied native DWG sheet roles"));
+assert(peerReviewSource.includes("getPeerPageRoleRecommendation") && peerReviewSource.includes("Using the recommendation") && peerReviewSource.includes("Changed by you from"));
+assert(peerReviewSource.includes("extractPeerCadEquipmentRows") && peerReviewSource.includes("directly from the native AutoCAD equipment table"));
+assert(peerReviewSource.includes('/TITLE\\s*BLOCK|DRAWING\\s*BORDER/i'));
 assert(peerReviewSource.includes("useCalibratedFastPath"));
 assert(peerReviewSource.includes("without running redundant extended AI passes"));
 assert(peerReviewSource.includes("const columns = 2, rows = 2"));
-assert(peerReviewSource.includes('regionalEquipmentHint || getPeerDeterministicPageRole(info) === "Equipment"'));
+assert(peerReviewSource.includes('if (getPeerDeterministicPageRole(info) === "Equipment")'));
 assert(!peerReviewSource.includes("The callout list containing 1A through 7"));
 assert(!peerReviewSource.includes("Add review note"));
 assert(!peerReviewSource.includes('issue: "Drawing callout has no matching main equipment-list item"'));
-assert(peerReviewSource.includes("Rule check · confirm source"));
+assert(peerReviewSource.includes("PEER_DATABASE_KNOWLEDGE_ENABLED_KEY"));
+assert(peerReviewSource.includes("isPeerDatabaseKnowledgeEnabled"));
+assert(peerReviewSource.includes("savedPreference === null ? true"));
+assert(peerReviewSource.includes("refreshPeerDatabaseKnowledgeAccess(true)"));
+assert(peerReviewSource.includes("buildPeerDatabaseKnowledgeContext"));
+assert(peerReviewSource.includes("preloadPeerDatabaseKnowledge"));
+assert(peerReviewSource.includes("Company knowledge ready before drawing analysis"));
+assert(peerReviewSource.includes("PERSISTENT COMPANY PART KNOWLEDGE"));
+assert(peerReviewSource.includes("OCR-scanning ${pagesToScan.length} image-only page"));
+assert(peerReviewSource.includes("Page ${pageNumber} (OCR)"));
+assert(peerReviewSource.includes("imageOnlyPages.slice(0, 4)"));
+assert(peerReviewSource.includes("computePeerPdfFingerprint"));
+assert(peerReviewSource.includes("restorePeerPersistentAnalysisCache"));
+assert(peerReviewSource.includes("persistPeerAnalysisCache"));
+assert(peerReviewSource.includes("shouldPeerExpandOverviewReview"));
+assert(peerReviewSource.includes("two enlarged regional calls were avoided"));
+assert(peerReviewSource.includes("preparePeerDatabaseDocumentsForReview"));
+assert(peerReviewSource.includes("readPeerDatabaseDocumentText") && peerReviewSource.includes("mammoth.extractRawText"));
+assert(peerReviewSource.includes("handlePeerDwg") && peerReviewSource.includes("buildPeerCadData"));
+assert(peerReviewSource.includes("runPeerCadRules") && peerReviewSource.includes("Native CAD tag and table checks found"));
+assert(peerReviewSource.includes("buildPeerCadKnowledgeContext") && peerReviewSource.includes("Native DWG structured source"));
+assert(peerReviewSource.includes("PEER_CAD_STORE") && peerReviewSource.includes("putPeerCadData"));
+assert(peerReviewSource.includes("PEER_ANALYSIS_CACHE_STORE"));
+assert(peerReviewSource.includes("READ-ONLY DATABASE KNOWLEDGE"));
+assert(peerReviewSource.includes("Never report a missing component solely because it appears in the database"));
+assert(peerReviewSource.includes("numCtx: retryAttempt ? 12288 : images.length > 1 ? 24576 : 16384"));
+assert(peerReviewSource.includes("Rule check - confirm source"));
 const peerReviewHtml = fs.readFileSync(path.join(__dirname, "..", "peer-review.html"), "utf8");
 const peerReviewStyles = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8");
 assert(peerReviewHtml.includes('id="peerRedlineArrowMode"') && peerReviewHtml.includes('id="peerRedlineCommentMode"'));
@@ -337,10 +582,27 @@ assert(peerReviewHtml.includes('class="peer-export-option is-primary"') && peerR
 assert(peerReviewHtml.includes('id="peerMaximumSweep"') && peerReviewHtml.includes('id="peerCoverageSummary"'));
 assert(peerReviewHtml.includes('id="peerFindingTier"'));
 assert(peerReviewHtml.includes("Add Manual Comment") && peerReviewHtml.includes("noticed by an engineer that was not created by the AI"));
-assert(peerReviewHtml.includes('value="not-accepted">Not accepted') && peerReviewHtml.includes('value="accepted">Accepted'));
+assert(peerReviewHtml.includes("Only accepted findings appear here"));
+assert(peerReviewHtml.includes('value="not-accepted">Pending decision') && peerReviewHtml.includes('value="accepted">Accepted'));
+assert(peerReviewHtml.includes("Strong evidence:") && peerReviewHtml.includes("Source located:") && peerReviewHtml.includes("Needs judgment:"));
+assert(peerReviewSource.includes("getPeerFindingTierLabel") && peerReviewSource.includes('Confirmed: "Strong evidence"'));
 assert(peerReviewHtml.includes('onclick="savePeerRedline(true)">Save redline'));
+assert(peerReviewHtml.includes('onclick="openPeerExportModal()"') && peerReviewHtml.includes("Download selected files"));
+assert(peerReviewHtml.includes('name="peerCompleteLearning" value="yes"') && peerReviewHtml.includes('name="peerCompleteLearning" value="no"'));
+assert(peerReviewHtml.includes('id="peerCompleteDrawingExport"') && peerReviewHtml.includes('id="peerCompleteReportExport"') && peerReviewHtml.includes('id="peerCompleteExcelExport"'));
+assert(peerReviewHtml.includes('id="peerDatabaseKnowledgeToggle"'));
+assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("cad-table-json-v15"));
+assert(peerReviewSource.includes("peerReview.findings = (peerReview.findings || []).filter(item => !isPeerFindingSelfNegating(item))"));
+assert(peerReviewHtml.includes("Recheck CAD Table") && peerReviewSource.includes("refreshPeerCadTableFindings"));
+assert(peerReviewHtml.includes("Engineering DWG or PDF") && peerReviewHtml.includes(".dwg"));
+assert(peerReviewHtml.includes('onclick="openPeerDatabaseKnowledge()"'));
+assert(peerReviewHtml.includes("This connection only reads records. It never changes the database."));
 assert(peerReviewStyles.includes(".peer-finding-acceptance") && peerReviewStyles.includes(".peer-finding-card.is-accepted"));
 assert(peerReviewStyles.includes(".peer-redline-mode-options") && peerReviewStyles.includes(".peer-redline-mode.is-active"));
 assert(peerReviewStyles.includes(".peer-redline-arrow-toggle input:checked + span"));
 assert(peerReviewStyles.includes("width: min(1720px, 98vw)") && peerReviewStyles.includes("scroll-behavior: smooth"));
+assert(peerReviewStyles.includes(".peer-database-toggle input:checked + span"));
+assert(peerReviewStyles.includes(".peer-database-summary"));
+assert(peerReviewStyles.includes(".peer-finding-level-guide"));
+assert(peerReviewStyles.includes(".peer-learning-confirmation") && peerReviewStyles.includes(".peer-complete-review-modal"));
 console.log("Peer Review rule tests passed.");

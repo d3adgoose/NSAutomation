@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "purpose": "Engineer-reviewed DWG regression cases for measuring expected findings and known false positives.",
+  "activationRule": "Only cases with status engineer-approved are used as acceptance baselines. Candidate cases require an engineer decision before approval.",
+  "cases": [
+    {
+      "id": "2481-ehi-brooksville-rev0",
+      "drawing": "2481 - EHI Brooksville original.dwg",
+      "status": "engineer-approved",
+      "reviewedBy": "engineering reference review",
+      "pageCategories": {
+        "1": "Equipment",
+        "2": "Plumbing",
+        "3": "Electrical"
+      },
+      "expectedFindings": [
+        "SHOW TWO SEPARATELY LABELED TANKS",
+        "PROVIDE 3'-0\" CLEARANCE IN FRONT OF THE RO CONTROL PANEL",
+        "PROVIDE 3'-0\" CLEARANCE IN FRONT OF THE RECLAIM CONTROL PANEL",
+        "ADD A BALL VALVE HERE",
+        "ADD A DRAIN LINE HERE",
+        "ADJUST THE LINE WEIGHT",
+        "REVISE TO THE PARENTHETICAL REFERENCE DIMENSION (11'-0\")",
+        "LABEL 1500 GAL. RO TANK",
+        "LABEL 1500 GAL. RECLAIM TANK"
+      ],
+      "knownFalsePositives": []
+    },
+    {
+      "id": "3248-tlh-qta-rev0-candidate",
+      "drawing": "3248 - TLH QTA - Rev.0.dwg",
+      "status": "candidate-needs-engineer-review",
+      "reviewedBy": "",
+      "pageCategories": {},
+      "expectedFindings": [],
+      "knownFalsePositives": [
+        "Reporting item 3B as missing quantity when QTY. PER SUB-ASM is vertically merged with item 3A",
+        "Treating SCR-100 and SCR-100-1 sibling component lines under merged item 1C as conflicting repeated part numbers",
+        "Treating punctuation-only capacity text differences as conflicts",
+        "Comparing different equipment tags solely because their labels are nearby",
+        "Comparing a valve tag with an unrelated numeric connection size",
+        "Comparing different wash bays as though they were the same object",
+        "Treating a prior drawing as proof of a current requirement"
+      ]
+    }
+  ]
+}

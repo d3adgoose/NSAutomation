@@ -16,7 +16,9 @@ const PEER_CHECKLIST_RESPONSES = Object.freeze(["Pass", "Fail", "Not Applicable"
 const PEER_FIX_STATUSES = Object.freeze(["Not Started", "In Progress", "Fixed", "Needs Clarification", "Not Applicable"]);
 const PEER_EQUIPMENT_FIELDS = Object.freeze([
   ["tag", "Equipment Tag"], ["description", "Description"], ["quantity", "Quantity"],
-  ["manufacturer", "Manufacturer"], ["modelNumber", "Model Number"], ["partNumber", "Part Number"],
+  ["parentPartNumber", "NS Part #"], ["parentQuantity", "Assembly Qty."], ["partNumber", "Sub-Assembly NS Part #"],
+  ["details", "Equipment Details"], ["purpose", "Purpose"],
+  ["manufacturer", "Manufacturer"], ["modelNumber", "Model Number"],
   ["voltage", "Voltage"], ["phase", "Phase"], ["horsepower", "Horsepower"],
   ["amperage", "Amperage"], ["flowRate", "Flow Rate"], ["pressure", "Pressure"],
   ["pipeSize", "Pipe Size"], ["connectionSize", "Connection Size"]
@@ -70,6 +72,317 @@ function peerValuesEquivalent(left, right, field = "") {
   return normalizePeerValue(left, field) === normalizePeerValue(right, field);
 }
 
+function cleanPeerCadCellValue(value = "") {
+  return String(value || "")
+    .replace(/\\P/g, " ").replace(/%%C/g, " DIA ").replace(/\\U\+0278/gi, " PH ")
+    .replace(/\\[A-Za-z][^;]*;/g, "").replace(/[{}]/g, "")
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, "").replace(/\s+/g, " ").trim();
+}
+
+function getPeerCadCanonicalAttribute(heading = "", tableTitle = "") {
+  const header = cleanPeerCadCellValue(heading).toUpperCase();
+  const title = cleanPeerCadCellValue(tableTitle).toUpperCase();
+  if (/^(?:ITEM|ITEM #|ITEM NO\.?|ITEM NUMBER|TAG|EQUIPMENT TAG|SUB ASM ITEM #?|SUB ASSEMBLY ITEM #?|FLOW LINE #?|LOCATION(?: OF)?(?: \(ON)? FLOW LINE #?:?\)?|VALVE\s*\/\s*FITTING TAG|RUN #?|CONNECTION #?)$/.test(header)) return "tag";
+  if (/PART\s*\/\s*ITEM DESCRIPTION|EQUIPMENT DESCRIPTION|COMPONENT(?: DESCRIPTION)?|^DESCRIPTION(?:\s*\/\s*SPECIFICATIONS)?$|SYSTEM\s*\/\s*ARCH/.test(header)) return "description";
+  if (/^(?:QTY\.?|QUANTITY|COUNT|QTY\. OF CONTROL PANEL\(S\)|QTY\. PER SUB-ASM)$/.test(header)) return "quantity";
+  if (/^(?:VOLTAGE|SYSTEM POWER)(?:\b.*)?$/.test(header)) return "voltage";
+  if (/^PHASE$/.test(header)) return "phase";
+  if (/^(?:HORSEPOWER|HP)$/.test(header)) return "horsepower";
+  if (/^(?:F\.?L\.?A\.?|AMPERE|AMPERAGE)(?:\s*\([^)]*\))?$/.test(header) && !/C\/?B/.test(header)) return "amperage";
+  if (/^(?:C\/?B|CIRCUIT BREAKER|BREAKER)(?:\s*\([^)]*\))?$/.test(header)) return "breaker";
+  if (/^(?:MIN\.? )?PRESSURE(?: RATING)?(?:\s*\(PSI\))?$/.test(header)) return "pressure";
+  if (/^(?:ESTIMATED )?FLOW RATE(?: AND PRESSURE)?(?:\s*\([^)]*\))?$|^(?:GPM|CFM)$/.test(header)) return "flow rate";
+  if (/^CONNECTION SIZE(?:\s*\([^)]*\))?$/.test(header)) return "connection size";
+  if (/^CONDUIT(?: AND CABLE)? SIZE(?:\s*\([^)]*\))?$/.test(header)) return "conduit size";
+  if (/^NOZZLE (?:SIZE|TYPE)$|^ORIFICE(?: SIZE)?$/.test(header)) return "nozzle size";
+  if (/^(?:PIPE SIZE|LINE SIZE|SIZE)$/.test(header)) return /CONNECTION|FITTING|VALVE/.test(title) ? "connection size" : "pipe size";
+  if (/^MATERIAL$/.test(header)) return "material";
+  if (/^(?:(?:PIPE )?SCHEDULE|SCH\.?)$/.test(header)) return "schedule";
+  if (/^MODEL(?: NO\.?| NUMBER| #)?$/.test(header)) return "model number";
+  if (/^(?:(?:SUB ASM|SUB ASSEMBLY) )?(?:NS )?PART (?:NO\.?|NUMBER|#)$/.test(header)) return "part number";
+  if (/^FROM$/.test(header)) return "from";
+  if (/^TO$|TO BE POWERED BY/.test(header)) return "to";
+  return "";
+}
+
+function getPeerCadTagNamespace(heading = "", tableTitle = "") {
+  const combined = `${heading} ${tableTitle}`.toUpperCase();
+  if (/VALVE\s*\/\s*FITTING TAG|COMPONENT TAG/.test(String(heading).toUpperCase())) return "component-tag";
+  if (/EQUIPMENT TAG|(?:SUB ASM|SUB ASSEMBLY) ITEM|^ITEM(?: #| NO\.?| NUMBER)?$/.test(String(heading).toUpperCase())) return "equipment-item";
+  if (/RUN #|CONDUIT|CABLE SCHEDULE/.test(combined)) return "electrical-run";
+  if (/FLOW LINE|CONNECTIONS? TABLE|FITTINGS?.*VALVES?.*COMPONENTS?/.test(combined)) return "flow-line";
+  if (/ITEM|EQUIPMENT LIST/.test(combined)) return "equipment-item";
+  return normalizePeerValue(tableTitle).replace(/[^A-Z0-9]+/g, "-").slice(0, 60) || "table-row";
+}
+
+function structurePeerCadTable(table = {}) {
+  const cells = Array.isArray(table.cells) ? table.cells.map(cell => ({ ...cell, value: cleanPeerCadCellValue(cell.value) })) : [];
+  const rows = new Map();
+  cells.forEach(cell => { if (!rows.has(cell.row)) rows.set(cell.row, []); rows.get(cell.row)[cell.column] = cell; });
+  const orderedRows = Array.from(rows.entries()).sort((left, right) => left[0] - right[0]);
+  const firstValues = orderedRows.slice(0, 4).flatMap(([, values]) => values.filter(Boolean).map(cell => cell.value)).filter(Boolean);
+  const title = firstValues.find(value => /TABLE|SCHEDULE|EQUIPMENT LIST|POWER REQUIREMENT|ANCHOR BOLT/i.test(value)) || firstValues[0] || `CAD table ${table.handle || ""}`;
+  const headerCandidate = orderedRows.slice(0, 10).map(([row, values]) => ({
+    row, values,
+    recognized: values.filter(Boolean).map(cell => getPeerCadCanonicalAttribute(cell.value, title)).filter(Boolean).length
+  })).filter(item => item.recognized >= 2).sort((left, right) => right.recognized - left.recognized || left.row - right.row)[0];
+  const headings = new Map();
+  (headerCandidate?.values || []).forEach((cell, column) => {
+    const attribute = getPeerCadCanonicalAttribute(cell?.value, title);
+    if (attribute) headings.set(column, { heading: cell.value, attribute, row: headerCandidate.row });
+  });
+  const tagColumns = Array.from(headings.entries()).filter(([, value]) => value.attribute === "tag");
+  const tagColumnEntry = tagColumns.sort((left, right) => {
+    const priority = value => /(?:SUB ASM|SUB ASSEMBLY) ITEM/i.test(value.heading) ? 3 : /VALVE\s*\/\s*FITTING TAG|COMPONENT TAG|EQUIPMENT TAG|^ITEM(?: #| NO\.?| NUMBER)?$/i.test(value.heading) ? 2 : 1;
+    return priority(right[1]) - priority(left[1]);
+  })[0];
+  const tagColumn = tagColumnEntry?.[0], tagNamespace = getPeerCadTagNamespace(tagColumnEntry?.[1]?.heading || "", title);
+  const descriptionColumn = Array.from(headings.entries()).find(([, value]) => value.attribute === "description")?.[0];
+  const dataStart = headerCandidate ? headerCandidate.row + 1 : 1;
+  let inheritedTag = "", inheritedObject = "";
+  orderedRows.forEach(([row, values]) => {
+    if (row < dataStart) return;
+    const directTags = tagColumns.map(([column]) => cleanPeerCadCellValue(values[column]?.value || ""))
+      .filter(value => /^(?:\d+[A-Z]?|[A-Z]{1,8}[- ]?\d+[A-Z]?)$/i.test(value));
+    if (directTags[0]) inheritedTag = directTags[0];
+    const tag = directTags[0] || inheritedTag;
+    const directObject = descriptionColumn === undefined ? "" : cleanPeerCadCellValue(values[descriptionColumn]?.value || "");
+    if (directObject) inheritedObject = directObject;
+    const object = directObject || inheritedObject;
+    values.forEach((cell, column) => {
+      if (!cell) return;
+      const heading = headings.get(column);
+      cell.heading = heading?.heading || "";
+      cell.attribute = heading?.attribute || "";
+      cell.directTag = directTags[0] || "";
+      cell.tag = tag;
+      cell.object = object;
+      cell.tagNamespace = tagNamespace;
+    });
+  });
+  return { ...table, title, cells, structuredRows: orderedRows.length, structuredColumns: Math.max(0, ...cells.map(cell => Number(cell.column) + 1)) };
+}
+
+function isPeerCadEquipmentTable(table = {}) {
+  const normalizedTitle = normalizePeerValue(table.title).replace(/[^A-Z0-9]/g, "");
+  if (normalizedTitle.includes("EQUIPMENTLIST") && (normalizedTitle.includes("SUPPLIEDBYNS") || normalizedTitle.includes("NSSUPPLIED"))) return true;
+  const cellText = (table.cells || []).map(cell => cleanPeerCadCellValue(cell.value).toUpperCase()).join(" | ");
+  return /(?:^|\|)\s*ITEM\s*#/.test(cellText)
+    && /PART\s*\/\s*ITEM DESCRIPTION/.test(cellText)
+    && /SUB ASM ITEM\s*#/.test(cellText)
+    && /QTY\. PER SUB-ASM/.test(cellText);
+}
+
+function extractPeerCadEquipmentRows(tables = [], fallbackPage = 0) {
+  const rows = [];
+  tables.forEach(rawTable => {
+    // Rebuild even previously saved tables so parser improvements migrate old
+    // IndexedDB CAD data without requiring the user to upload the DWG again.
+    const table = structurePeerCadTable(rawTable);
+    if (!isPeerCadEquipmentTable(table)) return;
+    const byRow = new Map();
+    table.cells.forEach(cell => { if (!byRow.has(cell.row)) byRow.set(cell.row, []); byRow.get(cell.row).push(cell); });
+    let carriedParentPartNumber = "", carriedParentQuantity = "", carriedSubAssemblyQuantity = "", carriedEquipmentGroup = "";
+    Array.from(byRow.entries()).sort((left, right) => Number(left[0]) - Number(right[0])).forEach(([rowNumber, cells]) => {
+      const validTag = value => /^\d+[A-Z]?$/.test(cleanPeerCadCellValue(value).replace(/[\s-]/g, ""));
+      const parentItemCell = cells.find(cell => /^(?:ITEM|ITEM\s*#|ITEM NO\.?|ITEM NUMBER)$/i.test(String(cell.heading || "")));
+      const subAssemblyItemCell = cells.find(cell => /SUB ASM ITEM\s*#?/i.test(String(cell.heading || "")));
+      const directParentItem = cleanPeerCadCellValue(parentItemCell?.value || "").replace(/[\s-]/g, "");
+      const directSubAssemblyItem = cleanPeerCadCellValue(subAssemblyItemCell?.value || "").replace(/[\s-]/g, "");
+      const directTagValues = [
+        subAssemblyItemCell?.value,
+        parentItemCell?.value,
+        cells.find(cell => cell.directTag)?.directTag
+      ];
+      const tag = cleanPeerCadCellValue(directTagValues.find(validTag) || "").replace(/[\s-]/g, "");
+      const description = cleanPeerCadCellValue(cells.find(cell => cell.attribute === "description")?.object || cells.find(cell => cell.attribute === "description")?.value || "");
+      if (!/^\d+[A-Z]?$/.test(tag) || !description) return;
+      const valueByHeading = pattern => cleanPeerCadCellValue(cells.find(cell => pattern.test(String(cell.heading || "")))?.value || "");
+      const directSubAssemblyQuantity = valueByHeading(/QTY\. PER SUB-ASM/i);
+      const equipmentGroup = directParentItem || String(tag.match(/^\d+/)?.[0] || "") || carriedEquipmentGroup;
+      if (equipmentGroup && equipmentGroup !== carriedEquipmentGroup) carriedSubAssemblyQuantity = "";
+      if (equipmentGroup) carriedEquipmentGroup = equipmentGroup;
+      if (directSubAssemblyQuantity) carriedSubAssemblyQuantity = directSubAssemblyQuantity;
+      const inheritsMergedSubAssemblyQuantity = !directSubAssemblyQuantity
+        && Boolean(carriedSubAssemblyQuantity)
+        && Boolean(directSubAssemblyItem)
+        && /^\d+[A-Z]$/i.test(tag)
+        && String(tag.match(/^\d+/)?.[0] || "") === carriedEquipmentGroup;
+      const quantity = directSubAssemblyQuantity || (inheritsMergedSubAssemblyQuantity ? carriedSubAssemblyQuantity : "") || valueByHeading(/^(?:QTY\.?|QUANTITY)$/i);
+      const partNumber = valueByHeading(/(?:SUB ASM|SUB ASSEMBLY).*NS PART/i) || valueByHeading(/^(?:NS )?PART/i);
+      const voltage = cleanPeerCadCellValue(cells.find(cell => cell.attribute === "voltage")?.value || "");
+      const directParentPartNumber = valueByHeading(/^NS PART\s*(?:#|NO\.?|NUMBER)$/i);
+      const directParentQuantity = valueByHeading(/^(?:QTY\.?|QUANTITY)$/i);
+      if (directParentPartNumber) carriedParentPartNumber = directParentPartNumber;
+      if (directParentQuantity) carriedParentQuantity = directParentQuantity;
+      const parentPartNumber = directParentPartNumber || carriedParentPartNumber;
+      const parentQuantity = directParentQuantity || carriedParentQuantity;
+      const quantityPerCell = cells.find(cell => /QTY\. PER SUB-ASM/i.test(String(cell.heading || "")));
+      const quantityPerColumn = Number(quantityPerCell?.column);
+      const valueByColumn = column => cleanPeerCadCellValue(cells.find(cell => Number(cell.column) === column)?.value || "");
+      const details = valueByHeading(/^NS EQUIPMENT DETAILS DESCRIPTION$/i) || (Number.isFinite(quantityPerColumn) ? valueByColumn(quantityPerColumn - 2) : "");
+      const purpose = valueByHeading(/^PURPOSE OF EQUIPMENT$/i) || (Number.isFinite(quantityPerColumn) ? valueByColumn(quantityPerColumn - 1) : "");
+      const rawValues = cells.map(cell => cleanPeerCadCellValue(cell.value)).filter(Boolean).join(" | ");
+      const values = { tag, description, quantity, partNumber, voltage };
+      rows.push({
+        ...values, parentPartNumber, parentQuantity, details, purpose, rawValues, page: Number(table.page || fallbackPage || 0), source: "native-cad", sourceTable: "Main Equipment List", tableTitle: table.title,
+        nativeRowKey: `${table.handle || table.title}:${rowNumber}`, nativeTableHandle: table.handle || "", nativeRowNumber: Number(rowNumber),
+        logicalEquipmentGroup: carriedEquipmentGroup, quantitySource: directSubAssemblyQuantity ? "direct" : inheritsMergedSubAssemblyQuantity ? "merged-inherited" : quantity ? "parent" : "blank",
+        structureAmbiguous: inheritsMergedSubAssemblyQuantity,
+        presentColumns: ["tag", "description", "parentPartNumber", "parentQuantity", "partNumber", "voltage", "details", "purpose", "quantity"]
+      });
+    });
+  });
+  return rows;
+}
+
+function runPeerCadEquipmentQualityRules(rows = []) {
+  const findings = [];
+  const commonWordingCorrections = [
+    { pattern: /\bSECTINO\b/i, shown: "SECTINO", replacement: "SECTION" },
+    { pattern: /\bRECOMMENED\b/i, shown: "RECOMMENED", replacement: "RECOMMENDED" },
+    { pattern: /\bWITH A STANDS\b/i, shown: "WITH A STANDS", replacement: "WITH A STAND or WITH STANDS" },
+    { pattern: /\bONE SHARED SKIDS\b/i, shown: "ONE SHARED SKIDS", replacement: "ONE SHARED SKID" }
+  ];
+  const placeholderRows = rows.flatMap(row => {
+    const placeholder = [row.partNumber, row.parentPartNumber].find(value => /X{2,}|TBD|TO BE DETERMINED/i.test(String(value || "")));
+    return placeholder ? [{ row, placeholder }] : [];
+  });
+  if (placeholderRows.length) {
+    const tags = Array.from(new Set(placeholderRows.map(entry => String(entry.row.tag || "").trim()).filter(Boolean)));
+    const values = Array.from(new Set(placeholderRows.map(entry => String(entry.placeholder).trim()).filter(Boolean)));
+    const pages = Array.from(new Set(placeholderRows.map(entry => Number(entry.row.page || 0)).filter(Boolean)));
+    const formatList = entries => entries.length <= 1 ? (entries[0] || "affected row") : entries.length === 2 ? `${entries[0]} and ${entries[1]}` : `${entries.slice(0, -1).join(", ")}, and ${entries[entries.length - 1]}`;
+    const tagLabel = formatList(tags);
+    const location = `Page ${pages[0] || 1}, Equipment List items ${tagLabel}`;
+    findings.push(createPeerFinding({
+      severity: "Warning", equipmentTag: tags.join(", "), source: "cad-equipment-quality", confidence: .99, verificationStatus: "verified",
+      evidenceType: "Unresolved placeholder", category: "Schedule or table", affectedObject: `Equipment List items ${tagLabel}`, page: pages[0] || 0, relatedPages: pages,
+      issue: `Replace unresolved part-number placeholders for items ${tagLabel}`, listValue: values.join(", ") || "placeholder", comparedValue: "Final approved part number",
+      evidence: `${location} ${tags.length === 1 ? "shows" : "show"} unresolved part-number value${values.length === 1 ? "" : "s"} ${values.map(value => `"${value}"`).join(" and ")}.`,
+      requirement: "Issued equipment schedules should use resolved part numbers or explicit approved exceptions.",
+      details: `${location} contain${tags.length === 1 ? "s" : ""} unresolved part-number placeholder${tags.length === 1 ? "" : "s"}; resolve every listed item before issue.`, location
+    }));
+  }
+  rows.forEach(row => {
+    const location = `Page ${row.page || 1}, Equipment List row ${Number(row.nativeRowNumber || 0) + 1}`;
+    const ambiguousStructure = Boolean(row.structureAmbiguous);
+    const common = { page: row.page, equipmentTag: row.tag, source: "cad-equipment-quality", confidence: ambiguousStructure ? .84 : .99, verificationStatus: ambiguousStructure ? "possible" : "verified", verificationReason: ambiguousStructure ? "The value is source-located, but this row inherits a merged table cell and should be confirmed in the drawing preview." : "", evidenceType: "Objective visible mismatch", category: "Schedule or table", affectedObject: row.description, location };
+    if (!String(row.quantity || "").trim()) findings.push(createPeerFinding({ ...common, severity: "Warning", issue: `Complete the equipment quantity for ${row.tag}`, evidence: `${location} has a blank QTY. PER SUB-ASM cell for ${row.description}.`, requirement: "Complete the detected Equipment List quantity column.", details: `${location} has a tag and description but its detected quantity cell is blank.` }));
+    const ratingText = `${row.details || ""} ${row.purpose || ""}`.trim() || row.rawValues || "";
+    const horsepowerValues = Array.from(ratingText.matchAll(/\b(\d+(?:\.\d+)?)\s*HP\b/gi)).map(match => match[1]);
+    const distinctHorsepower = Array.from(new Set(horsepowerValues));
+    if (distinctHorsepower.length > 1) findings.push(createPeerFinding({ ...common, severity: "Warning", issue: `Coordinate the horsepower references for ${row.tag}`, listValue: `${distinctHorsepower[0]}HP`, comparedValue: `${distinctHorsepower[1]}HP`, evidence: `${location} uses both ${distinctHorsepower.map(value => `${value}HP`).join(" and ")} within the same equipment row.`, requirement: "Use one coordinated equipment rating within the same schedule row.", details: `${location} contains conflicting horsepower references in its description/details/purpose cells.` }));
+    commonWordingCorrections.forEach(correction => {
+      if (!correction.pattern.test(row.rawValues || "")) return;
+      findings.push(createPeerFinding({ ...common, severity: "Warning", issue: `Correct "${correction.shown}" in the Equipment List`, listValue: correction.shown, comparedValue: correction.replacement, evidence: `${location} contains "${correction.shown}" in the native AutoCAD table text.`, requirement: "Correct readable drawing-table wording before issue.", details: `${location} contains a visible wording error; revise it to "${correction.replacement}".` }));
+    });
+  });
+  return findings;
+}
+
+function runPeerCadTableComparisonRules(tables = []) {
+  const comparable = new Set(["quantity", "voltage", "phase", "horsepower", "amperage", "breaker", "pressure", "flow rate", "connection size", "pipe size", "conduit size", "nozzle size", "material", "schedule", "model number", "part number"]);
+  const groups = new Map();
+  tables.forEach(rawTable => {
+    const table = structurePeerCadTable(rawTable);
+    table.cells.forEach(cell => {
+      if (!cell.tag || !comparable.has(cell.attribute) || !cell.value || /^(?:---|N\/?A|TBD|TO BE DETERMINED)$/i.test(cell.value)) return;
+      const key = `${cell.tagNamespace}|${normalizePeerValue(cell.tag, "tag")}|${cell.attribute}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ ...cell, table });
+    });
+  });
+  const findings = [];
+  groups.forEach(entries => {
+    const distinct = new Map();
+    entries.forEach(entry => {
+      const key = normalizePeerValue(entry.value, entry.attribute === "model number" ? "modelNumber" : entry.attribute === "part number" ? "partNumber" : "");
+      if (key && !distinct.has(key)) distinct.set(key, entry);
+    });
+    if (distinct.size <= 1) return;
+    const values = Array.from(distinct.values());
+    const left = values[0], right = values[1];
+    if (left.table.handle === right.table.handle && Number(left.row) === Number(right.row)) return;
+    const sameEquipmentTable = left.table.handle === right.table.handle && isPeerCadEquipmentTable(left.table);
+    const inheritedContinuation = sameEquipmentTable && (!String(left.directTag || "").trim() || !String(right.directTag || "").trim());
+    // A merged equipment-list tag can legitimately cover multiple adjacent
+    // component lines (for example SCR-100 and SCR-100-1 under item 1C).
+    // Those sibling cells are one logical schedule item, not conflicting
+    // repetitions of the same component row.
+    if (inheritedContinuation) return;
+    const ambiguousStructure = !String(left.directTag || "").trim() || !String(right.directTag || "").trim();
+    const object = left.object || right.object || left.tag;
+    const evidence = `Native CAD table ${left.table.title}, row ${Number(left.row) + 1}, ${left.heading} shows "${left.value}"; table ${right.table.title}, row ${Number(right.row) + 1}, ${right.heading} shows "${right.value}" for ${left.tag}.`;
+    findings.push(createPeerFinding({
+      severity: "Warning", equipmentTag: left.tag, issue: `Coordinate the ${left.attribute} for ${object}`,
+      listValue: left.value, comparedValue: right.value, details: evidence,
+      evidence, requirement: "Coordinate repeated drawing information", location: `Native CAD tables ${left.table.handle} and ${right.table.handle}`,
+      page: Number(right.table.page || left.table.page || 0), relatedPages: [Number(left.table.page || 0), Number(right.table.page || 0)].filter(Boolean),
+      source: "cad-table-comparison", confidence: ambiguousStructure ? .84 : .98, verificationStatus: ambiguousStructure ? "possible" : "verified",
+      verificationReason: ambiguousStructure ? "The repeated value comparison uses a merged or multirow table label; confirm the logical row grouping in the drawing preview." : "",
+      evidenceType: "Objective visible mismatch", category: /voltage|phase|amperage|breaker|conduit/i.test(left.attribute) ? "Electrical coordination" : /size|material|schedule|pressure|flow/i.test(left.attribute) ? "Piping specification" : "Schedule or table", affectedObject: object
+    }));
+  });
+  return findings;
+}
+
+function extractPeerCadEvidenceFacts(cad = {}, equipmentRows = []) {
+  const facts = [], seen = new Set();
+  const add = fact => {
+    const key = `${Number(fact.page || 0)}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
+    if (!fact.value || !fact.object || seen.has(key)) return;
+    seen.add(key); facts.push({ confidence: .99, source: "native-cad", ...fact });
+  };
+  const rowAttributes = [
+    ["description", "description"], ["quantity", "quantity"], ["parentPartNumber", "part number"],
+    ["partNumber", "part number"], ["voltage", "voltage"]
+  ];
+  equipmentRows.filter(row => row.source === "native-cad" || row.sourceTable === "Main Equipment List").forEach(row => {
+    const location = `Equipment List row ${Number(row.nativeRowNumber || 0) + 1}`;
+    rowAttributes.forEach(([field, attribute]) => {
+      const value = String(row[field] || "").trim();
+      if (!value || /^(?:---|N\/?A)$/i.test(value)) return;
+      add({ page: Number(row.page || 0), sourceType: "Equipment List", tag: row.tag || "", object: row.description || row.tag || "Equipment item", attribute, value, location });
+    });
+  });
+  (cad.tables || []).forEach(rawTable => {
+    const table = structurePeerCadTable(rawTable);
+    if (isPeerCadEquipmentTable(table)) return;
+    table.cells.forEach(cell => {
+      const value = String(cell.value || "").trim(), object = String(cell.object || "").trim();
+      if (!cell.attribute || !cell.directTag || !object || !value || /^(?:---|N\/?A|TBD|TO BE DETERMINED)$/i.test(value)) return;
+      if (!["description", "quantity", "voltage", "phase", "horsepower", "amperage", "breaker", "pressure", "flow rate", "connection size", "pipe size", "conduit size", "nozzle size", "material", "schedule", "model number", "part number"].includes(cell.attribute)) return;
+      add({ page: Number(table.page || 0), sourceType: `Native CAD table: ${table.title}`, tag: cell.tag || "", object, attribute: cell.attribute, value, location: `${table.title}, row ${Number(cell.row) + 1}` });
+    });
+  });
+  return facts;
+}
+
+function extractPeerCadMainEquipmentCallouts(cad = {}, equipmentRows = [], equipmentPageNumbers = []) {
+  const allowedPages = new Set((equipmentPageNumbers || []).map(Number).filter(Boolean));
+  const rowsByTag = new Map();
+  equipmentRows.forEach(row => {
+    const tag = normalizePeerValue(row.tag || "", "tag");
+    if (!tag || !/^\d+[A-Z]?$/i.test(String(row.tag || "").replace(/[\s-]/g, "")) || !String(row.description || "").trim()) return;
+    if (!rowsByTag.has(tag)) rowsByTag.set(tag, row);
+  });
+  const seen = new Set(), callouts = [];
+  (cad.callouts || []).forEach(callout => {
+    const page = Number(callout.page || 0), tag = normalizePeerValue(callout.tag || "", "tag"), row = rowsByTag.get(tag);
+    if (!row || (allowedPages.size && !allowedPages.has(page))) return;
+    const key = `${page}|${tag}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    callouts.push({
+      tag: String(row.tag || callout.tag || "").replace(/[\s-]/g, ""), name: row.description,
+      page, source: "native-cad-callout", confidence: .99, nativeHandle: callout.handle || "",
+      location: `Native numbered multileader ${callout.handle || ""}${callout.layout ? ` in ${callout.layout}` : ""}`.trim()
+    });
+  });
+  return callouts;
+}
+
 function createPeerFinding(data = {}) {
   return {
     id: data.id || peerId("finding"), severity: data.severity || "Warning",
@@ -104,6 +417,21 @@ function findDuplicatePeerValues(values, normalizer = value => normalizePeerValu
     groups.get(key).push(index);
   });
   return Array.from(groups.values()).filter(indices => indices.length > 1);
+}
+
+function getPeerCoverageCompletionState(report = {}) {
+  const reasons = [];
+  const incompleteChecks = Array.isArray(report.incompleteChecks) ? report.incompleteChecks : [];
+  incompleteChecks.forEach(item => {
+    const label = String(typeof item === "string" ? item : item?.label || item?.message || "Incomplete review check").trim();
+    if (label && !reasons.includes(label)) reasons.push(label);
+  });
+  const incompleteSweeps = Object.entries(report.disciplineSweeps || {}).filter(([, value]) => value?.status === "incomplete").map(([name]) => `${name} specialist sweep incomplete`);
+  incompleteSweeps.forEach(reason => { if (!reasons.includes(reason)) reasons.push(reason); });
+  if (Number(report.regionsFailed || 0) > 0) reasons.push(`${Number(report.regionsFailed)} drawing region${Number(report.regionsFailed) === 1 ? "" : "s"} incomplete`);
+  const pagesTotal = Number(report.pagesTotal || 0), pagesReviewed = Number(report.pagesReviewed || 0);
+  if (pagesTotal > 0 && pagesReviewed < pagesTotal) reasons.push(`${pagesTotal - pagesReviewed} page${pagesTotal - pagesReviewed === 1 ? "" : "s"} not fully reviewed`);
+  return { state: reasons.length ? "partial" : "complete", isPartial: reasons.length > 0, reasons };
 }
 
 function inferPeerEngineerFindingCategory(item = {}) {
@@ -339,6 +667,7 @@ function isPeerVerificationSelfRejecting(verification = {}, candidate = {}) {
   const combined = `${verification.evidence || ""} ${verification.requirement || ""} ${verification.reason || ""}`.replace(/\s+/g, " ").trim();
   if (!combined) return false;
   if (/\b(?:same|identical|matching) (?:dimension|value)|\bvalues? (?:are|is) (?:the )?same|\bno (?:correction|change) is (?:needed|required)|\bno visible evidence\b|\bno supporting evidence\b/i.test(combined)) return true;
+  if (/\b(?:not|isn't|is not) (?:a )?(?:(?:confirmed|supported|visible) )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not (?:visibly )?(?:show|confirm|support|establish) (?:a )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not constitute (?:a )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\blacks? (?:confirmed|visible|source) evidence.{0,80}\b(?:defect|correction|conflict|mismatch|discrepancy)\b|\brequired correction was not confirmed\b|\bacceptable variation\b|\bno visible requirement\b.{0,160}\b(?:mandates?|requires?|establishes?)\b/i.test(combined)) return true;
 
   const category = inferPeerEngineerFindingCategory(candidate);
   if (["Drain or overflow", "Valve or union", "Piping specification"].includes(category)
@@ -394,7 +723,7 @@ function applyPeerEngineerVerifications(candidates = [], verifications = [], opt
 
 function normalizePeerFindingPhrase(value = "") {
   const ignored = new Set(["A", "AN", "AND", "AT", "FOR", "IN", "OF", "ON", "THE", "THIS", "TO", "WITH", "VERIFY", "POSSIBLE"]);
-  return String(value || "").toUpperCase().replace(/[â€“â€”]/g, "-").match(/[A-Z0-9]+/g)?.filter(token => token.length > 1 && !ignored.has(token)) || [];
+  return String(value || "").toUpperCase().replace(/[\u2013\u2014]/g, "-").match(/[A-Z0-9]+/g)?.filter(token => token.length > 1 && !ignored.has(token)) || [];
 }
 
 function peerFindingTokenSimilarity(left = "", right = "") {
@@ -429,7 +758,26 @@ function getPeerFindingCategoryKey(item = {}) {
   return normalizePeerFindingPhrase(item.issue).slice(0, 5).join(" ");
 }
 
+function isPeerFindingSelfNegating(item = {}) {
+  const combined = [item.issue, item.evidence, item.details, item.requirement, item.verificationReason]
+    .map(value => String(value || ""))
+    .join(" ")
+    .replace(/\s+/g, " ");
+  if (/\b(?:label(?:s)?|callout(?:s)?|value(?:s)?|rating(?:s)?|dimension(?:s)?) (?:are|is|appear|appears) (?:fully )?(?:consistent|matching|identical|the same)\b/i.test(combined)) return true;
+  if (/\bno (?:visible )?(?:conflict|mismatch|discrepancy|inconsistency)(?: exists| is shown| is visible)?\b/i.test(combined)) return true;
+  if (/\b(?:not|isn't|is not) (?:a )?(?:(?:confirmed|supported|visible) )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not (?:visibly )?(?:show|confirm|support|establish) (?:a )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not constitute (?:a )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\blacks? (?:confirmed|visible|source) evidence.{0,80}\b(?:defect|correction|conflict|mismatch|discrepancy)\b|\brequired correction was not confirmed\b|\bacceptable variation\b|\bno visible requirement\b.{0,160}\b(?:mandates?|requires?|establishes?)\b/i.test(combined)) return true;
+  if (/\bmay be intentional\b.*\b(?:confirm|confirmation)\b/i.test(combined)) return true;
+  if (/\bmay need\b.*\b(?:confirm|confirmation)\b/i.test(combined)) return true;
+  if (/\bUTILITY TRAY\b/i.test(combined) && /\bCURB RAIL\b/i.test(combined)) return true;
+  if (/\bPROVIDED BY OWNER\b/i.test(combined) && /\b(?:NO|WITHOUT|LACKS?)\b.{0,100}\b(?:FORMAL )?(?:MAIN )?EQUIPMENT LIST\b/i.test(combined)) return true;
+  if (/\bGFCI?\b/i.test(combined) && /\b(?:NO|WITHOUT|LACKS?)\b.{0,100}\b(?:EQUIPMENT|POWER) (?:ROW|LIST|TABLE|SCHEDULE|LINKAGE|REFERENCE)\b/i.test(combined)) return true;
+  if (/\bSEE\s+(?:WIRING\s+)?NOTE\b/i.test(combined) && /\b(?:INCOMPLETE|NOT FULLY DETAILED|EXTERNAL REFERENCE)\b/i.test(combined)) return true;
+  if (/\bCARBON FILTER\b/i.test(combined) && /\b(?:CLEARANCE|ACCESS SPACE)\b/i.test(combined) && /\bENGINEER CONFIRMATION REQUIRED\b/i.test(combined)) return true;
+  return false;
+}
+
 function isPeerFindingGrounded(item = {}) {
+  if (isPeerFindingSelfNegating(item)) return false;
   if (item.source === "manual" || item.confidence === null || item.confidence === undefined) return true;
   if (item.source !== "visual-ai") return Boolean(Number(item.page || 0) && String(item.issue || "").trim() && (getPeerFindingEvidence(item) || item.listValue || item.comparedValue));
   return Boolean(Number(item.page || 0) && getPeerFindingAffectedObject(item) && getPeerFindingLocation(item) && getPeerFindingEvidence(item));
@@ -438,6 +786,18 @@ function isPeerFindingGrounded(item = {}) {
 function arePeerFindingsSameCorrection(left = {}, right = {}) {
   const leftCategory = getPeerFindingCategoryKey(left), rightCategory = getPeerFindingCategoryKey(right);
   if (!leftCategory || leftCategory !== rightCategory) return false;
+  const leftTag = normalizePeerValue(left.equipmentTag || "", "tag"), rightTag = normalizePeerValue(right.equipmentTag || "", "tag");
+  // Explicitly different equipment tags are different review targets. Similar
+  // correction wording or a shared table location must never collapse them.
+  if (leftTag && rightTag && leftTag !== rightTag) return false;
+  const tableRow = item => Number(String(getPeerFindingLocation(item)).match(/\b(?:TABLE|LIST) ROW\s+(\d+)\b/i)?.[1] || 0);
+  const leftTableRow = tableRow(left), rightTableRow = tableRow(right);
+  if (leftTableRow && rightTableRow && leftTableRow !== rightTableRow) return false;
+  if (left.source === "cad-equipment-quality" && right.source === "cad-equipment-quality") {
+    const leftCorrection = `${normalizePeerValue(left.listValue || "")}=>${normalizePeerValue(left.comparedValue || "")}`;
+    const rightCorrection = `${normalizePeerValue(right.listValue || "")}=>${normalizePeerValue(right.comparedValue || "")}`;
+    if (leftCorrection !== "=>" && rightCorrection !== "=>" && leftCorrection !== rightCorrection) return false;
+  }
   const leftObjectText = getPeerFindingAffectedObject(left), rightObjectText = getPeerFindingAffectedObject(right);
   if (leftCategory === "Service clearance") {
     const oneIsRo = /\bRO\b/i.test(leftObjectText) !== /\bRO\b/i.test(rightObjectText);
@@ -500,17 +860,24 @@ function normalizePeerLedgerValue(value = "", attribute = "") {
     .replace(/[\u2033\u201D"]/g, " IN ").replace(/[\u2032\u2019']/g, " FT ")
     .replace(/\bSCHEDULE\b/gi, "SCH").replace(/\bGALLONS?\b/gi, "GAL"));
   if (["description", "label"].includes(attribute)) normalized = normalizePeerEquipmentName(normalized);
+  else normalized = normalized.replace(/[.,;:]+$/g, "").trim();
   return normalized;
 }
 
 function peerLedgerFactsReferToSameObject(left = {}, right = {}) {
   const leftTag = normalizePeerValue(left.tag || "", "tag"), rightTag = normalizePeerValue(right.tag || "", "tag");
   const leftObject = String(left.object || "").trim(), rightObject = String(right.object || "").trim();
-  if (leftTag && rightTag && leftTag === rightTag) {
-    if (["description", "label"].includes(String(left.attribute || ""))) return true;
-    return peerEquipmentNamesEquivalent(leftObject, rightObject) || normalizePeerEquipmentName(leftObject) === normalizePeerEquipmentName(rightObject);
-  }
-  return Boolean(leftObject && rightObject && peerEquipmentNamesEquivalent(leftObject, rightObject));
+  // Two explicit, different tags identify different objects even when OCR gives
+  // them similar generic names (for example FS1 and FS3, or CA1 and CA3).
+  if (leftTag && rightTag) return leftTag === rightTag;
+
+  // An untagged comparison must carry the same exact object identity. Fuzzy
+  // equipment-name matching is useful for search, but is too permissive for a
+  // deterministic defect: it previously paired separate wash bays, tanks, and
+  // rinse arches solely because they shared generic words.
+  const normalizedLeftObject = normalizePeerEquipmentName(leftObject);
+  const normalizedRightObject = normalizePeerEquipmentName(rightObject);
+  return Boolean(normalizedLeftObject && normalizedRightObject && normalizedLeftObject === normalizedRightObject);
 }
 
 function peerLedgerValuesConflict(left = {}, right = {}) {
@@ -618,7 +985,10 @@ function runPeerNamingConventionRules(pages = [], filename = "") {
   const trustedPages = pages.filter(page => !page.ocrApplied || Number(page.metadataConfidence || 0) >= 0.72);
   const projectNumbers = trustedPages.map(page => String(page.projectNumber || "").trim()).filter(Boolean);
   const drawingNumbers = pages.map(page => String(page.drawingNumber || "").trim());
-  const drawingFamilies = drawingNumbers.filter(Boolean).map(value => normalizePeerDrawingIdentifier(value).match(/^([A-Z]+)-/)?.[1] || "").filter(Boolean);
+  const trustedDrawingNumbers = pages
+    .filter(page => !page.ocrApplied)
+    .map(page => String(page.drawingNumber || "").trim());
+  const drawingFamilies = trustedDrawingNumbers.filter(Boolean).map(value => normalizePeerDrawingIdentifier(value).match(/^([A-Z]+)-/)?.[1] || "").filter(Boolean);
   const dominantFamily = drawingFamilies.sort((a, b) => drawingFamilies.filter(value => value === b).length - drawingFamilies.filter(value => value === a).length)[0] || "";
 
   pages.forEach(page => {
@@ -627,7 +997,10 @@ function runPeerNamingConventionRules(pages = [], filename = "") {
       severity: "Warning", issue: "Potential inconsistency: drawing number does not follow the expected letter-number format", comparedValue: drawingNumber, page: page.number
     }));
     const family = normalizePeerDrawingIdentifier(drawingNumber).match(/^([A-Z]+)-/)?.[1] || "";
-    if (drawingNumber && dominantFamily && family && family !== dominantFamily) findings.push(createPeerFinding({
+    // OCR is useful for locating a title block, but a one- or two-letter prefix
+    // is too easy to misread to support a confirmed naming defect.
+    const prefixIsTrusted = !page.ocrApplied;
+    if (prefixIsTrusted && drawingNumber && dominantFamily && family && family !== dominantFamily) findings.push(createPeerFinding({
       severity: "Error", issue: "Potential inconsistency: drawing number uses a different naming prefix", listValue: dominantFamily, comparedValue: family, page: page.number
     }));
     if (fileProjectNumber && page.projectNumber && (!page.ocrApplied || Number(page.metadataConfidence || 0) >= 0.72) && normalizePeerValue(page.projectNumber, "tag") !== normalizePeerValue(fileProjectNumber, "tag")) findings.push(createPeerFinding({
@@ -719,7 +1092,7 @@ function runPeerEquipmentRules(rows = []) {
     if (!String(row.tag || "").trim()) findings.push(createPeerFinding({ severity: "Error", issue: "Potential inconsistency: missing equipment tag", page: row.page }));
     const presentFields = Object.keys(row).filter(key => !["id", "page", "source", "compareTo"].includes(key) && row[key] !== "");
     const emptyPresentColumns = (row.presentColumns || []).filter(key => key !== "tag" && !String(row[key] || "").trim());
-    if (emptyPresentColumns.length) findings.push(createPeerFinding({ severity: "Warning", equipmentTag: row.tag, issue: `Potential inconsistency: incomplete equipment list fields (${emptyPresentColumns.map(key => PEER_EQUIPMENT_FIELDS.find(item => item[0] === key)?.[1] || key).join(", ")})`, page: row.page }));
+    if (row.source !== "native-cad" && emptyPresentColumns.length) findings.push(createPeerFinding({ severity: "Warning", equipmentTag: row.tag, issue: `Potential inconsistency: incomplete equipment list fields (${emptyPresentColumns.map(key => PEER_EQUIPMENT_FIELDS.find(item => item[0] === key)?.[1] || key).join(", ")})`, page: row.page }));
     if (!presentFields.length) return;
     const comparison = row.compareTo || {};
     Object.keys(comparison).forEach(field => {
@@ -735,4 +1108,4 @@ function runPeerEquipmentRules(rows = []) {
   return findings;
 }
 
-if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };
+if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, isPeerFindingSelfNegating, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };

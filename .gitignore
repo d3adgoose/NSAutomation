@@ -1,12 +1,24 @@
 # Local agent and document-review workspaces
 .agents/
 .tmp/
+tmp/
+
+# Local Ollama model stores (if OLLAMA_MODELS is redirected into this repository)
+.ollama/
+ollama-models/
 
 # Local dependencies and runtime output
 node_modules/
 *.log
 *.tmp
 *.temp
+
+# AutoCAD-generated runtime and recovery files
+acad.err
+*.dwl
+*.dwl2
+*.sv$
+*.bak
 
 # Local environment and secret files
 .env

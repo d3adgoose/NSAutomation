@@ -10,14 +10,26 @@ const sharedClient = fs.readFileSync(path.join(root, "local-ai-client.js"), "utf
 const specificationAi = fs.readFileSync(path.join(root, "specification-ai.js"), "utf8");
 const peerReview = fs.readFileSync(path.join(root, "peer-review.js"), "utf8");
 const localAiServer = fs.readFileSync(path.join(root, "local-ai-server.js"), "utf8");
+const localAiSetup = fs.readFileSync(path.join(root, "Set Up NS Local AI.cmd"), "utf8");
+const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
 const redirectIndex = html.indexOf('location.port !== "4173"');
 const firstExternalScriptIndex = html.indexOf('src="https://');
+const peerRedirectIndex = peerHtml.indexOf('location.port !== "4173"');
+const peerFirstExternalScriptIndex = peerHtml.indexOf('src="https://');
 
 assert(redirectIndex >= 0, "Specification must route local development to the Local AI gateway.");
 assert(
   redirectIndex < firstExternalScriptIndex,
   "Local AI routing must run before Specification libraries and project data initialize."
 );
+assert(peerRedirectIndex >= 0 && peerRedirectIndex < peerFirstExternalScriptIndex,
+  "Peer Review must route local development through the no-cache Local AI gateway before loading libraries.");
+assert(peerHtml.includes("OllamaSetup.exe") && peerHtml.includes("qwen3-vl:8b-instruct") && peerHtml.includes(".gitignore"),
+  "Peer Review setup guidance must identify the Windows installer, approved model, and repository-safety rules.");
+assert(localAiSetup.includes("OllamaSetup.exe") && localAiSetup.includes("%USERPROFILE%\\.ollama\\models"),
+  "Local AI setup must explain the supported Ollama installer and default Windows model location.");
+assert(gitignore.includes(".ollama/") && gitignore.includes("ollama-models/") && gitignore.includes("tmp/") && gitignore.includes("acad.err"),
+  "Git ignore rules must protect local models, generated reviews, and AutoCAD runtime errors.");
 assert(
   html.includes("location.pathname") &&
   html.includes("location.search") &&
@@ -28,6 +40,28 @@ assert(localAiServer.includes("worker-src 'self' blob: https://cdnjs.cloudflare.
   "The local gateway CSP must allow the configured PDF.js worker.");
 assert(localAiServer.includes('req.method === "DELETE"') && localAiServer.includes("activeOllamaControllers"),
   "Canceling Local AI must abort the active Ollama request on the local gateway.");
+assert(localAiServer.includes('/api/cad-peer-review') && localAiServer.includes('handleCadPeerReview(req, res)'),
+  "The local gateway must expose native DWG conversion for Peer Review.");
+assert(localAiServer.includes('searchParams.get("filename")') && localAiServer.includes('accoreconsole.exe'),
+  "DWG conversion must accept the source filename and use the installed AutoCAD Core Console.");
+assert(!localAiServer.includes('X-File-Name'),
+  "DWG conversion must avoid unnecessary custom request headers that trigger stricter CORS preflights.");
+assert(localAiServer.includes("parseCadRecord") && localAiServer.includes("buildCadModelSheetTargets"),
+  "DWG conversion must tolerate AutoCAD formatting escapes and detect stacked Model-space sheets.");
+assert(localAiServer.includes("repairCadJsonEscapes") && localAiServer.includes("slashes.length % 2"),
+  "DWG parsing must preserve valid doubled AutoCAD formatting slashes while repairing invalid single escapes.");
+assert(localAiServer.includes('searchParams.get("reference") === "1"') && localAiServer.includes("referenceOnly: true"),
+  "Knowledge Library DWGs must stop after native extraction instead of spending time plotting review PDFs.");
+assert(localAiServer.includes("application/x-ndjson") && localAiServer.includes('writeProgress("progress"'),
+  "DWG conversion must stream extraction and plotting progress instead of appearing stalled.");
+assert(localAiServer.includes("AutoCAD PDF (Smallest File).pc3") && localAiServer.includes("preparing the first sheet") && localAiServer.includes("res.flushHeaders()"),
+  "DWG plotting must use the verified fast PDF preset and flush live AutoCAD heartbeat messages.");
+assert(localAiServer.includes('target.fileName = `sheet-${String(index + 1).padStart(2, "0")}.pdf`'),
+  "AutoCAD plot output must use short filenames because long descriptive sheet filenames can stall the PDF driver.");
+assert(localAiServer.includes("handleCadPeerProgress") && localAiServer.includes("cadPeerProgressJobs") && localAiServer.includes('process.env.LOCALAPPDATA'),
+  "DWG conversion must expose separately polled progress and avoid AutoCAD's short temporary path.");
+assert(localAiServer.includes('status: "pending"') && localAiServer.includes("if (!job) return send(res, 200"),
+  "The first progress poll must tolerate arriving before the DWG POST creates its progress record.");
 assert(sharedClient.includes('const GATEWAY_ORIGIN = "http://127.0.0.1:4173"'),
   "The shared Local AI connector must route deployed pages to the local gateway.");
 assert(sharedClient.includes('["loopback", "local"]') && sharedClient.includes("detectTargetAddressSpace"),
@@ -38,6 +72,18 @@ assert(html.indexOf("local-ai-client.js") >= 0 && html.indexOf("local-ai-client.
   "Specification must load the shared Local AI connector before its AI workflow.");
 assert(peerHtml.indexOf("local-ai-client.js") >= 0 && peerHtml.indexOf("local-ai-client.js") < peerHtml.indexOf("peer-review.js"),
   "Peer Review must load the shared Local AI connector before its AI workflow.");
+assert(peerHtml.includes('.dwg') && peerReview.includes('handlePeerDwg') && peerReview.includes('runPeerCadRules'),
+  "Peer Review must accept DWG drawings and run native CAD tag/table checks.");
+assert(peerHtml.includes("Reference Drawing Context") && peerReview.includes("prior-drawing-context") && peerReview.includes("never a requirement"),
+  "Prior DWGs in the Knowledge Library must be labeled as context, not requirement proof.");
+assert(peerReview.includes("extractPeerStructuredRequirements") && peerReview.includes("STRUCTURED APPROVED REQUIREMENTS"),
+  "Datasheets must be pre-indexed into explicit requirements before visual AI review.");
+assert(peerReview.includes("readPeerCadProgressResponse") && peerReview.includes("reportPeerDrawingRead") && peerReview.includes("Reading ${sourceLabel.toLowerCase()} page"),
+  "Peer Review must display live read progress for both streamed DWG conversion and PDF pages.");
+assert(peerReview.includes("pollPeerCadProgress") && peerReview.includes("/api/cad-peer-progress?requestId="),
+  "Peer Review must poll DWG progress independently so browser response buffering cannot hide activity updates.");
+assert(peerReview.includes("[401, 403, 503].includes(response.status)"),
+  "DWG progress polling must stop after an authentication or gateway failure instead of flooding the console.");
 assert(specificationAi.includes("window.NSLocalAIClient.fetch") && peerReview.includes("fetchPeerLocalAi"),
   "Specification and Peer Review must both use the shared Local AI connector.");
 assert(!specificationAi.includes("targetAddressSpace") && !peerReview.includes("targetAddressSpace"),

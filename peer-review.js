@@ -2,10 +2,18 @@
 const PEER_STORAGE_KEY = "ns-peer-reviews-v1";
 const PEER_PDF_DB = "NSPeerReviewStorage";
 const PEER_PDF_STORE = "reviewPdfs";
+const PEER_CAD_STORE = "reviewCadData";
 const PEER_KNOWLEDGE_STORE = "knowledgeSources";
+const PEER_ANALYSIS_CACHE_STORE = "analysisCache";
 const PEER_HISTORY_LIMIT = 5;
 const PEER_KNOWLEDGE_KEY = "ns-peer-review-knowledge-v1";
 const PEER_FINDING_FEEDBACK_KEY = "ns-peer-review-finding-feedback-v1";
+const PEER_DATABASE_KNOWLEDGE_ENABLED_KEY = "ns-peer-review-database-knowledge-enabled-v1";
+const PEER_PARTS_STORAGE_KEY = "nsPartsDatabaseV1";
+const PEER_DATABASE_TABLES = Object.freeze({ master: "parts_master", aliases: "part_number_aliases", usage: "drawing_usage", documents: "documents" });
+const PEER_DATABASE_DOCUMENTS_BUCKET = "document-library";
+const PEER_AI_ANALYSIS_CACHE_VERSION = "20260805-compact-regional-review-v6";
+const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-native-ledger-v1";
 const COMPANY_AI_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
 const COMPANY_AI_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
 const PEER_BUILT_IN_KNOWLEDGE = `BUILT-IN PEER REVIEW REFERENCE
@@ -183,10 +191,13 @@ let peerPdfDocument = null;
 let peerActiveCommentFinding = "";
 let peerCurrentUser = "Local reviewer";
 let peerOcrRunning = false;
+let peerCheckRunning = false;
+let peerDrawingLoadRunning = false;
 let peerAnalysisStartedAt = 0;
 let peerAnalysisTimer = null;
 let peerAnalysisLastMessage = "";
 let peerAnalysisMessageCount = 0;
+let peerAnalysisMode = "review";
 let peerOcrLoadStage = "";
 let peerActiveRedlineFinding = "";
 let peerActiveFixItem = "";
@@ -198,6 +209,11 @@ let peerRedlineUndoStack = [];
 let peerRedlineRedoStack = [];
 let peerRedlineLastSnapshot = null;
 let peerRedlineHistoryTimer = null;
+let peerDatabaseKnowledgeCache = null;
+let peerDatabaseKnowledgePreloadPromise = null;
+const peerDatabasePdfTextCache = new Map();
+const peerDatabaseRequirementCache = new Map();
+const peerDatabasePdfReadPromises = new Map();
 let peerAiStatus = { ready: false, loaded: false, authenticated: false, model: "Qwen3-VL", error: "Checking the Local AI service." };
 
 function getPeerLocalAiClient() {
@@ -217,14 +233,17 @@ const PEER_INITIAL_CHECKLIST = ["Drawing information appears complete.", "Title 
 const PEER_EQUIPMENT_CHECKLIST = ["Equipment tags appear consistent.", "Manufacturer information appears correct.", "Model numbers appear correct.", "Quantities appear correct.", "Equipment descriptions appear complete.", "No obvious inconsistencies remain.", "Additional comments."];
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("peerPdfUpload")?.addEventListener("change", event => handlePeerPdf(event.target.files?.[0]));
+  document.getElementById("peerPdfUpload")?.addEventListener("change", event => handlePeerDrawing(event.target.files?.[0]));
   setupPeerDropZone(); populatePeerFixFilter(); populatePeerFindingFilter(); renderPeerSavedReviews();
+  syncPeerDatabaseKnowledgeControls();
   updatePeerAiIndicator();
+  if (isPeerDatabaseKnowledgeEnabled()) preloadPeerDatabaseKnowledge();
   window.addEventListener("ns-auth-session-changed", event => {
     const user = event.detail?.user;
     peerCurrentUser = user?.user_metadata?.full_name || user?.email || "Local reviewer";
     if (peerReview) renderPeerSummary();
     updatePeerAiIndicator();
+    if (user && isPeerDatabaseKnowledgeEnabled()) refreshPeerDatabaseKnowledgeAccess(true);
   });
 });
 
@@ -263,15 +282,16 @@ function setPeerAiIndicatorState(state) {
   const button = document.getElementById("peerAiHeaderButton"), label = button?.querySelector(".spec-ai-header-status-label");
   if (!button) return;
   button.classList.remove("is-checking", "is-ready", "is-error");
-  button.classList.add(state === "ready" ? "is-ready" : state === "working" ? "is-checking" : "is-error");
-  if (label) label.textContent = state === "working" ? "Local AI Reviewing" : state === "ready" ? "Local AI Ready" : "Local AI Offline";
-  button.title = state === "working" ? "Local visual AI is reviewing the drawing now." : state === "ready" ? "Local AI is connected. Open review details." : "Local AI is unavailable. Open review details.";
+  button.classList.add(state === "ready" ? "is-ready" : state === "working" || state === "preparing" ? "is-checking" : "is-error");
+  if (label) label.textContent = state === "preparing" ? "Preparing Drawing" : state === "working" ? "Local AI Reviewing" : state === "ready" ? "Local AI Ready" : "Local AI Offline";
+  button.title = state === "preparing" ? "The drawing file is being read and prepared." : state === "working" ? "Local visual AI is reviewing the drawing now." : state === "ready" ? "Local AI is connected. Open review details." : "Local AI is unavailable. Open review details.";
 }
 
 function openPeerAiStatus() {
   const body = document.getElementById("peerAiStatusBody"); if (!body) return;
   const active = Boolean(peerAnalysisTimer);
-  body.innerHTML = `<div class="spec-ai-status-hero${peerAiStatus.ready ? "" : " is-error"}"><div class="spec-ai-status-orb">AI</div><div><h3>${active ? "Local AI is reviewing drawings" : peerAiStatus.ready ? "Local AI is ready" : "Local AI needs attention"}</h3><p>${escapePeerHTML(active ? peerAnalysisLastMessage || "Reading the current drawing package." : peerAiStatus.error || `${peerAiStatus.model} is available for visual drawing review.`)}</p></div></div><p class="spec-ai-status-next"><strong>Your next step:</strong> ${active ? "Keep this page open while the drawing regions are reviewed." : peerAiStatus.ready ? "Choose a review type, upload a drawing package, and run the automatic checks." : !peerAiStatus.authenticated ? "Open Database and sign in with your company account, then select Try Reconnecting." : "Start the Local AI server, then select Try Reconnecting."}</p><div class="spec-ai-status-grid"><div class="spec-ai-status-card"><span>Background service</span><strong>${peerAiStatus.ready ? "Connected" : "Unavailable"}</strong></div><div class="spec-ai-status-card"><span>Model</span><strong>${escapePeerHTML(peerAiStatus.model)}</strong></div><div class="spec-ai-status-card"><span>Model memory</span><strong>${peerAiStatus.loaded ? "Loaded now" : peerAiStatus.ready ? "Loads on demand" : "Not available"}</strong></div><div class="spec-ai-status-card"><span>Database account</span><strong>${peerAiStatus.authenticated ? escapePeerHTML(peerCurrentUser) : "Sign in required"}</strong></div><div class="spec-ai-status-card"><span>Current activity</span><strong>${active ? "Drawing analysis running" : "Idle"}</strong></div><div class="spec-ai-status-card"><span>Review method</span><strong>Local visual AI + OCR + rules</strong></div></div><div class="spec-ai-pipeline"><strong>How Peer Review works</strong><div class="spec-ai-pipeline-steps"><div class="spec-ai-pipeline-step"><b>1. Read</b>OCR reads image-only title blocks.</div><div class="spec-ai-pipeline-step"><b>2. Analyze</b>Local visual AI examines enlarged drawing regions, tables, callouts, and annotations.</div><div class="spec-ai-pipeline-step"><b>3. Verify</b>Rule checks compare readable values, then every result waits for engineer review.</div></div></div><p class="spec-ai-status-note"><strong>Privacy:</strong> Drawing images are processed by the Local AI service running on this computer, not a public AI website.</p><p class="spec-ai-status-next"><strong>Review boundary:</strong> Local AI finds visible, mundane inconsistencies. It does not certify the design or replace engineering review.</p>`;
+  const preparingFile = active && peerAnalysisMode === "file-read";
+  body.innerHTML = `<div class="spec-ai-status-hero${peerAiStatus.ready ? "" : " is-error"}"><div class="spec-ai-status-orb">AI</div><div><h3>${active ? preparingFile ? "Drawing file is being prepared" : "Local AI is reviewing drawings" : peerAiStatus.ready ? "Local AI is ready" : "Local AI needs attention"}</h3><p>${escapePeerHTML(active ? peerAnalysisLastMessage || "Reading the current drawing package." : peerAiStatus.error || `${peerAiStatus.model} is available for visual drawing review.`)}</p></div></div><p class="spec-ai-status-next"><strong>Your next step:</strong> ${active ? preparingFile ? "Keep this page open while the PDF or DWG is read and indexed." : "Keep this page open while the drawing regions are reviewed." : peerAiStatus.ready ? "Choose a review type, upload a drawing package, and run the automatic checks." : !peerAiStatus.authenticated ? "Open Database and sign in with your company account, then select Try Reconnecting." : "Start the Local AI server, then select Try Reconnecting."}</p><div class="spec-ai-status-grid"><div class="spec-ai-status-card"><span>Background service</span><strong>${peerAiStatus.ready ? "Connected" : "Unavailable"}</strong></div><div class="spec-ai-status-card"><span>Model</span><strong>${escapePeerHTML(peerAiStatus.model)}</strong></div><div class="spec-ai-status-card"><span>Model memory</span><strong>${peerAiStatus.loaded ? "Loaded now" : peerAiStatus.ready ? "Loads on demand" : "Not available"}</strong></div><div class="spec-ai-status-card"><span>Database account</span><strong>${peerAiStatus.authenticated ? escapePeerHTML(peerCurrentUser) : "Sign in required"}</strong></div><div class="spec-ai-status-card"><span>Current activity</span><strong>${active ? preparingFile ? "Drawing preparation running" : "Drawing analysis running" : "Idle"}</strong></div><div class="spec-ai-status-card"><span>Review method</span><strong>Local visual AI + OCR + rules</strong></div></div><div class="spec-ai-pipeline"><strong>How Peer Review works</strong><div class="spec-ai-pipeline-steps"><div class="spec-ai-pipeline-step"><b>1. Read</b>OCR reads image-only title blocks.</div><div class="spec-ai-pipeline-step"><b>2. Analyze</b>Local visual AI examines enlarged drawing regions, tables, callouts, and annotations.</div><div class="spec-ai-pipeline-step"><b>3. Verify</b>Rule checks compare readable values, then every result waits for engineer review.</div></div></div><p class="spec-ai-status-note"><strong>Privacy:</strong> Drawing images are processed by the Local AI service running on this computer, not a public AI website.</p><p class="spec-ai-status-next"><strong>Review boundary:</strong> Local AI finds visible, mundane inconsistencies. It does not certify the design or replace engineering review.</p>`;
   document.getElementById("peerAiStatusModal")?.classList.remove("hidden");
 }
 
@@ -345,7 +365,214 @@ function getPeerKnowledgePrompt() {
 }
 
 async function openPeerSourceLibrary() {
+  syncPeerDatabaseKnowledgeControls();
   document.getElementById("peerSourceLibraryModal")?.classList.remove("hidden");
+}
+
+function isPeerDatabaseKnowledgeEnabled() {
+  try {
+    const savedPreference = localStorage.getItem(PEER_DATABASE_KNOWLEDGE_ENABLED_KEY);
+    // Read-only database knowledge is on for new users. A saved "false" still
+    // honors an explicit choice to turn it off.
+    return savedPreference === null ? true : savedPreference === "true";
+  } catch { return true; }
+}
+
+function syncPeerDatabaseKnowledgeControls() {
+  const enabled = isPeerDatabaseKnowledgeEnabled();
+  const toggle = document.getElementById("peerDatabaseKnowledgeToggle"), label = document.getElementById("peerDatabaseKnowledgeToggleLabel"), badge = document.getElementById("peerDatabaseKnowledgeHubStatus");
+  if (toggle) toggle.checked = enabled;
+  if (label) label.textContent = enabled ? "On" : "Off";
+  if (badge) { badge.textContent = enabled ? "On" : "Off"; badge.classList.toggle("is-on", enabled); }
+}
+
+async function openPeerDatabaseKnowledge() {
+  closePeerModal("peerSourceLibraryModal");
+  syncPeerDatabaseKnowledgeControls();
+  document.getElementById("peerDatabaseKnowledgeModal")?.classList.remove("hidden");
+  await refreshPeerDatabaseKnowledgeAccess();
+}
+
+async function setPeerDatabaseKnowledgeEnabled(enabled) {
+  try { localStorage.setItem(PEER_DATABASE_KNOWLEDGE_ENABLED_KEY, String(Boolean(enabled))); } catch {}
+  peerDatabaseKnowledgeCache = null; peerDatabasePdfTextCache.clear(); peerDatabaseRequirementCache.clear();
+  syncPeerDatabaseKnowledgeControls();
+  if (enabled) await refreshPeerDatabaseKnowledgeAccess(true);
+  else renderPeerDatabaseKnowledgeSummary({ source: "disabled", master: [], aliases: [], usage: [], documents: [], errors: [] });
+  showPeerToast(enabled ? "Read-only database knowledge is on." : "Database knowledge is off.");
+}
+
+function readPeerLocalPartsKnowledge() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PEER_PARTS_STORAGE_KEY) || "{}");
+    return { master: Array.isArray(parsed.master) ? parsed.master : [], aliases: Array.isArray(parsed.aliases) ? parsed.aliases : [], usage: Array.isArray(parsed.usage) ? parsed.usage : [] };
+  } catch { return { master: [], aliases: [], usage: [] }; }
+}
+
+async function readPeerDatabaseTable(table, columns, limit) {
+  const { data, error } = await supabaseClient.from(table).select(columns).limit(limit);
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+async function loadPeerDatabaseKnowledge(force = false) {
+  if (!force && peerDatabaseKnowledgeCache && Date.now() - peerDatabaseKnowledgeCache.loadedAt < 5 * 60 * 1000) return peerDatabaseKnowledgeCache;
+  const local = readPeerLocalPartsKnowledge();
+  const result = { source: local.master.length || local.aliases.length || local.usage.length ? "saved browser copy" : "unavailable", master: local.master, aliases: local.aliases, usage: local.usage, documents: [], errors: [], loadedAt: Date.now() };
+  if (typeof supabaseClient === "undefined" || !supabaseClient) return (peerDatabaseKnowledgeCache = result);
+  try {
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    if (!sessionData?.session) { result.errors.push("Log in to read the shared company database and attached files."); return (peerDatabaseKnowledgeCache = result); }
+    const requests = [
+      ["master", PEER_DATABASE_TABLES.master, "current_part_number,description,category,manufacturer,manufacturer_part_number,status,record_type,source", 1500],
+      ["aliases", PEER_DATABASE_TABLES.aliases, "old_part_number,current_part_number,description,match_type,notes,source", 1000],
+      ["usage", PEER_DATABASE_TABLES.usage, "current_part_number,extracted_part_number,description,drawing_number,drawing_name,item_number,quantity,pdf_file_name,pdf_page_number,record_type", 2000],
+      ["documents", PEER_DATABASE_TABLES.documents, "id,file_name,display_title,document_type,packet_section,manufacturer,model_number,tags,notes,storage_path", 800]
+    ];
+    const settled = await Promise.all(requests.map(async ([key, table, columns, limit]) => {
+      try { return { key, rows: await readPeerDatabaseTable(table, columns, limit) }; }
+      catch (error) { return { key, rows: null, error: `${table}: ${error.message || "read failed"}` }; }
+    }));
+    settled.forEach(entry => { if (entry.rows) result[entry.key] = entry.rows; else result.errors.push(entry.error); });
+    if (settled.some(entry => entry.rows)) result.source = "shared company database";
+  } catch (error) { result.errors.push(error.message || "Shared database access failed."); }
+  peerDatabaseKnowledgeCache = result;
+  return result;
+}
+
+async function preloadPeerDatabaseKnowledge(force = false) {
+  if (!isPeerDatabaseKnowledgeEnabled()) return { source: "disabled", master: [], aliases: [], usage: [], documents: [], errors: [] };
+  if (!force && peerDatabaseKnowledgePreloadPromise) return peerDatabaseKnowledgePreloadPromise;
+  peerDatabaseKnowledgePreloadPromise = loadPeerDatabaseKnowledge(force);
+  try { return await peerDatabaseKnowledgePreloadPromise; }
+  finally { peerDatabaseKnowledgePreloadPromise = null; }
+}
+
+function renderPeerDatabaseKnowledgeSummary(data = {}) {
+  const root = document.getElementById("peerDatabaseKnowledgeSummary"), status = document.getElementById("peerDatabaseKnowledgeStatus");
+  if (!root || !status) return;
+  const enabled = isPeerDatabaseKnowledgeEnabled(), attached = (data.documents || []).filter(item => item.storage_path).length;
+  status.textContent = !enabled ? "Database knowledge is off. Turn it on to allow read-only retrieval during reviews." : data.errors?.length ? data.errors.join(" ") : `Company part knowledge is loaded from the ${data.source || "company database"} and ready before a drawing is uploaded.`;
+  status.classList.toggle("is-error", Boolean(enabled && data.errors?.length && data.source === "unavailable"));
+  root.innerHTML = `<div><small>Current parts</small><strong>${(data.master || []).length}</strong><span>Part numbers, descriptions, categories, and manufacturers</span></div><div><small>Part relationships</small><strong>${(data.aliases || []).length}</strong><span>Old/current numbers and accepted aliases</span></div><div><small>Drawing usage</small><strong>${(data.usage || []).length}</strong><span>Where individual parts have been used</span></div><div><small>Database files</small><strong>${attached}</strong><span>Relevant PDFs and Word files are converted to readable text; image-only PDF pages use OCR</span></div>`;
+}
+
+async function refreshPeerDatabaseKnowledgeAccess(force = false) {
+  syncPeerDatabaseKnowledgeControls();
+  const status = document.getElementById("peerDatabaseKnowledgeStatus");
+  if (!isPeerDatabaseKnowledgeEnabled()) return renderPeerDatabaseKnowledgeSummary({ source: "disabled", master: [], aliases: [], usage: [], documents: [], errors: [] });
+  if (status) status.textContent = "Checking read-only database access...";
+  const data = await preloadPeerDatabaseKnowledge(force);
+  renderPeerDatabaseKnowledgeSummary(data);
+}
+
+function getPeerDatabaseKnowledgeTokens(value = "") {
+  const ignored = new Set(["THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "SYSTEM", "EQUIPMENT", "DRAWING", "PAGE", "LAYOUT", "ITEM", "PART"]);
+  return new Set(normalizePeerValue(value).split(/[^A-Z0-9]+/).filter(token => token.length >= 3 && !ignored.has(token)));
+}
+
+function scorePeerDatabaseKnowledgeRow(row = {}, queryTokens = new Set()) {
+  const text = normalizePeerValue(Object.values(row).filter(value => typeof value === "string" || typeof value === "number").join(" "));
+  let score = 0; queryTokens.forEach(token => { if (text.includes(token)) score += token.length >= 6 ? 3 : 1; });
+  return score;
+}
+
+async function readPeerDatabaseDocumentText(documentRow = {}) {
+  const key = String(documentRow.id || documentRow.storage_path || ""); if (!key || !documentRow.storage_path) return "";
+  if (peerDatabasePdfTextCache.has(key)) return peerDatabasePdfTextCache.get(key);
+  if (peerDatabasePdfReadPromises.has(key)) return peerDatabasePdfReadPromises.get(key);
+  const readPromise = (async () => {
+  try {
+    const stored = await getPeerAnalysisCacheEntry(`datasheet:${key}`);
+    if (typeof stored?.text === "string" && stored.text) {
+      peerDatabasePdfTextCache.set(key, stored.text);
+      peerDatabaseRequirementCache.set(key, Array.isArray(stored.requirements) ? stored.requirements : extractPeerStructuredRequirements(stored.text, { sourceName: documentRow.file_name || documentRow.display_title, partNumber: "", model: documentRow.model_number, applicability: documentRow.packet_section || documentRow.document_type || "Manufacturer datasheet", approvalStatus: "Database source - applicability required" }));
+      return stored.text;
+    }
+  } catch {}
+  let text = "", worker = null;
+  try {
+    const { data: blob, error } = await supabaseClient.storage.from(PEER_DATABASE_DOCUMENTS_BUCKET).download(documentRow.storage_path);
+    if (error) throw error;
+    if (blob.size > 15 * 1024 * 1024) throw new Error("file exceeds the 15 MB AI reading limit");
+    const sourceName = String(documentRow.file_name || documentRow.storage_path || "");
+    const isWordDocument = /\.docx(?:$|[?#])/i.test(sourceName) || /wordprocessingml\.document/i.test(blob.type || "");
+    const isPdfDocument = /\.pdf(?:$|[?#])/i.test(sourceName) || /application\/pdf/i.test(blob.type || "");
+    if (isWordDocument) {
+      if (typeof mammoth === "undefined") throw new Error("Word document reader is unavailable");
+      const result = await mammoth.extractRawText({ arrayBuffer: await blob.arrayBuffer() });
+      text = String(result?.value || "").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n");
+      if (peerAnalysisStartedAt && text.trim()) recordPeerAnalysisMessage(`Read Word knowledge file ${documentRow.file_name || documentRow.display_title || key}.`);
+    } else {
+      if (!isPdfDocument) throw new Error(`unsupported database file type${sourceName ? ` for ${sourceName}` : ""}`);
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+      try {
+      const imageOnlyPages = [];
+      for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 20) && text.length < 9000; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber), content = await page.getTextContent();
+        const pageText = content.items.map(item => `${item.str}${item.hasEOL ? "\n" : " "}`).join("").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
+        if (pageText.length >= 24) text += `\nPage ${pageNumber}: ${pageText}`;
+        else imageOnlyPages.push(pageNumber);
+      }
+      if (imageOnlyPages.length && text.length < 9000 && await ensurePeerTesseractLoaded()) {
+        await verifyPeerWebAssemblyAccess();
+        worker = await withPeerTimeout(Tesseract.createWorker("eng", 1, {
+          workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@v5.0.0/dist/worker.min.js",
+          corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.0.0",
+          langPath: "https://tessdata.projectnaptha.com/4.0.0_fast"
+        }), 75000, "Database datasheet OCR took too long to initialize.");
+        const pagesToScan = imageOnlyPages.slice(0, 4);
+        if (peerAnalysisStartedAt) recordPeerAnalysisMessage(`OCR-scanning ${pagesToScan.length} image-only page${pagesToScan.length === 1 ? "" : "s"} from database datasheet ${documentRow.file_name || documentRow.display_title || key}.`);
+        for (const pageNumber of pagesToScan) {
+          try {
+            const page = await pdf.getPage(pageNumber), base = page.getViewport({ scale: 1 });
+            const viewport = page.getViewport({ scale: Math.min(1.7, 2400 / Math.max(base.width, 1)) });
+            const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+            await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+            const result = await withPeerTimeout(worker.recognize(canvas), 45000, `Database datasheet OCR exceeded 45 seconds on page ${pageNumber}.`);
+            const pageText = String(result.data?.text || "").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
+            if (pageText) text += `\nPage ${pageNumber} (OCR): ${pageText}`;
+          } catch (ocrError) {
+            console.warn(`Database datasheet OCR stopped on page ${pageNumber}:`, ocrError);
+            break;
+          }
+          if (text.length >= 9000) break;
+        }
+      }
+      } finally { if (worker) await worker.terminate(); await pdf.destroy(); }
+    }
+  } catch (error) { console.warn(`Database document could not be read: ${documentRow.file_name || documentRow.display_title || key}`, error); }
+  text = text.trim().slice(0, 9000); peerDatabasePdfTextCache.set(key, text);
+  const requirements = extractPeerStructuredRequirements(text, { sourceName: documentRow.file_name || documentRow.display_title, partNumber: "", model: documentRow.model_number, applicability: documentRow.packet_section || documentRow.document_type || "Manufacturer datasheet", approvalStatus: "Database source - applicability required" });
+  peerDatabaseRequirementCache.set(key, requirements);
+  if (text) try { await putPeerAnalysisCacheEntry({ key: `datasheet:${key}`, text, requirements, updatedAt: new Date().toISOString() }); } catch {}
+  return text;
+  })();
+  peerDatabasePdfReadPromises.set(key, readPromise);
+  try { return await readPromise; }
+  finally { peerDatabasePdfReadPromises.delete(key); }
+}
+
+async function buildPeerDatabaseKnowledgeContext(pageNumber = 0) {
+  if (!isPeerDatabaseKnowledgeEnabled()) return "";
+  const data = await preloadPeerDatabaseKnowledge();
+  const page = peerReview?.pages?.find(item => Number(item.number) === Number(pageNumber));
+  const query = [peerReview?.filename, page?.text, page?.ocrText, ...(page?.visualCallouts || []).flatMap(item => [item.tag, item.name]), ...(peerReview?.equipmentRows || []).flatMap(item => [item.tag, item.description]), ...(peerReview?.evidenceLedger || []).flatMap(item => [item.tag, item.object, item.value])].filter(Boolean).join(" ");
+  const tokens = getPeerDatabaseKnowledgeTokens(query); if (!tokens.size) return "";
+  const rank = (rows, limit, minimum = 1) => rows.map(row => ({ row, score: scorePeerDatabaseKnowledgeRow(row, tokens) })).filter(item => item.score >= minimum).sort((left, right) => right.score - left.score).slice(0, limit).map(item => item.row);
+  const parts = rank(data.master || [], 18), aliases = rank(data.aliases || [], 8), usage = rank(data.usage || [], 10), documents = rank(data.documents || [], 3, 2);
+  const sections = [];
+  if (parts.length) sections.push(`[Database: Current Parts; Read only]\n${parts.map(item => [item.current_part_number, item.description, item.category, item.manufacturer, item.manufacturer_part_number].filter(Boolean).join(" | ")).join("\n")}`);
+  if (aliases.length) sections.push(`[Database: Part Relationships; Read only]\n${aliases.map(item => [item.old_part_number, item.current_part_number, item.description, item.notes].filter(Boolean).join(" | ")).join("\n")}`);
+  if (usage.length) sections.push(`[Database: Drawing Usage; Read only]\n${usage.map(item => [item.current_part_number || item.extracted_part_number, item.description, item.drawing_number || item.drawing_name, item.pdf_file_name, item.pdf_page_number ? `page ${item.pdf_page_number}` : ""].filter(Boolean).join(" | ")).join("\n")}`);
+  for (const documentRow of documents.slice(0, 2)) {
+    const fileText = await readPeerDatabaseDocumentText(documentRow);
+    const requirements = peerDatabaseRequirementCache.get(String(documentRow.id || documentRow.storage_path || "")) || [];
+    if (requirements.length) sections.push(`[Indexed requirements: ${documentRow.file_name || documentRow.display_title}; Model: ${documentRow.model_number || "Not listed"}]\n${requirements.slice(0, 18).map(item => `PART/MODEL: ${item.partNumber || "Not listed"} / ${item.model || "Not listed"} | REQUIREMENT: ${item.requirement} | APPLIES TO: ${item.applicability} | SOURCE PAGE: ${item.sourcePage || "Not identified"} | APPROVAL: ${item.approvalStatus}`).join("\n")}`);
+    if (fileText) sections.push(`[Database PDF context: ${documentRow.file_name || documentRow.display_title}; Manufacturer: ${documentRow.manufacturer || "Not listed"}; Model: ${documentRow.model_number || "Not listed"}; Read only]\n${fileText.slice(0, 3500)}`);
+  }
+  if (!sections.length) return "";
+  return `READ-ONLY DATABASE KNOWLEDGE\nUse this material to understand individual part identity, function, accepted numbers, and documented usage. It does not prove that a part is installed in the current project and does not create a design requirement unless the current drawing visibly identifies the same part/model and the cited file states the requirement. Never report a missing component solely because it appears in the database.\n\n${sections.join("\n\n")}`.slice(0, 16000);
 }
 
 function openPeerAcceptedKnowledge() {
@@ -487,18 +714,37 @@ async function handlePeerKnowledgeFiles(fileList) {
     try {
       const chunks = await extractPeerKnowledgeChunks(file);
       if (!chunks.length) throw new Error("No readable text was found.");
-      await putPeerKnowledgeSource({ id: crypto.randomUUID(), name: file.name, category, status: "Approved", addedAt: new Date().toISOString(), size: file.size, chunks });
+      const referenceDrawing = /\.dwg$/i.test(file.name) || category === "Reference Drawing Context" || category === "Approved Peer Review";
+      const sourceText = chunks.map(chunk => `Page ${chunk.page || 0}: ${chunk.text}`).join("\n");
+      const requirements = referenceDrawing ? [] : extractPeerStructuredRequirements(sourceText, { sourceName: file.name, applicability: category, approvalStatus: "Approved" });
+      await putPeerKnowledgeSource({ id: crypto.randomUUID(), name: file.name, category: /\.dwg$/i.test(file.name) ? "Reference Drawing Context" : category, referenceType: referenceDrawing ? "prior-drawing-context" : "approved-source", authority: referenceDrawing ? "Context only - not a requirement" : "Approved requirement source", status: "Approved", addedAt: new Date().toISOString(), size: file.size, chunks, requirements });
       added += 1;
     } catch (error) {
       if (status) status.textContent = `${file.name} was not added: ${error.message}`;
     }
   }
   document.getElementById("peerKnowledgeFiles").value = "";
-  if (status && added) status.textContent = `${added} source${added === 1 ? "" : "s"} added and available to Local AI.`;
+  if (status && added) status.textContent = `${added} source${added === 1 ? "" : "s"} indexed and available to Local AI. Reference drawings remain context only.`;
   await renderPeerKnowledgeSources();
 }
 
 async function extractPeerKnowledgeChunks(file) {
+  if (/\.dwg$/i.test(file.name)) {
+    const client = getPeerLocalAiClient();
+    const token = await client.getSessionToken("Sign in with the Database login before indexing a reference DWG.");
+    const response = await client.fetch(`/api/cad-peer-review?reference=1&filename=${encodeURIComponent(file.name)}`, { method: "POST", token, headers: { "Content-Type": "application/octet-stream" }, body: file });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Reference DWG indexing returned ${response.status}.`);
+    const cad = buildPeerCadData(payload.records || [], payload.layouts || [], payload.sheets || []);
+    const lines = [`REFERENCE DRAWING CONTEXT ONLY: ${file.name}`, "This prior drawing is an example of past usage, not proof of a requirement for another project."];
+    cad.tables.forEach(table => {
+      lines.push(`TABLE: ${table.title || table.handle}`);
+      table.cells.filter(cell => cell.value).forEach(cell => lines.push(`ROW ${Number(cell.row) + 1}, COLUMN ${Number(cell.column) + 1}, HEADING ${cell.heading || "unidentified"}, TAG ${cell.tag || "none"}, ATTRIBUTE ${cell.attribute || "unclassified"}, VALUE ${cell.value}`));
+    });
+    cad.blocks.filter(block => block.attributes.length).slice(0, 500).forEach(block => lines.push(`BLOCK ${block.name}: ${block.attributes.map(attribute => `${attribute.tag}=${attribute.value}`).join(" | ")}`));
+    cad.texts.filter(item => item.text).slice(0, 1500).forEach(item => lines.push(`TEXT: ${cleanPeerCadCellValue(item.text)}`));
+    return splitPeerKnowledgeText(lines.join("\n"), 0);
+  }
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
     const document = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
     const chunks = [];
@@ -511,7 +757,7 @@ async function extractPeerKnowledgeChunks(file) {
     } finally { await document.destroy(); }
     return chunks;
   }
-  if (!/\.(?:txt|md|csv)$/i.test(file.name)) throw new Error("Choose a PDF, TXT, MD, or CSV file.");
+  if (!/\.(?:txt|md|csv)$/i.test(file.name)) throw new Error("Choose a PDF, DWG, TXT, MD, or CSV file.");
   return splitPeerKnowledgeText(await file.text(), 0);
 }
 
@@ -536,6 +782,12 @@ async function renderPeerKnowledgeSources() {
   root.innerHTML = sources.map(source => `<article class="peer-knowledge-source"><div><strong>${escapePeerHTML(source.name)}</strong><span>${escapePeerHTML(source.category)} · ${source.chunks.length} searchable excerpt${source.chunks.length === 1 ? "" : "s"}</span><small class="peer-knowledge-status approved">Available to AI</small></div><div class="button-row"><button class="delete-btn" onclick="removePeerKnowledgeSource('${source.id}')">Remove</button></div></article>`).join("") || "<p>No knowledge sources added yet.</p>";
 }
 
+renderPeerKnowledgeSources = async function renderPeerKnowledgeSourcesWithAuthority() {
+  const root = document.getElementById("peerKnowledgeSourceList"); if (!root) return;
+  const sources = await getAllPeerKnowledgeSources();
+  root.innerHTML = sources.map(source => `<article class="peer-knowledge-source"><div><strong>${escapePeerHTML(source.name)}</strong><span>${escapePeerHTML(source.category)} | ${source.chunks.length} searchable excerpt${source.chunks.length === 1 ? "" : "s"} | ${(source.requirements || []).length} indexed requirement${(source.requirements || []).length === 1 ? "" : "s"}</span><small class="peer-knowledge-status approved">${escapePeerHTML(source.authority || "Available to AI")}</small></div><div class="button-row"><button class="delete-btn" onclick="removePeerKnowledgeSource('${source.id}')">Remove</button></div></article>`).join("") || "<p>No knowledge sources added yet.</p>";
+};
+
 async function setPeerKnowledgeSourceStatus(id, status) {
   const source = await getPeerKnowledgeSource(id); if (!source) return;
   source.status = status; source.reviewedAt = new Date().toISOString(); source.reviewedBy = peerCurrentUser;
@@ -548,8 +800,7 @@ async function removePeerKnowledgeSource(id) {
 
 async function buildPeerKnowledgeContext(pageNumber) {
   let sources = [];
-  try { sources = (await getAllPeerKnowledgeSources()).filter(source => source.status === "Approved"); } catch { return "No approved company knowledge sources were retrieved."; }
-  if (!sources.length) return "No approved company knowledge sources have been added.";
+  try { sources = (await getAllPeerKnowledgeSources()).filter(source => source.status === "Approved"); } catch { sources = []; }
   const pageText = String(peerReview?.pages?.find(page => page.number === pageNumber)?.text || "");
   const query = `${peerReview?.filename || ""} ${pageText.slice(0, 9000)}`;
   const stopWords = new Set(["THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "ARE", "NOT", "PAGE", "DRAWING", "SYSTEM", "EQUIPMENT", "LAYOUT", "NOTE", "ITEM"]);
@@ -568,10 +819,60 @@ async function buildPeerKnowledgeContext(pageNumber) {
     if (used >= 7500) return;
     const available = Math.min(2200, 7500 - used), text = String(chunk.text || "").slice(0, available);
     if (!text.trim()) return;
-    const citation = `[Source: ${source.name}${chunk.page ? `, page ${chunk.page}` : ""}; Category: ${source.category}]`;
+    const authority = source.referenceType === "prior-drawing-context" ? "Context only - prior drawing; never a requirement" : source.authority || "Approved source";
+    const citation = `[Source: ${source.name}${chunk.page ? `, page ${chunk.page}` : ""}; Category: ${source.category}; Authority: ${authority}]`;
     excerpts.push(`${citation}\n${text}`); used += citation.length + text.length;
   });
-  return excerpts.length ? excerpts.join("\n\n") : "Approved sources exist, but no readable excerpts were available.";
+  const matchedRequirements = selected.flatMap(({ source }) => (source.requirements || []).filter(item => item.approvalStatus === "Approved")).slice(0, 20);
+  const requirementContext = matchedRequirements.length ? `[STRUCTURED APPROVED REQUIREMENTS]\n${matchedRequirements.map(item => `PART/MODEL: ${item.partNumber || "Not listed"} / ${item.model || "Not listed"} | REQUIREMENT: ${item.requirement} | APPLIES TO: ${item.applicability} | SOURCE: ${item.sourceName}, page ${item.sourcePage || "not identified"} | APPROVAL: ${item.approvalStatus}`).join("\n")}` : "";
+  const referenceContext = [requirementContext, excerpts.length ? excerpts.join("\n\n") : ""].filter(Boolean).join("\n\n");
+  const databaseContext = await buildPeerDatabaseKnowledgeContext(pageNumber);
+  const cadContext = buildPeerCadKnowledgeContext(pageNumber);
+  const combined = [referenceContext, databaseContext, cadContext].filter(Boolean);
+  return combined.length ? combined.join("\n\n") : "No approved company knowledge sources have been added.";
+}
+
+function extractPeerStructuredRequirements(text = "", metadata = {}) {
+  const sourceName = String(metadata.sourceName || "Approved source").trim();
+  const approvalStatus = String(metadata.approvalStatus || "Needs approval").trim();
+  const requirements = [], seen = new Set();
+  let currentPage = 0;
+  String(text || "").replace(/\r/g, "").split(/\n+/).forEach(line => {
+    const pageMatch = line.match(/^Page\s+(\d+)/i); if (pageMatch) currentPage = Number(pageMatch[1]);
+    line.split(/(?<=[.;])\s+(?=[A-Z0-9])/).forEach(sentence => {
+      const requirement = sentence.replace(/^Page\s+\d+(?:\s*\(OCR\))?\s*:\s*/i, "").replace(/\s+/g, " ").trim();
+      if (requirement.length < 18 || requirement.length > 700) return;
+      if (!/\b(?:SHALL|MUST|REQUIRED|REQUIRES|MINIMUM|MAXIMUM|DO NOT|NOT PERMITTED|PROVIDE|INSTALL|MAINTAIN|WITHIN\s+\d|NO MORE THAN|AT LEAST)\b/i.test(requirement)) return;
+      const key = normalizePeerValue(requirement); if (seen.has(key)) return; seen.add(key);
+      requirements.push({
+        id: `${normalizePeerValue(sourceName).slice(0, 30)}-${currentPage}-${requirements.length + 1}`,
+        partNumber: String(metadata.partNumber || "").trim(), model: String(metadata.model || "").trim(),
+        requirement, applicability: String(metadata.applicability || "Confirm matching part/model and system context").trim(),
+        sourceName, sourcePage: currentPage, approvalStatus
+      });
+    });
+  });
+  return requirements.slice(0, 120);
+}
+
+function buildPeerCadKnowledgeContext(pageNumber) {
+  const cad = peerReview?.cadData, layout = cad?.layouts?.[Number(pageNumber) - 1];
+  if (!cad || !layout) return "";
+  const appliesToPage = item => Number(item.page || 0) ? Number(item.page) === Number(pageNumber) : item.layout === layout || (!cad.sheets?.length && String(item.layout).toUpperCase() === "MODEL");
+  const blocks = cad.blocks.filter(appliesToPage).slice(0, 180).map(item => {
+    const attributes = item.attributes.filter(attribute => attribute.tag || attribute.value).map(attribute => `${attribute.tag}=${attribute.value}`).join(", ");
+    return `BLOCK ${item.name || "unnamed"}${attributes ? ` [${attributes}]` : ""}`;
+  });
+  const dimensions = cad.dimensions.filter(appliesToPage).slice(0, 120).map(item => `DIMENSION ${item.text || item.measurement || "unlabeled"}`);
+  const calloutTags = Array.from(new Set((cad.callouts || []).filter(appliesToPage).map(item => String(item.tag || "").trim()).filter(Boolean))).slice(0, 120).map(tag => `NUMBERED MULTILEADER TAG ${tag}`);
+  const tables = cad.tables.filter(appliesToPage).slice(0, 12).flatMap(table => {
+    const rows = new Map(); table.cells.forEach(cell => { if (!rows.has(cell.row)) rows.set(cell.row, []); rows.get(cell.row)[cell.column] = cell.value; });
+    const structuredRows = Array.from(rows.entries()).slice(0, 80).map(([row, values]) => `TABLE ${table.handle} ROW ${row + 1}: ${values.map(value => value || "").join(" | ")}`);
+    return structuredRows.length ? structuredRows : [`TABLE ${table.handle}: ${table.text || "native table present; use plotted vector text for cell review"}`];
+  });
+  const texts = cad.texts.filter(item => appliesToPage(item) && String(item.text || "").trim()).slice(0, 220).map(item => `TEXT ${String(item.text).replace(/\s+/g, " ").trim()}`);
+  const lines = [...blocks, ...dimensions, ...calloutTags, ...tables, ...texts];
+  return lines.length ? `[Native DWG structured source: layout ${layout}; exact CAD entities and attributes]\n${lines.join("\n").slice(0, 12000)}` : "";
 }
 
 async function buildPeerDocumentKnowledgeContext(pageNumbers = [1, 2]) {
@@ -584,7 +885,7 @@ async function buildPeerDocumentKnowledgeContext(pageNumbers = [1, 2]) {
 
 function newPeerReview(type) {
   const now = new Date().toISOString();
-  return { id: peerId("review"), type, project: "", filename: "", reviewer: peerCurrentUser, createdAt: now, updatedAt: now, status: "In Progress", maximumSweep: true, pages: [], equipmentRows: [], evidenceLedger: [], systemRegistry: [], coverageReport: {}, findings: [], checklist: [], fixStates: {}, history: [{ action: "Review created", user: peerCurrentUser, date: now }] };
+  return { id: peerId("review"), type, project: "", filename: "", sourceFormat: "", cadData: null, reviewer: peerCurrentUser, createdAt: now, updatedAt: now, status: "In Progress", maximumSweep: true, pages: [], equipmentRows: [], evidenceLedger: [], systemRegistry: [], coverageReport: {}, findings: [], checklist: [], fixStates: {}, history: [{ action: "Review created", user: peerCurrentUser, date: now }] };
 }
 
 function startPeerReview(type) {
@@ -593,7 +894,7 @@ function startPeerReview(type) {
   document.getElementById("peerReviewLanding").classList.add("hidden");
   document.getElementById("peerWorkspace").classList.remove("hidden");
   document.getElementById("peerPdfUpload").value = "";
-  document.getElementById("peerUploadStatus").textContent = "Choose a PDF to begin.";
+  document.getElementById("peerUploadStatus").textContent = "Choose a DWG or PDF to begin.";
   renderPeerSummary(); renderPeerPages(); renderPeerEquipmentTable(); renderPeerFindings(); renderPeerChecklist(); renderPeerFixList(); showPeerStep("setup");
 }
 
@@ -610,6 +911,13 @@ async function openPeerReview(id) {
   const stored = readPeerReviews().find(review => review.id === id);
   if (!stored) return showPeerToast("That saved review could not be found.");
   peerReview = stored; peerPdfDocument = null;
+  peerReview.findings = (peerReview.findings || []).filter(item => !isPeerFindingSelfNegating(item));
+  if (stored.cadStored) try {
+    peerReview.cadData = await getPeerCadData(id);
+    applyPeerCadSheetMetadata();
+    extractPeerEquipmentRows();
+    if (!peerReview.findings.length && peerReview.equipmentRows.some(row => row.source === "native-cad")) refreshPeerCadTableFindings(false);
+  } catch (error) { console.warn("Saved native CAD evidence was unavailable:", error); }
   if (typeof peerReview.maximumSweep !== "boolean") peerReview.maximumSweep = true;
   document.getElementById("peerReviewLanding").classList.add("hidden"); document.getElementById("peerWorkspace").classList.remove("hidden");
   renderPeerSummary(); renderPeerPages(); renderPeerEquipmentTable(); renderPeerFindings(); renderPeerChecklist(); renderPeerFixList(); showPeerStep("findings");
@@ -637,39 +945,353 @@ function setupPeerDropZone() {
   if (!zone) return;
   ["dragenter", "dragover"].forEach(name => zone.addEventListener(name, event => { event.preventDefault(); zone.classList.add("dragover"); }));
   ["dragleave", "drop"].forEach(name => zone.addEventListener(name, event => { event.preventDefault(); zone.classList.remove("dragover"); }));
-  zone.addEventListener("drop", event => handlePeerPdf(event.dataTransfer.files?.[0]));
+  zone.addEventListener("drop", event => handlePeerDrawing(event.dataTransfer.files?.[0]));
   zone.addEventListener("click", event => {
     if (event.target.closest("label, input, button")) return;
     document.getElementById("peerPdfUpload").click();
   });
 }
 
+function resetPeerDrawingData(filename, sourceFormat) {
+  peerReview.filename = filename; peerReview.sourceFormat = sourceFormat; peerReview.pages = []; peerReview.equipmentRows = []; peerReview.evidenceLedger = []; peerReview.systemRegistry = []; peerReview.coverageReport = {}; peerReview.findings = []; peerReview.cadData = null; peerReview.disciplineSweepCache = {}; delete peerReview.aiAnalysisCacheVersion;
+}
+
+function handlePeerDrawing(file) {
+  if (!file) return;
+  if (peerDrawingLoadRunning) return showPeerToast("A drawing is already being prepared. Keep this page open until it finishes.");
+  if (peerCheckRunning) return showPeerToast("Wait for the automatic review to finish before loading another drawing.");
+  return file.name.toLowerCase().endsWith(".dwg") ? handlePeerDwg(file) : handlePeerPdf(file);
+}
+
 async function handlePeerPdf(file) {
   if (!peerReview || !file) return;
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return setPeerStatus("Choose a PDF file.", true);
-  setPeerStatus(`Reading ${file.name} locally...`);
+  peerDrawingLoadRunning = true;
+  startPeerAnalysisTimer(`Opening PDF ${file.name}.`, "file-read");
+  setPeerStatus(`Opening PDF ${file.name}...`);
   try {
-    peerReview.filename = file.name; peerReview.pages = []; peerReview.equipmentRows = []; peerReview.evidenceLedger = []; peerReview.systemRegistry = []; peerReview.coverageReport = {}; peerReview.findings = [];
-    await loadPeerPdfDocument(file, true); await savePeerPdf(peerReview.id, file);
+    resetPeerDrawingData(file.name, "PDF");
+    await loadPeerPdfDocument(file, true, "PDF");
+    reportPeerDrawingRead(`PDF page text is ready. Saving ${file.name} in local review history.`);
+    await savePeerPdf(peerReview.id, file);
+    if (isPeerDatabaseKnowledgeEnabled()) await preparePeerDatabaseDocumentsForReview();
     peerReview.updatedAt = new Date().toISOString(); renderPeerSummary(); renderPeerPages(); renderPeerEquipmentTable(); savePeerReview(false); showPeerStep("pages");
-    setPeerStatus(`${file.name} loaded. ${peerReview.pages.length} page${peerReview.pages.length === 1 ? "" : "s"} ready for review.`);
+    finishPeerDrawingRead(`${file.name} loaded. ${peerReview.pages.length} page${peerReview.pages.length === 1 ? "" : "s"} ready for review.`);
   } catch (error) {
     const message = /password|encrypted/i.test(error?.message || "") ? "This PDF is encrypted. Remove the password and try again." : /InvalidPDF|invalid pdf/i.test(error?.message || "") ? "This PDF appears corrupted or is not a valid PDF." : `The PDF could not be read: ${error?.message || "Unknown error"}`;
-    setPeerStatus(message, true);
+    finishPeerDrawingRead(message, true);
+  } finally {
+    peerDrawingLoadRunning = false;
   }
 }
 
-async function loadPeerPdfDocument(file, extractPages) {
+async function loadPeerPdfDocument(file, extractPages, sourceLabel = "PDF") {
+  if (extractPages) reportPeerDrawingRead(`Loading ${sourceLabel} bytes into the local PDF reader.`);
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (extractPages) reportPeerDrawingRead(`${sourceLabel} bytes loaded. Calculating the drawing fingerprint.`);
+  peerReview.pdfFingerprint = await computePeerPdfFingerprint(bytes);
   peerPdfDocument = await pdfjsLib.getDocument({ data: bytes }).promise;
   if (!peerPdfDocument.numPages) throw new Error("This PDF is empty.");
   if (!extractPages) return;
+  reportPeerDrawingRead(`${sourceLabel} opened with ${peerPdfDocument.numPages} page${peerPdfDocument.numPages === 1 ? "" : "s"}. Reading selectable page text.`);
   for (let number = 1; number <= peerPdfDocument.numPages; number += 1) {
-    setPeerStatus(`Reading page ${number} of ${peerPdfDocument.numPages}...`);
+    reportPeerDrawingRead(`Reading ${sourceLabel.toLowerCase()} page ${number} of ${peerPdfDocument.numPages}.`);
     const page = await peerPdfDocument.getPage(number); const content = await page.getTextContent();
     const text = content.items.map(item => `${item.str}${item.hasEOL ? "\n" : " "}`).join("").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
     peerReview.pages.push(analyzePeerPage(number, text, peerPdfDocument.numPages));
   }
+  reportPeerDrawingRead(`Finished reading ${peerPdfDocument.numPages} ${sourceLabel.toLowerCase()} page${peerPdfDocument.numPages === 1 ? "" : "s"}. Checking for reusable review data.`);
+  await restorePeerPersistentAnalysisCache();
+}
+
+async function preparePeerDatabaseDocumentsForReview() {
+  if (!peerReview?.pages?.length || !isPeerDatabaseKnowledgeEnabled()) return;
+  const representativePages = [];
+  const seenRoles = new Set();
+  peerReview.pages.forEach(page => {
+    const role = getPeerDeterministicPageRole(page);
+    if (seenRoles.has(role)) return;
+    seenRoles.add(role); representativePages.push(page.number);
+  });
+  reportPeerDrawingRead(`Preparing relevant company datasheets for ${representativePages.length} drawing type${representativePages.length === 1 ? "" : "s"} before review.`);
+  const before = peerDatabasePdfTextCache.size;
+  for (const pageNumber of representativePages.slice(0, 4)) {
+    try { await buildPeerDatabaseKnowledgeContext(pageNumber); }
+    catch (error) { console.warn(`Company datasheet preparation could not finish for page ${pageNumber}:`, error); }
+  }
+  const prepared = Math.max(0, peerDatabasePdfTextCache.size - before);
+  const requirementCount = Array.from(peerDatabaseRequirementCache.values()).reduce((count, requirements) => count + (Array.isArray(requirements) ? requirements.length : 0), 0);
+  reportPeerDrawingRead(`Company knowledge ready${prepared ? `; ${prepared} relevant datasheet${prepared === 1 ? "" : "s"} prepared` : ""}${requirementCount ? `; ${requirementCount} explicit requirement${requirementCount === 1 ? "" : "s"} indexed` : ""}. Finalizing the drawing upload.`);
+}
+
+async function computePeerPdfFingerprint(bytes) {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, "0")).join("");
+  } catch {
+    let hash = 2166136261;
+    for (let index = 0; index < bytes.length; index += Math.max(1, Math.floor(bytes.length / 50000))) hash = Math.imul(hash ^ bytes[index], 16777619);
+    return `${bytes.length}-${(hash >>> 0).toString(16)}`;
+  }
+}
+
+function decodePeerBase64(value) {
+  const binary = atob(String(value || "")), bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function readPeerCadProgressResponse(response) {
+  const contentType = String(response.headers.get("Content-Type") || "");
+  if (!contentType.includes("application/x-ndjson") || !response.body?.getReader) return response.json().catch(() => ({}));
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let buffer = "", payload = null, streamedError = "";
+  const readEvent = line => {
+    if (!line.trim()) return;
+    let event;
+    try { event = JSON.parse(line); }
+    catch { throw new Error("The DWG progress response could not be read."); }
+    if (event.type === "progress" && event.message) reportPeerDrawingRead(event.message);
+    else if (event.type === "result") payload = event.payload;
+    else if (event.type === "error") streamedError = event.error || "The DWG conversion could not be completed.";
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      readEvent(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1); newline = buffer.indexOf("\n");
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) readEvent(buffer);
+  if (streamedError) throw new Error(streamedError);
+  if (!payload) throw new Error("AutoCAD finished without returning the prepared drawing package.");
+  return payload;
+}
+
+async function mergePeerCadLayoutPdfs(payload, sourceName) {
+  const document = await PDFLib.PDFDocument.create();
+  for (const plot of payload.pdfs || []) {
+    const source = await PDFLib.PDFDocument.load(decodePeerBase64(plot.data));
+    const pages = await document.copyPages(source, source.getPageIndices());
+    pages.forEach(page => document.addPage(page));
+  }
+  if (!document.getPageCount()) throw new Error("AutoCAD did not return a plotted layout.");
+  const bytes = await document.save();
+  return new File([bytes], sourceName.replace(/\.dwg$/i, "") + " - CAD Review.pdf", { type: "application/pdf" });
+}
+
+function getPeerCadPageForEntity(entity = {}, sheets = []) {
+  const handleSheet = sheets.find(sheet => sheet.handle && sheet.handle === entity.handle);
+  if (handleSheet) return Math.max(1, Number(handleSheet.sheetNumber) || sheets.indexOf(handleSheet) + 1);
+  const point = entity.point;
+  if (!Array.isArray(point) || point.length < 2) return 0;
+  const sheet = sheets.find(item => Array.isArray(item.bounds) && item.bounds.length === 4 && point[0] >= item.bounds[0] && point[0] <= item.bounds[2] && point[1] >= item.bounds[1] && point[1] <= item.bounds[3]);
+  return sheet ? Math.max(1, Number(sheet.sheetNumber) || sheets.indexOf(sheet) + 1) : 0;
+}
+
+function cleanPeerCadTableFallbackText(value = "") {
+  const tokens = String(value).replace(/\\P/g, " / ").replace(/U\+0278/g, "PH").split(/\s+\|\s+/)
+    .map(token => token.replace(/CELL_VALUE|ACVALUE_END|CONTEXT_DATA\{|[{}]/gi, "").replace(/\\[A-Za-z][^;]*;/g, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return tokens.filter((token, index) => !index || token !== tokens[index - 1]).join(" | ").slice(0, 16000);
+}
+
+function extractPeerCadFallbackTableCells(text = "", rows = 0, columns = 0) {
+  if (!rows || !columns) return [];
+  const groups = String(text || "").split(/ACVALUE_END/i);
+  const values = groups.flatMap(group => {
+    const marker = group.lastIndexOf("CELL_VALUE");
+    if (marker < 0) return [];
+    const candidates = group.slice(marker + "CELL_VALUE".length).split(/\s+\|\s+/)
+      .map(value => cleanPeerCadCellValue(value)).filter(Boolean);
+    const unique = Array.from(new Set(candidates));
+    return [unique.sort((left, right) => right.length - left.length)[0] || ""];
+  });
+  const expected = rows * columns;
+  while (values.length < expected) values.push("");
+  return values.slice(0, expected).map((value, index) => ({ row: Math.floor(index / columns), column: index % columns, value }));
+}
+
+function buildPeerCadData(records = [], layouts = [], sheets = []) {
+  const entities = records.filter(item => item.record === "entity");
+  const entityByHandle = new Map(entities.map(item => [item.handle, item]));
+  const attributes = records.filter(item => item.record === "block_attribute");
+  const attributesByHandle = new Map();
+  attributes.forEach(item => {
+    if (!attributesByHandle.has(item.handle)) attributesByHandle.set(item.handle, []);
+    attributesByHandle.get(item.handle).push({ tag: String(item.tag || "").trim(), value: String(item.value || "").trim() });
+  });
+  const allBlocks = entities.filter(item => item.type === "INSERT");
+  const blocks = allBlocks.slice(0, 3000).map(item => ({ layout: item.layout, page: getPeerCadPageForEntity(item, sheets), handle: item.handle, name: item.name, layer: item.layer, point: item.point, attributes: attributesByHandle.get(item.handle) || [] }));
+  const tableMeta = new Map(records.filter(item => item.record === "table_meta").map(item => [`${item.layout}:${item.handle}`, item]));
+  const tableMap = new Map();
+  entities.filter(item => item.type === "ACAD_TABLE" || item.type === "TABLE").forEach(item => {
+    const key = `${item.layout}:${item.handle}`, meta = tableMeta.get(key) || {};
+    tableMap.set(key, { layout: item.layout, page: getPeerCadPageForEntity(item, sheets), handle: item.handle, layer: item.layer, text: cleanPeerCadTableFallbackText(item.text), rawText: item.text || "", rows: Number(meta.rows || item.tableRows || 0), columns: Number(meta.columns || item.tableColumns || 0), cells: [] });
+  });
+  const allTableCells = records.filter(item => item.record === "table_cell");
+  allTableCells.forEach(cell => {
+    const key = `${cell.layout}:${cell.handle}`;
+    if (!tableMap.has(key)) tableMap.set(key, { layout: cell.layout, page: getPeerCadPageForEntity(entityByHandle.get(cell.handle), sheets), handle: cell.handle, layer: cell.layer, cells: [] });
+    tableMap.get(key).cells.push({ row: Number(cell.row), column: Number(cell.column), value: String(cell.value || "").trim() });
+  });
+  const tables = Array.from(tableMap.values()).map(table => {
+    if (!table.cells.length) table.cells = extractPeerCadFallbackTableCells(table.rawText, table.rows, table.columns);
+    return structurePeerCadTable(table);
+  });
+  const callouts = entities.filter(item => item.type === "MULTILEADER").flatMap(item => {
+    const tag = String(item.text || "").match(/(?:^|\|)\s*(\d{1,3}[A-Z]?)\s*$/i)?.[1] || "";
+    return tag ? [{ layout: item.layout, page: getPeerCadPageForEntity(item, sheets), handle: item.handle, layer: item.layer, tag, point: item.point }] : [];
+  });
+  const structuredCellCount = tables.reduce((count, table) => count + table.cells.length, 0);
+  return {
+    layouts: Array.from(layouts), sheets: Array.from(sheets), blocks, tables, callouts,
+    texts: entities.filter(item => item.type === "TEXT" || item.type === "MTEXT" || (item.type === "MULTILEADER" && String(item.text || "").trim() && !/^(?:CONTEXT_DATA|\s*\d+\s*$)/i.test(item.text))).slice(0, 5000).map(item => ({ ...item, page: getPeerCadPageForEntity(item, sheets) })),
+    dimensions: entities.filter(item => item.type === "DIMENSION").slice(0, 2000).map(item => ({ ...item, page: getPeerCadPageForEntity(item, sheets) })),
+    stats: { blocks: allBlocks.length, attributes: attributes.length, tables: tableMap.size, tableCells: structuredCellCount, callouts: callouts.length, dimensions: entities.filter(item => item.type === "DIMENSION").length, indexedRecords: Math.min(records.length, 25000), totalRecords: records.length }
+  };
+}
+
+function applyPeerCadSheetMetadata() {
+  const cad = peerReview?.cadData;
+  if (!cad?.sheets?.length || !peerReview?.pages?.length) return;
+  const sheetsByName = new Map(cad.sheets.map(sheet => [String(sheet.name || "").trim().toUpperCase(), sheet]));
+  peerReview.pages.forEach((page, index) => {
+    const layout = String(cad.layouts?.[index] || "").trim();
+    const sheet = sheetsByName.get(layout.toUpperCase()) || cad.sheets[index];
+    if (!sheet) return;
+    page.cadLayout = layout || String(sheet.name || "").trim();
+    page.sheetTitle = String(sheet.title || page.sheetTitle || "").trim();
+    page.drawingNumber = normalizePeerOcrIdentifier(sheet.drawingNumber || page.drawingNumber || "");
+    page.sheetNumber = Math.max(1, Number(sheet.sheetNumber) || index + 1);
+    page.sheetTotal = peerReview.pages.length;
+    page.pageNumberDetected = true;
+    page.metadataConfidence = 1;
+    const recommendation = getPeerPageRoleRecommendation(page);
+    page.recommendedCategory = recommendation.role;
+    page.categoryRecommendationReason = recommendation.reason;
+    page.categoryRecommendationConfidence = recommendation.confidence;
+    if (!page.categoryManuallySet) {
+      page.category = recommendation.role;
+    }
+  });
+}
+
+function createPeerCadRequestId() {
+  try { if (crypto.randomUUID) return crypto.randomUUID(); } catch {}
+  return `dwg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function pollPeerCadProgress(client, token, requestId, isActive) {
+  let seenMessages = 0;
+  while (isActive()) {
+    try {
+      const response = await client.fetch(`/api/cad-peer-progress?requestId=${encodeURIComponent(requestId)}`, { method: "GET", token });
+      if ([401, 403, 503].includes(response.status)) return;
+      if (response.ok) {
+        const progress = await response.json().catch(() => ({}));
+        const messages = Array.isArray(progress.messages) ? progress.messages : [];
+        messages.slice(seenMessages).forEach(reportPeerDrawingRead);
+        seenMessages = messages.length;
+        if (progress.status && progress.status !== "running") return;
+      }
+    } catch { /* The main conversion request reports any actionable failure. */ }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+async function handlePeerDwg(file) {
+  if (!peerReview || !file) return;
+  peerDrawingLoadRunning = true;
+  startPeerAnalysisTimer(`Uploading ${file.name} to the local AutoCAD reader.`, "file-read");
+  setPeerStatus(`Uploading ${file.name} to the local AutoCAD reader...`);
+  try {
+    const client = getPeerLocalAiClient();
+    if (!client?.fetch) throw new Error("The NS Local AI Background service is unavailable.");
+    const token = await client.getSessionToken("Sign in with the Database login before converting a DWG.");
+    const requestId = createPeerCadRequestId();
+    let keepPolling = true;
+    const responsePromise = client.fetch(`/api/cad-peer-review?requestId=${encodeURIComponent(requestId)}&filename=${encodeURIComponent(file.name)}`, { method: "POST", token, headers: { "Content-Type": "application/octet-stream" }, body: file });
+    const progressPromise = pollPeerCadProgress(client, token, requestId, () => keepPolling);
+    let response;
+    try { response = await responsePromise; }
+    finally { keepPolling = false; await progressPromise; }
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error(errorPayload.error || `Local DWG conversion returned ${response.status}.`);
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!payload.pdfs?.length) throw new Error(payload.error || "AutoCAD finished without returning the prepared drawing package.");
+    reportPeerDrawingRead(`DWG package received. Combining ${payload.pdfs?.length || 0} plotted sheet${payload.pdfs?.length === 1 ? "" : "s"} into the review drawing.`);
+    const reviewPdf = await mergePeerCadLayoutPdfs(payload, file.name);
+    resetPeerDrawingData(file.name, "DWG");
+    peerReview.cadFingerprint = payload.fingerprint || ""; peerReview.cadConverter = payload.converter || "AutoCAD";
+    reportPeerDrawingRead(`Indexing ${(payload.records || []).length.toLocaleString()} native CAD records for tag, table, block, attribute, and dimension checks.`);
+    peerReview.cadData = buildPeerCadData(payload.records, (payload.pdfs || []).map(item => item.layout), payload.sheets || []);
+    await loadPeerPdfDocument(reviewPdf, true, "plotted DWG sheet");
+    applyPeerCadSheetMetadata();
+    extractPeerEquipmentRows();
+    const nativeEquipmentRows = peerReview.equipmentRows.filter(row => row.source === "native-cad").length;
+    if (nativeEquipmentRows) reportPeerDrawingRead(`Extracted ${nativeEquipmentRows} editable equipment row${nativeEquipmentRows === 1 ? "" : "s"} directly from the native AutoCAD equipment table.`);
+    reportPeerDrawingRead(`Applied native DWG sheet roles: ${peerReview.pages.map(page => `${page.number} ${getPeerDeterministicPageRole(page)}`).join(", ")}.`);
+    reportPeerDrawingRead("Plotted sheets and native CAD evidence are ready. Saving the review copy locally.");
+    await savePeerPdf(peerReview.id, reviewPdf);
+    if (isPeerDatabaseKnowledgeEnabled()) await preparePeerDatabaseDocumentsForReview();
+    peerReview.updatedAt = new Date().toISOString(); renderPeerSummary(); renderPeerPages(); renderPeerEquipmentTable(); savePeerReview(false); showPeerStep("pages");
+    const stats = peerReview.cadData.stats;
+    finishPeerDrawingRead(`${file.name} loaded from ${payload.converter || "AutoCAD"}. ${peerReview.pages.length} plotted sheet${peerReview.pages.length === 1 ? "" : "s"}, ${stats.blocks} blocks, ${stats.attributes} attributes, ${stats.tables} native tables${stats.tableCells ? ` with ${stats.tableCells} structured cells` : " with vector-text fallback"}, ${stats.callouts || 0} numbered multileaders, and ${stats.dimensions} dimensions are ready for review.`);
+  } catch (error) {
+    console.error("DWG peer-review conversion failed:", error);
+    finishPeerDrawingRead(`The DWG could not be prepared: ${error?.message || "Unknown error"}`, true);
+  } finally {
+    peerDrawingLoadRunning = false;
+  }
+}
+
+function getPeerPersistentAnalysisCacheKey() {
+  if (!peerReview?.pdfFingerprint) return "";
+  const knowledgeInputs = [PEER_KNOWLEDGE_KEY, PEER_FINDING_FEEDBACK_KEY, COMPANY_AI_GENERAL_GUIDANCE_KEY, COMPANY_AI_ACCEPTED_TERMS_KEY]
+    .map(key => { try { return localStorage.getItem(key) || ""; } catch { return ""; } }).join("|");
+  let knowledgeHash = 2166136261;
+  for (let index = 0; index < knowledgeInputs.length; index += 1) knowledgeHash = Math.imul(knowledgeHash ^ knowledgeInputs.charCodeAt(index), 16777619);
+  return `drawing:${PEER_AI_ANALYSIS_CACHE_VERSION}:${peerReview.type}:${knowledgeHash >>> 0}:${peerReview.pdfFingerprint}`;
+}
+
+async function restorePeerPersistentAnalysisCache() {
+  const key = getPeerPersistentAnalysisCacheKey(); if (!key) return false;
+  try {
+    const cached = await getPeerAnalysisCacheEntry(key);
+    if (!cached?.pages) return false;
+    peerReview.pages.forEach(page => {
+      const saved = cached.pages[page.number]; if (!saved) return;
+      Object.assign(page, JSON.parse(JSON.stringify(saved)));
+    });
+    peerReview.disciplineSweepCache = JSON.parse(JSON.stringify(cached.disciplineSweepCache || {}));
+    peerReview.aiAnalysisCacheVersion = PEER_AI_ANALYSIS_CACHE_VERSION;
+    return true;
+  } catch (error) { console.warn("Persistent drawing analysis cache could not be restored:", error); return false; }
+}
+
+async function persistPeerAnalysisCache() {
+  const key = getPeerPersistentAnalysisCacheKey(); if (!key || !peerReview) return;
+  const pages = {};
+  peerReview.pages.forEach(page => {
+    if (!page.visualAnalysisCompleted && !page.evidenceLedgerCompleted) return;
+    pages[page.number] = {
+      visualAnalysisCompleted: Boolean(page.visualAnalysisCompleted), visualAnalysisResult: page.visualAnalysisResult || null,
+      visualRegionsExpected: Number(page.visualRegionsExpected || 0), visualRegionsReviewed: Number(page.visualRegionsReviewed || 0),
+      evidenceLedgerCompleted: Boolean(page.evidenceLedgerCompleted), evidenceLedgerFacts: page.evidenceLedgerFacts || [], evidenceLedgerVersion: page.evidenceLedgerVersion || "",
+      visualEquipmentTableDetected: Boolean(page.visualEquipmentTableDetected), visualCallouts: page.visualCallouts || [],
+      unresolvedLabels: page.unresolvedLabels || [], tableTypes: page.tableTypes || [], drawingNumber: page.drawingNumber || "",
+      projectNumber: page.projectNumber || "", sheetNumber: Number(page.sheetNumber || 0), sheetTotal: Number(page.sheetTotal || 0),
+      metadataConfidence: Number(page.metadataConfidence || 0)
+    };
+  });
+  try { await putPeerAnalysisCacheEntry({ key, pages, disciplineSweepCache: peerReview.disciplineSweepCache || {}, updatedAt: new Date().toISOString() }); }
+  catch (error) { console.warn("Persistent drawing analysis cache could not be saved:", error); }
 }
 
 function analyzePeerPage(number, text, totalPages = 0) {
@@ -681,43 +1303,78 @@ function analyzePeerPage(number, text, totalPages = 0) {
   const titleMatch = flattened.match(/\bTITLE\s*:\s*([A-Z0-9][A-Z0-9 &/().,'-]{2,70}?)(?=\s+(?:PROJECT|DRAWING|REV(?:ISION)?|SCALE|DATE)\b|$)/i);
   const pageRegex = new RegExp(`(?:PAGE|SHEET)\\s*(?:NO\\.?|NUMBER|#)?\\s*[:#-]?\\s*${number}\\b|\\b${number}\\s*(?:OF|/)\\s*${totalPages || "\\d+"}\\b`, "i");
   const projectNumber = normalizePeerOcrDigits(projectMatch?.[1] || "");
-  const defaultCategory = number === 2 ? "Plumbing" : number === 3 ? "Electrical" : "Drawing";
+  const defaultCategory = "Drawing";
   return { number, category: defaultCategory, text, tableTypes: detectPeerTableTypes(flattened), blank: text.length < 8, drawingNumber: normalizePeerOcrIdentifier(drawingMatch?.[1] || ""), projectNumber, textProjectNumber: projectNumber, sheetNumber: Number(normalizePeerOcrDigits(sheetMatch?.[1] || "0")), sheetTotal: Number(normalizePeerOcrDigits(sheetMatch?.[2] || "0")), sheetTitle: titleMatch?.[1]?.trim() || "", pageNumberDetected: pageRegex.test(flattened) || Boolean(sheetMatch), fingerprint: normalizePeerValue(text.slice(0, 1200)).slice(0, 500) };
 }
 
 function detectPeerTableTypes(text = "") { const value = String(text).toUpperCase(), types = []; if (/EQUIPMENT LIST[^\n]{0,80}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/.test(value)) types.push("Main Equipment List"); if (/POWER REQUIREMENT/.test(value)) types.push("Power Requirement"); if (/CONNECTIONS? TABLE/.test(value)) types.push("Connections"); if (/FITTINGS?.{0,20}VALVES?.{0,20}COMPONENTS?/.test(value)) types.push("Fittings Valves Components"); if (/NOZZLE SCHEDULE/.test(value)) types.push("Nozzle Schedule"); if (/GENERAL NOTES?/.test(value)) types.push("General Notes"); return types.length ? types : ["Other"]; }
 
-function getPeerDeterministicPageRole(page = {}) {
+function getPeerPageRoleRecommendation(page = {}) {
   const text = String(page.text || page.ocrText || "").toUpperCase();
+  const nativeMetadata = `${page.sheetTitle || ""} ${page.cadLayout || ""} ${page.drawingNumber || ""}`.toUpperCase();
   const tables = new Set(page.tableTypes || []);
-  if (tables.has("Main Equipment List") || /EQUIPMENT LIST.{0,100}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/s.test(text)) return "Equipment";
-  if (tables.has("Power Requirement") || /ELECTRICAL LAYOUT|ELECTRICAL ONE[- ]LINE|POWER REQUIREMENT|ACTIVATION SYSTEM WIRING|POWER FEEDER/.test(text)) return "Electrical";
-  if (tables.has("Connections") || tables.has("Nozzle Schedule") || /FLOW LAYOUT|NOZZLE SCHEDULE|FLOW DIAGRAM|PLUMBING LAYOUT/.test(text)) return "Plumbing";
-  return "Drawing";
+  if (tables.has("Main Equipment List") || /EQUIPMENT LIST.{0,100}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/s.test(text)) return { role: "Equipment", reason: "A formal NS equipment list was detected on this page.", confidence: 1 };
+  if (/EQUIPMENT LAYOUT/.test(nativeMetadata)) return { role: "Equipment", reason: "The native sheet title identifies an equipment layout.", confidence: 1 };
+  if (/ELECTRICAL LAYOUT|ELECTRICAL ONE[- ]LINE/.test(nativeMetadata)) return { role: "Electrical", reason: "The native sheet title identifies an electrical layout.", confidence: 1 };
+  if (/FLOW LAYOUT|PLUMBING LAYOUT/.test(nativeMetadata)) return { role: "Plumbing", reason: "The native sheet title identifies a flow or plumbing layout.", confidence: 1 };
+  if (tables.has("Power Requirement") || /ELECTRICAL LAYOUT|ELECTRICAL ONE[- ]LINE|POWER REQUIREMENT|ACTIVATION SYSTEM WIRING|POWER FEEDER/.test(text)) return { role: "Electrical", reason: "Electrical schedules or wiring terms were detected.", confidence: .9 };
+  if (tables.has("Connections") || tables.has("Nozzle Schedule") || /FLOW LAYOUT|NOZZLE SCHEDULE|FLOW DIAGRAM|PLUMBING LAYOUT/.test(text)) return { role: "Plumbing", reason: "Flow, connection, or nozzle information was detected.", confidence: .9 };
+  return { role: "Drawing", reason: "No specialized equipment, plumbing, or electrical sheet title was detected.", confidence: .65 };
+}
+
+function getPeerDeterministicPageRole(page = {}) {
+  if (page.categoryManuallySet && ["Equipment", "Plumbing", "Electrical", "Drawing"].includes(page.category)) return page.category;
+  return getPeerPageRoleRecommendation(page).role;
 }
 
 function getPeerApprovedExampleSignature(item = {}) {
-  return JSON.stringify([item.annotationText, item.evidence, item.requirement, item.location, item.page].map(value => String(value || "").trim()));
+  return JSON.stringify([item.annotationText || item.issue, item.evidence, item.requirement, item.location, item.page].map(value => String(value || "").trim()));
 }
 
 function savePeerAcceptedCorrectionsAsApprovedExamples(trigger = "review-complete") {
   if (!peerReview) return 0;
   let saved = 0;
-  peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.status === "Accepted").forEach(item => {
+  peerReview.findings.filter(item => item.status === "Accepted" && item.source !== "manual" && String(item.annotationText || item.issue || "").trim()).forEach(item => {
     const signature = getPeerApprovedExampleSignature(item);
     if (item.approvedExampleSignature === signature) return;
     if (!recordPeerFindingFeedback(item, "Accepted", { finalized: true, trigger, signature })) return;
     item.approvedExampleSignature = signature; item.approvedExampleSavedAt = new Date().toISOString(); saved += 1;
   });
-  if (saved) peerReview.history.push({ action: `${saved} accepted correction${saved === 1 ? "" : "s"} saved as approved examples`, user: peerCurrentUser, date: new Date().toISOString(), note: trigger === "final-pdf" ? "Saved after the accepted-redline PDF was built." : "Saved after the peer review was marked complete." });
+  if (saved) peerReview.history.push({ action: `${saved} accepted correction${saved === 1 ? "" : "s"} saved as approved examples`, user: peerCurrentUser, date: new Date().toISOString(), note: "Saved only after the peer review was marked complete." });
   return saved;
 }
 
+function savePeerReviewDecisionsAsKnowledge() {
+  if (!peerReview) return { accepted: 0, rejected: 0, total: 0 };
+  const accepted = savePeerAcceptedCorrectionsAsApprovedExamples("review-complete");
+  let rejected = 0;
+  peerReview.findings.filter(item => ["False Positive", "Not Applicable"].includes(item.status) && item.source !== "manual").forEach(item => {
+    const signature = JSON.stringify([item.status, item.issue, item.evidence, item.location, item.resolutionNote].map(value => String(value || "").trim()));
+    if (item.reviewDecisionSignature === signature) return;
+    if (!recordPeerFindingFeedback(item, item.status, { finalized: true, trigger: "review-complete", signature })) return;
+    item.reviewDecisionSignature = signature; item.reviewDecisionSavedAt = new Date().toISOString(); rejected += 1;
+  });
+  if (rejected) peerReview.history.push({ action: `${rejected} rejected finding decision${rejected === 1 ? "" : "s"} saved as false-positive knowledge`, user: peerCurrentUser, date: new Date().toISOString(), note: "Saved only after the peer review was marked complete." });
+  return { accepted, rejected, total: accepted + rejected };
+}
+
+function removePeerReviewDecisionsFromKnowledge() {
+  if (!peerReview) return 0;
+  let removed = 0;
+  peerReview.findings.forEach(item => {
+    if (!item.approvedExampleSignature && !item.reviewDecisionSignature) return;
+    removePeerApprovedFindingFeedback(item); removed += 1;
+  });
+  return removed;
+}
+
 function removePeerApprovedFindingFeedback(item = {}) {
-  if (!item.approvedExampleSignature) return;
+  const signature = item.approvedExampleSignature || item.reviewDecisionSignature;
+  if (!signature) return;
   const key = getPeerFindingLearningKey(item);
-  try { localStorage.setItem(PEER_FINDING_FEEDBACK_KEY, JSON.stringify(readPeerFindingFeedback().filter(entry => entry.key !== key || entry.approvedSignature !== item.approvedExampleSignature))); } catch {}
+  try { localStorage.setItem(PEER_FINDING_FEEDBACK_KEY, JSON.stringify(readPeerFindingFeedback().filter(entry => entry.key !== key || entry.approvedSignature !== signature))); } catch {}
   delete item.approvedExampleSignature; delete item.approvedExampleSavedAt;
+  delete item.reviewDecisionSignature; delete item.reviewDecisionSavedAt;
 }
 
 function isPeerLedgerSourceAllowedOnPage(fact = {}, page = {}) {
@@ -740,17 +1397,31 @@ async function renderPeerPages() {
   const grid = document.getElementById("peerPageGrid"); if (!grid || !peerReview) return;
   const maximumSweep = document.getElementById("peerMaximumSweep"); if (maximumSweep) maximumSweep.checked = peerReview.maximumSweep !== false;
   grid.replaceChildren();
-  if (!peerReview.pages.length) { grid.innerHTML = "<p>Upload a PDF to display its pages.</p>"; return; }
+  if (!peerReview.pages.length) { grid.innerHTML = "<p>Upload a drawing to display its pages.</p>"; return; }
   for (const info of peerReview.pages) {
+    const recommendation = getPeerPageRoleRecommendation(info);
+    info.recommendedCategory = recommendation.role;
+    info.categoryRecommendationReason = recommendation.reason;
+    info.categoryRecommendationConfidence = recommendation.confidence;
+    if (!info.categoryManuallySet) info.category = recommendation.role;
     const card = document.createElement("article"); card.className = "peer-page-card"; card.id = `peer-page-${info.number}`;
     const preview = document.createElement("div"); preview.className = "peer-page-preview"; preview.textContent = "Loading preview...";
-    const label = document.createElement("label"); label.textContent = peerIncludesEquipmentReview() ? `Page ${info.number} type` : `Page ${info.number} · Drawing`;
+    const recommendationBox = document.createElement("div"); recommendationBox.className = "peer-page-recommendation";
+    recommendationBox.innerHTML = `<span>Recommended</span><strong>${escapePeerHTML(recommendation.role)}</strong><small>${escapePeerHTML(recommendation.reason)}</small>`;
+    const label = document.createElement("label"); label.textContent = peerIncludesEquipmentReview() ? `Review page ${info.number} as` : `Page ${info.number} - Drawing`;
     if (peerIncludesEquipmentReview()) {
       const select = document.createElement("select"); PEER_PAGE_CATEGORIES.forEach(category => select.add(new Option(category, category)));
-      select.value = info.category || "Drawing"; select.addEventListener("change", () => { info.category = select.value; info.categoryManuallySet = true; extractPeerEquipmentRows(); savePeerReview(false); });
-      label.append(select);
+      select.value = info.category || recommendation.role;
+      const selectionStatus = document.createElement("small"); selectionStatus.className = "peer-page-selection-status";
+      const updateSelectionStatus = () => {
+        const followsRecommendation = select.value === recommendation.role;
+        selectionStatus.textContent = followsRecommendation ? "Using the recommendation" : `Changed by you from ${recommendation.role}`;
+        selectionStatus.classList.toggle("is-manual", !followsRecommendation);
+      };
+      select.addEventListener("change", () => { info.category = select.value; info.categoryManuallySet = true; updateSelectionStatus(); extractPeerEquipmentRows(); savePeerReview(false); });
+      updateSelectionStatus(); label.append(select, selectionStatus);
     }
-    card.append(preview, label); grid.appendChild(card); renderPeerPageCanvas(info.number, preview);
+    card.append(preview, recommendationBox, label); grid.appendChild(card); renderPeerPageCanvas(info.number, preview);
   }
 }
 
@@ -762,8 +1433,30 @@ async function renderPeerPageCanvas(number, target) {
 
 function extractPeerEquipmentRows() {
   if (!peerIncludesEquipmentReview()) return;
-  const visualRows = peerReview.equipmentRows.filter(row => row.source === "visual-ai");
-  peerReview.equipmentRows = visualRows;
+  const equipmentPages = peerReview.pages.filter(page => getPeerDeterministicPageRole(page) === "Equipment");
+  const equipmentPageNumbers = new Set(equipmentPages.map(page => Number(page.number)));
+  const fallbackPage = equipmentPages.find(page => (page.tableTypes || []).includes("Main Equipment List"))?.number || equipmentPages[0]?.number || 0;
+  const deletedNativeRows = new Set(peerReview.deletedEquipmentRowKeys || []);
+  const existingNativeRows = new Map(peerReview.equipmentRows.filter(row => row.source === "native-cad" && row.nativeRowKey).map(row => [row.nativeRowKey, row]));
+  const nativeEquipmentTableCount = (peerReview.cadData?.tables || []).map(structurePeerCadTable).filter(isPeerCadEquipmentTable).length;
+  const nativeRows = extractPeerCadEquipmentRows(peerReview.cadData?.tables || [], fallbackPage)
+    .map(row => ({ ...row, page: equipmentPageNumbers.has(Number(row.page)) ? Number(row.page) : Number(fallbackPage || row.page || 0) }))
+    .map(row => ({ ...row, id: existingNativeRows.get(row.nativeRowKey)?.id || peerId("equip") }))
+    .filter(row => !deletedNativeRows.has(row.nativeRowKey) && (!row.page || equipmentPageNumbers.has(Number(row.page))))
+    .map(row => {
+      const existing = existingNativeRows.get(row.nativeRowKey);
+      if (!existing?.userEdited) return row;
+      return { ...row, ...existing, presentColumns: Array.from(new Set([...(row.presentColumns || []), ...(existing.presentColumns || [])])) };
+    });
+  const visualRows = peerReview.equipmentRows.filter(row => row.source === "visual-ai" && equipmentPageNumbers.has(Number(row.page)));
+  const manualRows = peerReview.equipmentRows.filter(row => row.source === "manual" || !row.source);
+  const merged = new Map();
+  [...nativeRows, ...visualRows, ...manualRows].forEach(row => {
+    const key = row.nativeRowKey || `${Number(row.page || 0)}|${normalizePeerValue(row.tag || "", "tag")}|${normalizePeerEquipmentName(row.description || "")}`;
+    if (!merged.has(key) || row.source === "native-cad") merged.set(key, row);
+  });
+  peerReview.equipmentRows = Array.from(merged.values());
+  if (peerAnalysisStartedAt && peerReview.cadData) recordPeerAnalysisMessage(`Native equipment extraction found ${nativeRows.length} row${nativeRows.length === 1 ? "" : "s"} from ${nativeEquipmentTableCount} recognized equipment table${nativeEquipmentTableCount === 1 ? "" : "s"}.`);
   attachPeerDrawingComparisons(); renderPeerEquipmentTable();
 }
 
@@ -797,25 +1490,75 @@ function renderPeerEquipmentTable() {
   const head = document.getElementById("peerEquipmentHead"), body = document.getElementById("peerEquipmentBody"), hint = document.getElementById("peerEquipmentHint"); if (!head || !peerReview) return;
   const present = new Set(peerReview.equipmentRows.flatMap(row => row.presentColumns || [])); present.add("tag");
   const fields = PEER_EQUIPMENT_FIELDS.filter(([field]) => present.has(field));
-  head.innerHTML = `<tr><th>Page</th>${fields.map(([, label]) => `<th>${escapePeerHTML(label)}</th>`).join("")}<th></th></tr>`;
-  body.innerHTML = peerReview.equipmentRows.map(row => `<tr><td>${row.page || "-"}</td>${fields.map(([field]) => `<td><input value="${escapePeerHTML(row[field] || "")}" onchange="updatePeerEquipmentRow('${row.id}','${field}',this.value)" aria-label="${field}"></td>`).join("")}<td><button class="delete-btn" onclick="deletePeerEquipmentRow('${row.id}')">Remove</button></td></tr>`).join("") || `<tr><td colspan="${fields.length + 2}">No equipment rows extracted yet.</td></tr>`;
-  hint.textContent = peerReview.pages.some(page => page.category === "Equipment" && !page.text) ? "Some Equipment pages have no selectable text. Run OCR on the PDF before validation, then upload it again." : "Extraction uses selectable PDF text and may need manual cleanup. Original page text remains unchanged.";
+  const multilineFields = new Set(["description", "quantity", "parentPartNumber", "partNumber", "details", "purpose"]);
+  const renderControl = (row, field, label) => {
+    const value = String(row[field] || ""), attributes = `data-field="${field}" title="${escapePeerHTML(value)}" onchange="updatePeerEquipmentRow('${row.id}','${field}',this.value)" aria-label="${escapePeerHTML(label)}"`;
+    return multilineFields.has(field)
+      ? `<textarea ${attributes} rows="2">${escapePeerHTML(value)}</textarea>`
+      : `<input ${attributes} value="${escapePeerHTML(value)}">`;
+  };
+  head.innerHTML = `<tr><th class="peer-equipment-page-cell">Page</th>${fields.map(([field, label]) => `<th data-field="${field}">${escapePeerHTML(label)}</th>`).join("")}<th class="peer-equipment-action-cell"><span class="sr-only">Actions</span></th></tr>`;
+  body.innerHTML = peerReview.equipmentRows.map(row => `<tr><td class="peer-equipment-page-cell">${row.page || "-"}</td>${fields.map(([field, label]) => `<td data-field="${field}">${renderControl(row, field, label)}</td>`).join("")}<td class="peer-equipment-action-cell"><button class="delete-btn" onclick="deletePeerEquipmentRow('${row.id}')">Remove</button></td></tr>`).join("") || `<tr><td colspan="${fields.length + 2}">No equipment rows extracted yet.</td></tr>`;
+  const nativeCount = peerReview.equipmentRows.filter(row => row.source === "native-cad").length;
+  hint.textContent = nativeCount
+    ? `${nativeCount} rows were extracted directly from the native AutoCAD equipment table. You can edit any value before validation.`
+    : peerReview.pages.some(page => getPeerDeterministicPageRole(page) === "Equipment" && !page.text)
+      ? "This Equipment page has no selectable PDF text or native AutoCAD table cells. Run OCR or use a DWG with a native table before validation."
+      : "Extraction uses readable table text and may need manual cleanup. Original drawing content remains unchanged.";
 }
 
-function addPeerEquipmentRow() { if (!peerReview) return; peerReview.equipmentRows.push({ id: peerId("equip"), page: 0, tag: "", presentColumns: PEER_EQUIPMENT_FIELDS.map(item => item[0]) }); renderPeerEquipmentTable(); }
-function updatePeerEquipmentRow(id, field, value) { const row = peerReview?.equipmentRows.find(item => item.id === id); if (!row) return; row[field] = value; if (!row.presentColumns.includes(field)) row.presentColumns.push(field); }
-function deletePeerEquipmentRow(id) { peerReview.equipmentRows = peerReview.equipmentRows.filter(row => row.id !== id); renderPeerEquipmentTable(); }
+function addPeerEquipmentRow() { if (!peerReview) return; peerReview.equipmentRows.push({ id: peerId("equip"), page: 0, tag: "", source: "manual", presentColumns: PEER_EQUIPMENT_FIELDS.map(item => item[0]) }); renderPeerEquipmentTable(); }
+function updatePeerEquipmentRow(id, field, value) { const row = peerReview?.equipmentRows.find(item => item.id === id); if (!row) return; row[field] = value; row.userEdited = true; if (!row.presentColumns.includes(field)) row.presentColumns.push(field); savePeerReview(false); }
+function deletePeerEquipmentRow(id) {
+  const row = peerReview?.equipmentRows.find(item => item.id === id);
+  if (row?.nativeRowKey) {
+    peerReview.deletedEquipmentRowKeys = Array.isArray(peerReview.deletedEquipmentRowKeys) ? peerReview.deletedEquipmentRowKeys : [];
+    if (!peerReview.deletedEquipmentRowKeys.includes(row.nativeRowKey)) peerReview.deletedEquipmentRowKeys.push(row.nativeRowKey);
+  }
+  peerReview.equipmentRows = peerReview.equipmentRows.filter(item => item.id !== id); renderPeerEquipmentTable(); savePeerReview(false);
+}
+
+function refreshPeerCadTableFindings(showResult = true) {
+  if (!peerReview?.cadData) return showResult ? showPeerToast("Native CAD table data is not available for this review.") : 0;
+  extractPeerEquipmentRows();
+  const replacementSources = new Set(["cad-equipment-quality", "cad-table-comparison"]);
+  const existingCadFindings = new Map(peerReview.findings.filter(item => replacementSources.has(item.source)).map(item => [`${item.source}|${item.page}|${normalizePeerValue(item.equipmentTag || "", "tag")}|${normalizePeerValue(item.issue || "")}`, item]));
+  const fresh = [...runPeerCadEquipmentQualityRules(peerReview.equipmentRows.filter(row => row.source === "native-cad")), ...runPeerCadTableComparisonRules(peerReview.cadData.tables || [])].map(item => {
+    const previous = existingCadFindings.get(`${item.source}|${item.page}|${normalizePeerValue(item.equipmentTag || "", "tag")}|${normalizePeerValue(item.issue || "")}`);
+    if (previous) return { ...item, id: previous.id, status: previous.status, comments: previous.comments, resolutionNote: previous.resolutionNote, history: previous.history, annotationAccepted: previous.annotationAccepted };
+    return item;
+  });
+  fresh.forEach(item => { item.reviewTier = classifyPeerFindingTier(item); });
+  peerReview.findings = prioritizePeerFindings([...peerReview.findings.filter(item => !replacementSources.has(item.source)), ...fresh], peerReview.maximumSweep === false ? 20 : 36);
+  renderPeerFindings(); renderPeerFixList(); savePeerReview(false);
+  if (showResult) {
+    showPeerStep("findings");
+    showPeerToast(`${fresh.length} native CAD table finding${fresh.length === 1 ? "" : "s"} refreshed without rerunning visual AI.`);
+  }
+  return fresh.length;
+}
 
 async function runPeerChecks() {
-  if (!peerReview?.pages.length) return showPeerToast("Upload a PDF before running checks.");
+  if (!peerReview?.pages.length) return showPeerToast("Upload a drawing before running checks.");
   if (peerOcrRunning) return showPeerToast("Text recognition is already running.");
-  if (!await updatePeerAiIndicator()) {
-    openPeerAiStatus();
-    return showPeerToast(peerAiStatus.authenticated ? "Local AI must be connected before running checks." : "Sign in through Database before running checks.");
-  }
-  startPeerAnalysisTimer("Starting automatic review. Looking for readable page text and image-only title blocks.");
+  if (peerCheckRunning) return showPeerToast("An automatic review is already running. Wait for it to finish before starting another.");
+  peerCheckRunning = true;
   setPeerCheckButtonsDisabled(true);
   try {
+    if (!await updatePeerAiIndicator()) {
+      openPeerAiStatus();
+      return showPeerToast(peerAiStatus.authenticated ? "Local AI must be connected before running checks." : "Sign in through Database before running checks.");
+    }
+    startPeerAnalysisTimer("Starting automatic review. Looking for readable page text and image-only title blocks.");
+    if (peerReview.cadData) {
+      const stats = peerReview.cadData.stats || {};
+      recordPeerAnalysisMessage(`Native DWG evidence ready: ${stats.blocks || 0} blocks, ${stats.attributes || 0} block attributes, ${stats.tables || 0} native tables${stats.tableCells ? ` with ${stats.tableCells} structured cells` : " using vector-text fallback"}, ${stats.callouts || 0} numbered multileaders, and ${stats.dimensions || 0} dimensions indexed before visual review.`);
+    }
+    if (isPeerDatabaseKnowledgeEnabled()) {
+      const companyKnowledge = await preloadPeerDatabaseKnowledge();
+      const readableFiles = (companyKnowledge.documents || []).filter(item => item.storage_path).length;
+      recordPeerAnalysisMessage(`Company knowledge ready before drawing analysis: ${(companyKnowledge.master || []).length} current parts, ${(companyKnowledge.aliases || []).length} part relationships, ${(companyKnowledge.usage || []).length} prior drawing-usage records, and ${readableFiles} database file${readableFiles === 1 ? "" : "s"} available for relevance matching.`);
+    }
     const imageOnlyPages = peerReview.pages.filter(page => (!page.text?.trim() || page.ocrApplied) && page.ocrVersion !== 2);
     if (imageOnlyPages.length) {
       try { await recognizePeerTitleBlocks(imageOnlyPages); }
@@ -833,10 +1576,12 @@ async function runPeerChecks() {
     const naming = runPeerNamingConventionRules(peerReview.pages, peerReview.filename);
     const equipmentReadiness = peerIncludesEquipmentReview() && peerReview.pages.some(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment") ? getPeerEquipmentReadinessFindings() : [];
     const completeness = runPeerDocumentCompletenessRules();
+    const cadFindings = runPeerCadRules(peerReview.cadData);
+    if (peerReview.cadData) recordPeerAnalysisMessage(`Native CAD tag and table checks found ${cadFindings.length} evidence-located item${cadFindings.length === 1 ? "" : "s"}.`);
     const ruleEquipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
     const automatic = peerIncludesEquipmentReview()
-      ? [...runPeerInitialRules(peerReview.pages), ...runPeerEquipmentRules(ruleEquipmentRows), ...runPeerEquipmentNamingRules(ruleEquipmentRows), ...naming, ...equipmentReadiness, ...completeness, ...visualFindings]
-      : [...runPeerInitialRules(peerReview.pages), ...naming, ...completeness, ...visualFindings];
+      ? [...runPeerInitialRules(peerReview.pages), ...runPeerEquipmentRules(ruleEquipmentRows), ...runPeerEquipmentNamingRules(ruleEquipmentRows), ...naming, ...equipmentReadiness, ...completeness, ...cadFindings, ...visualFindings]
+      : [...runPeerInitialRules(peerReview.pages), ...naming, ...completeness, ...cadFindings, ...visualFindings];
     const uniqueAutomatic = prioritizePeerFindings(automatic, peerReview.maximumSweep === false ? 20 : 36);
     uniqueAutomatic.forEach(item => { item.reviewTier = classifyPeerFindingTier(item); });
     manual.forEach(item => { item.reviewTier = "Manual"; });
@@ -847,23 +1592,79 @@ async function runPeerChecks() {
     renderPeerFindings(); renderPeerFixList(); savePeerReview(false); showPeerStep("findings");
     const recognized = peerReview.pages.filter(page => page.ocrApplied).length;
     const coverage = peerReview.coverageReport || {};
-    setPeerAnalysisProgress("complete", `Automatic review complete. ${recognized ? `${recognized} image-only page${recognized === 1 ? "" : "s"} read. ` : ""}${uniqueAutomatic.length} item${uniqueAutomatic.length === 1 ? "" : "s"} need review. ${coverage.regionsReviewed || 0} of ${coverage.regionsExpected || 0} drawing regions reviewed; ${coverage.registryObjects || 0} package objects indexed.`);
+    const completion = getPeerCoverageCompletionState(coverage);
+    coverage.reviewStatus = completion.state;
+    coverage.partialReasons = completion.reasons;
+    const coverageMessage = `${coverage.regionsReviewed || 0} of ${coverage.regionsExpected || 0} drawing regions reviewed; ${coverage.registryObjects || 0} package objects indexed.`;
+    setPeerAnalysisProgress(completion.state, `${completion.isPartial ? "Automatic review partially complete" : "Automatic review complete"}. ${recognized ? `${recognized} image-only page${recognized === 1 ? "" : "s"} read. ` : ""}${uniqueAutomatic.length} item${uniqueAutomatic.length === 1 ? "" : "s"} need review. ${coverageMessage}${completion.isPartial ? ` Incomplete coverage: ${completion.reasons.slice(0, 3).join("; ")}.` : ""}`);
     showPeerToast(`${uniqueAutomatic.length} potential inconsistenc${uniqueAutomatic.length === 1 ? "y" : "ies"} found.`);
   } catch (error) {
     console.error("Peer Review checks failed:", error);
     setPeerAnalysisProgress("error", `Automatic review stopped. ${error.message || "The review could not be completed. Try again."}`);
   } finally {
     stopPeerAnalysisTimer();
+    peerCheckRunning = false;
     setPeerCheckButtonsDisabled(false);
   }
+}
+
+function runPeerCadRules(cad) {
+  if (!cad) return [];
+  const nativeEquipmentRows = peerReview.equipmentRows.filter(row => row.source === "native-cad");
+  const findings = [...runPeerCadEquipmentQualityRules(nativeEquipmentRows), ...runPeerCadTableComparisonRules(cad.tables || [])], pageForItem = item => Number(item.page || 0) || (() => { const index = cad.layouts.indexOf(item.layout); return index >= 0 ? index + 1 : 0; })();
+  const tagPattern = /^(?:[A-Z]{1,8}[- ]?\d{1,4}[A-Z]?|\d{1,3}[A-Z]?)$/i;
+  cad.tables.forEach(table => {
+    const rows = new Map(); table.cells.forEach(cell => { if (!rows.has(cell.row)) rows.set(cell.row, []); rows.get(cell.row)[cell.column] = String(cell.value || "").trim(); });
+    const ordered = Array.from(rows.entries()).sort((left, right) => left[0] - right[0]);
+    const headerEntry = ordered.find(([, values]) => values.some(value => /^(?:ITEM|TAG|EQUIPMENT\s*TAG|ITEM\s*(?:NO|NUMBER))\.?$/i.test(value)) && values.some(value => /DESCRIPTION/i.test(value)));
+    if (!headerEntry) return;
+    const [headerRow, headers] = headerEntry;
+    const tagColumn = headers.findIndex(value => /^(?:ITEM|TAG|EQUIPMENT\s*TAG|ITEM\s*(?:NO|NUMBER))\.?$/i.test(value));
+    const descriptionColumn = headers.findIndex(value => /DESCRIPTION/i.test(value));
+    const quantityColumn = headers.findIndex(value => /^(?:QTY|QUANTITY)\.?$/i.test(value));
+    const seen = new Map();
+    ordered.filter(([row]) => row > headerRow).forEach(([row, values]) => {
+      const tag = String(values[tagColumn] || "").trim(), description = String(values[descriptionColumn] || "").replace(/\s+/g, " ").trim(), quantity = quantityColumn >= 0 ? String(values[quantityColumn] || "").trim() : "";
+      if (!tag && description) findings.push(createPeerFinding({ severity: "Warning", issue: "CAD equipment-table row has a description but no item or tag", comparedValue: description, details: `Native table ${table.handle}, row ${row + 1}, contains a description but its ${headers[tagColumn] || "tag"} cell is blank.`, evidence: `Layout ${table.layout}; table ${table.handle}; row ${row + 1}: ${values.join(" | ")}`, location: `Layout ${table.layout}, native table row ${row + 1}`, page: pageForItem(table), source: "cad-table-rule", confidence: .96, verificationStatus: "verified", evidenceType: "Objective visible mismatch" }));
+      if (quantity && !/^(?:\d+(?:\.\d+)?|N\/?A|-)$/.test(quantity)) findings.push(createPeerFinding({ severity: "Warning", equipmentTag: tag, issue: "CAD equipment-table quantity is not numeric", comparedValue: quantity, details: `The native ${headers[quantityColumn]} cell in table ${table.handle}, row ${row + 1}, is not a number or recognized placeholder.`, evidence: `Layout ${table.layout}; table ${table.handle}; row ${row + 1}: ${values.join(" | ")}`, location: `Layout ${table.layout}, native table row ${row + 1}`, page: pageForItem(table), source: "cad-table-rule", confidence: .94, verificationStatus: "verified", evidenceType: "Objective visible mismatch" }));
+      if (!tag || !tagPattern.test(tag)) return;
+      const previous = seen.get(tag.toUpperCase());
+      if (previous && description && previous.description && normalizePeerEquipmentName(description) !== normalizePeerEquipmentName(previous.description)) findings.push(createPeerFinding({ severity: "Warning", equipmentTag: tag, issue: `Coordinate conflicting CAD table descriptions for ${tag}`, listValue: previous.description, comparedValue: description, details: `The same native table tag has two different descriptions in rows ${previous.row + 1} and ${row + 1}.`, evidence: `Layout ${table.layout}; table ${table.handle}; ${tag}: "${previous.description}" and "${description}"`, location: `Layout ${table.layout}, native table rows ${previous.row + 1} and ${row + 1}`, page: pageForItem(table), source: "cad-table-rule", confidence: .98, verificationStatus: "verified", evidenceType: "Objective visible mismatch" }));
+      else if (!previous) seen.set(tag.toUpperCase(), { description, row });
+    });
+  });
+  cad.blocks.forEach(block => {
+    // Title-block templates commonly reuse placeholder tags such as XXX for
+    // independent fields (for example DRAWN BY and CHECKED BY). Their displayed
+    // labels provide the meaning, so unequal values are not a CAD conflict.
+    if (/TITLE\s*BLOCK|DRAWING\s*BORDER/i.test(String(block.name || ""))) return;
+    const groups = new Map(); block.attributes.forEach(attribute => {
+      const key = attribute.tag.toUpperCase();
+      if (!key || /^X{2,}$/i.test(key)) return;
+      if (!groups.has(key)) groups.set(key, []); groups.get(key).push(attribute.value);
+    });
+    groups.forEach((values, tag) => {
+      const distinct = Array.from(new Set(values.filter(Boolean).map(value => value.trim())));
+      if (distinct.length > 1) findings.push(createPeerFinding({ severity: "Warning", equipmentTag: block.name, issue: `Coordinate duplicate ${tag} attributes in CAD block ${block.name}`, listValue: distinct[0], comparedValue: distinct.slice(1).join(", "), details: `Block handle ${block.handle} contains the same attribute tag with conflicting native values.`, evidence: `Layout ${block.layout}; block ${block.name}; ${tag}=${distinct.join(" / ")}`, location: `Layout ${block.layout}, block handle ${block.handle}`, page: pageForItem(block), source: "cad-attribute-rule", confidence: .99, verificationStatus: "verified", evidenceType: "Objective visible mismatch" }));
+    });
+  });
+  return findings;
 }
 
 function runPeerDocumentCompletenessRules() {
   const findings = [], confirmedEquipmentPages = new Set(peerReview.pages.filter(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment").map(page => Number(page.number)));
   const rows = peerReview.equipmentRows.filter(row => confirmedEquipmentPages.has(Number(row.page)) && isPeerValidMainEquipmentRow(row));
-  const callouts = peerReview.pages.flatMap(page => (page.visualCallouts || []).filter(callout => String(callout.tag || "").trim() && String(callout.name || "").trim()).map(callout => ({ ...callout, page: page.number })));
+  const visualCallouts = peerReview.pages.flatMap(page => (page.visualCallouts || []).filter(callout => String(callout.tag || "").trim() && String(callout.name || "").trim()).map(callout => ({ ...callout, page: page.number })));
+  const nativeCallouts = extractPeerCadMainEquipmentCallouts(peerReview.cadData || {}, rows, Array.from(confirmedEquipmentPages));
+  const calloutMap = new Map();
+  [...nativeCallouts, ...visualCallouts].forEach(callout => {
+    const key = `${Number(callout.page || 0)}|${normalizePeerValue(callout.tag || "", "tag")}`;
+    if (!calloutMap.has(key) || callout.source !== "native-cad-callout") calloutMap.set(key, callout);
+  });
+  const callouts = Array.from(calloutMap.values());
+  if (nativeCallouts.length) recordPeerAnalysisMessage(`Native DWG callout fallback matched ${nativeCallouts.length} unique numbered multileader tag${nativeCallouts.length === 1 ? "" : "s"} to the formal equipment list.`);
   const matches = (row, callout) => { const rowTag = normalizePeerValue(row.tag, "tag"), calloutTag = normalizePeerValue(callout.tag, "tag"); return Boolean(rowTag && calloutTag && rowTag === calloutTag) || peerEquipmentNamesEquivalent(row.description, callout.name); };
-  const mainRows = rows.filter(isPeerMajorEquipmentRow);
+  const mainRows = rows.filter(row => isPeerMajorEquipmentRow(row) && !/\bNOT SHOWN\b|\bTO BE INSTALLED INSIDE\b/i.test(String(row.description || "")));
   const mainCallouts = callouts.filter(callout => /^\d+[A-Z]?$/i.test(String(callout.tag || "").replace(/[\s-]/g, "")));
   const minimumCallouts = Math.max(10, Math.ceil(mainRows.length * .75));
   const coverageReady = mainRows.length >= 3 && mainCallouts.length >= minimumCallouts;
@@ -955,7 +1756,15 @@ function reconcilePeerTitleBlockMetadata() {
 }
 
 function createPeerCoverageReport() {
-  return { mode: peerReview?.maximumSweep === false ? "Balanced" : "Maximum Sweep", pagesTotal: peerReview?.pages?.length || 0, pagesReviewed: 0, regionsExpected: 0, regionsReviewed: 0, regionsFailed: 0, evidenceFacts: 0, registryObjects: 0, candidatesGenerated: 0, candidatesVerified: 0, unsupportedDiscarded: 0, disciplineSweeps: {}, uncoveredAreas: [], tierCounts: {} };
+  return { mode: peerReview?.maximumSweep === false ? "Balanced" : "Maximum Sweep", pagesTotal: peerReview?.pages?.length || 0, pagesReviewed: 0, regionsExpected: 0, regionsReviewed: 0, regionsFailed: 0, evidenceFacts: 0, registryObjects: 0, candidatesGenerated: 0, candidatesVerified: 0, unsupportedDiscarded: 0, disciplineSweeps: {}, uncoveredAreas: [], incompleteChecks: [], partialReasons: [], reviewStatus: "running", tierCounts: {} };
+}
+
+function recordPeerIncompleteCheck(label, detail = "") {
+  if (!peerReview) return;
+  const report = peerReview.coverageReport || (peerReview.coverageReport = createPeerCoverageReport());
+  report.incompleteChecks = Array.isArray(report.incompleteChecks) ? report.incompleteChecks : [];
+  const normalizedLabel = String(label || "Incomplete review check").trim();
+  if (!report.incompleteChecks.some(item => String(item?.label || item) === normalizedLabel)) report.incompleteChecks.push({ label: normalizedLabel, detail: String(detail || "").trim() });
 }
 
 function buildPeerSystemRegistry(review = peerReview) {
@@ -974,7 +1783,14 @@ function buildPeerSystemRegistry(review = peerReview) {
     }
   };
   (review?.equipmentRows || []).forEach(row => add({ ...row, name: row.description, discipline: "Equipment", location: `Equipment list, page ${row.page || "unknown"}` }));
+  (review?.cadData?.blocks || []).forEach(block => {
+    const tagAttribute = block.attributes.find(attribute => /^(?:TAG|EQUIPMENT\s*TAG|ITEM\s*(?:NO|NUMBER)?)$/i.test(attribute.tag) && attribute.value);
+    const layoutIndex = (review.cadData.layouts || []).indexOf(block.layout);
+    add({ tag: tagAttribute?.value || "", name: block.name, page: Number(block.page || 0) || (layoutIndex >= 0 ? layoutIndex + 1 : 0), discipline: "Native CAD", location: `DWG ${block.layout === "Model" ? "model space" : `layout ${block.layout}`}, block ${block.handle}` });
+  });
   (review?.pages || []).forEach(page => (page.visualCallouts || []).forEach(callout => add({ ...callout, page: page.number, discipline: getPeerDeterministicPageRole(page), location: `Drawing callout, page ${page.number}` })));
+  const equipmentPages = (review?.pages || []).filter(page => getPeerDeterministicPageRole(page) === "Equipment").map(page => Number(page.number));
+  extractPeerCadMainEquipmentCallouts(review?.cadData || {}, review?.equipmentRows || [], equipmentPages).forEach(callout => add({ ...callout, discipline: "Native CAD callout" }));
   (review?.evidenceLedger || []).forEach(fact => add(fact));
   return Array.from(objects.values()).map(entry => ({ ...entry, pages: entry.pages.sort((a, b) => a - b), locations: entry.locations.slice(0, 12) }));
 }
@@ -993,6 +1809,7 @@ function finalizePeerCoverageReport() {
 function classifyPeerFindingTier(item = {}) {
   if (item.source === "manual") return "Manual";
   const confidence = Number(item.confidence);
+  if (item.verificationStatus === "possible" && confidence <= .25) return "Review idea";
   const hasEvidence = Boolean(String(item.evidence || item.details || item.listValue || item.comparedValue || "").trim());
   const hasLocation = Boolean(String(item.location || "").trim() || Number(item.page));
   const objective = item.verificationStatus === "verified" || (item.evidenceType === "Objective visible mismatch" && confidence >= .65) || (item.severity === "Error" && (item.listValue || item.comparedValue));
@@ -1001,54 +1818,171 @@ function classifyPeerFindingTier(item = {}) {
   return "Review idea";
 }
 
+function shouldPeerExpandOverviewReview(page = {}, result = {}) {
+  const findings = Array.isArray(result.findings) ? result.findings : [];
+  const unresolved = Array.isArray(result.unresolvedLabels) ? result.unresolvedLabels : [];
+  const callouts = Array.isArray(result.callouts) ? result.callouts : [];
+  const denseSelectableText = String(page.text || page.ocrText || "").length >= 6500;
+  return findings.length >= 4 || unresolved.length > 0 || callouts.length >= 10 || denseSelectableText;
+}
+
+function getPeerDisciplineTargetPageNumbers(discipline, currentFindings = []) {
+  const pages = peerReview?.pages || [];
+  const roleByDiscipline = { "Drawing coordination": "Drawing", Equipment: "Equipment", Plumbing: "Plumbing", Electrical: "Electrical" };
+  const role = roleByDiscipline[discipline];
+  if (role) {
+    let matches = pages.filter(page => getPeerDeterministicPageRole(page) === role);
+    if (!matches.length) matches = pages.filter(page => String(page.category || "") === role);
+    return new Set(matches.map(page => Number(page.number)));
+  }
+  const categories = discipline === "Dimensions and clearances"
+    ? new Set(["Dimension or label", "Service clearance"])
+    : discipline === "Schedules and descriptions"
+      ? new Set(["Schedule or table", "Piping specification", "Tank coordination"])
+      : new Set(["Equipment arrangement", "Linework", "Drain or overflow", "Valve or union", "Tank coordination"]);
+  const scores = pages.map(page => {
+    let score = currentFindings.filter(item => Number(item.page) === Number(page.number) && categories.has(item.category)).length * 5;
+    if (discipline === "Schedules and descriptions" && (page.tableTypes || []).some(type => type !== "Other")) score += 3;
+    if (discipline === "Dimensions and clearances" && getPeerDeterministicPageRole(page) === "Drawing") score += 2;
+    if (discipline === "Constructability" && ((page.visualCallouts || []).length || page.visualEquipmentTableDetected)) score += 3;
+    return { page: Number(page.number), score };
+  }).sort((left, right) => right.score - left.score || left.page - right.page);
+  const selected = scores.filter(item => item.score > 0).slice(0, 3);
+  if (!selected.length && scores.length) selected.push(...scores.slice(0, 2));
+  return new Set(selected.map(item => item.page));
+}
+
+function selectPeerDetailExpansionImages(images = [], currentFindings = [], missingSlots = [], limit = 2) {
+  const desiredRoles = new Set();
+  missingSlots.forEach(slot => {
+    const category = String(slot.category || "");
+    if (/Electrical/i.test(category)) desiredRoles.add("Electrical");
+    if (/Valve|Drain|Overflow|Piping/i.test(category)) desiredRoles.add("Plumbing");
+    if (/Tank|Equipment|Service clearance/i.test(category)) desiredRoles.add("Equipment");
+    if (/Dimension|Linework/i.test(category)) desiredRoles.add("Drawing");
+  });
+  const findingsByPage = currentFindings.reduce((counts, item) => {
+    const page = Number(item.page || 0); if (page) counts.set(page, (counts.get(page) || 0) + 1);
+    return counts;
+  }, new Map());
+  return images.map(entry => {
+    const page = peerReview?.pages?.find(item => Number(item.number) === Number(entry.page));
+    const role = page ? getPeerDeterministicPageRole(page) : "Drawing";
+    let score = (findingsByPage.get(Number(entry.page)) || 0) * 10;
+    if (desiredRoles.has(role)) score += 5;
+    if ((page?.tableTypes || []).some(type => type !== "Other")) score += 2;
+    return { ...entry, score };
+  }).sort((left, right) => right.score - left.score || Number(left.page) - Number(right.page)).slice(0, Math.max(1, limit));
+}
+
 async function runPeerVisualReview() {
-  const findings = [], engineerPatternImages = [], peerEvidenceImages = [];
+  const findings = [], engineerPatternImages = [], peerVerificationImages = [];
+  if (peerReview.aiAnalysisCacheVersion !== PEER_AI_ANALYSIS_CACHE_VERSION) {
+    peerReview.pages.forEach(page => {
+      delete page.visualAnalysisCompleted;
+      delete page.visualAnalysisResult;
+      delete page.evidenceLedgerCompleted;
+      delete page.evidenceLedgerFacts;
+      delete page.evidenceLedgerVersion;
+    });
+    peerReview.disciplineSweepCache = {};
+    peerReview.aiAnalysisCacheVersion = PEER_AI_ANALYSIS_CACHE_VERSION;
+  }
+  peerReview.disciplineSweepCache = peerReview.disciplineSweepCache || {};
   const calibratedProjectFindings = buildPeerSameProjectReviewExampleFindings(peerReview);
   const useCalibratedFastPath = calibratedProjectFindings.length > 0;
   peerReview.equipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
-  peerReview.evidenceLedger = [];
+  peerReview.evidenceLedger = extractPeerCadEvidenceFacts(peerReview.cadData || {}, peerReview.equipmentRows || []);
   peerReview.coverageReport = createPeerCoverageReport();
+  recordPeerAnalysisMessage("Optimized review enabled: page regions use a compact evidence pass; full CAD and company knowledge remain available to specialist sweeps and source verification.");
+  if (peerReview.evidenceLedger.length) recordPeerAnalysisMessage(`Native DWG evidence ledger indexed ${peerReview.evidenceLedger.length} source-located table fact${peerReview.evidenceLedger.length === 1 ? "" : "s"} before visual review.`);
   for (let index = 0; index < peerReview.pages.length; index += 1) {
     const info = peerReview.pages[index];
     setPeerAnalysisProgress("running", `Visually reviewing page ${info.number} (${index + 1} of ${peerReview.pages.length}). Independently checking drawing notes, callouts, schedules, dimensions, quantities, and coordination issues.`);
     try {
-      const detailedRegions = await renderPeerAnalysisRegions(info.number), regionResults = [], incompleteRegions = [];
-      peerReview.coverageReport.regionsExpected += detailedRegions.length;
-      engineerPatternImages.push(...detailedRegions.map(image => ({ page: info.number, image })));
+      const regionResults = [], incompleteRegions = [];
+      const reusedVisualAnalysis = Boolean(info.visualAnalysisCompleted && info.visualAnalysisResult);
+      const overviewImage = await renderPeerAnalysisImage(info.number);
+      engineerPatternImages.push({ page: info.number, image: overviewImage });
       if (!useCalibratedFastPath) try {
-        setPeerAnalysisProgress("running", `Extracting the structured evidence ledger from high-resolution tiles on page ${info.number}.`);
-        const evidenceTiles = await renderPeerEvidenceTiles(info.number);
-        peerEvidenceImages.push(...evidenceTiles.map(tile => ({ page: info.number, tile: tile.tile, image: tile.image })));
-        const pageFacts = await requestPeerEvidenceLedgerExtraction(info.number, evidenceTiles);
+        let pageFacts;
+        if (info.evidenceLedgerCompleted && info.evidenceLedgerVersion === PEER_EVIDENCE_LEDGER_CACHE_VERSION && Array.isArray(info.evidenceLedgerFacts)) {
+          pageFacts = info.evidenceLedgerFacts.map(fact => ({ ...fact }));
+          setPeerAnalysisProgress("running", `Reusing ${pageFacts.length} cached source-located fact${pageFacts.length === 1 ? "" : "s"} for page ${info.number}.`);
+        } else if (peerReview.maximumSweep !== false) {
+          setPeerAnalysisProgress("running", `Building the high-resolution evidence ledger for page ${info.number}.`);
+          const evidenceTiles = await renderPeerEvidenceTiles(info.number);
+          pageFacts = await requestPeerEvidenceLedgerExtraction(info.number, evidenceTiles);
+          info.evidenceLedgerFacts = pageFacts.map(fact => ({ ...fact }));
+          info.evidenceLedgerCompleted = true;
+          info.evidenceLedgerVersion = PEER_EVIDENCE_LEDGER_CACHE_VERSION;
+        } else {
+          pageFacts = [];
+          recordPeerAnalysisMessage(`Balanced review skipped the uncached high-resolution evidence ledger on page ${info.number}; regional and native-DWG checks will continue.`);
+        }
         peerReview.evidenceLedger.push(...pageFacts);
-        recordPeerAnalysisMessage(`Page ${info.number} evidence ledger captured ${pageFacts.length} source-located fact${pageFacts.length === 1 ? "" : "s"}.`);
+        recordPeerAnalysisMessage(`Page ${info.number} visual evidence ledger added ${pageFacts.length} source-located fact${pageFacts.length === 1 ? "" : "s"}${peerReview.cadData ? "; native DWG facts remain indexed separately" : ""}.`);
       } catch (ledgerError) {
+        recordPeerIncompleteCheck(`Page ${info.number} evidence ledger incomplete`, ledgerError.message);
         recordPeerAnalysisMessage(`The structured evidence ledger could not be completed for page ${info.number}; visual review will continue. ${ledgerError.message}`, true);
       }
-      setPeerAnalysisProgress("running", `Reviewing both halves of page ${info.number} together. Comparing tables, plan views, elevations, dimensions, and equipment counts across the page.`);
-      try {
-        regionResults.push(await requestPeerVisualAnalysis(info.number, detailedRegions));
-        peerReview.coverageReport.regionsReviewed += detailedRegions.length;
-      } catch (combinedError) {
-        if (/sign in|could not be reached/i.test(combinedError.message)) throw combinedError;
-        recordPeerAnalysisMessage(`Combined page ${info.number} review could not finish; retrying each half separately.`, true);
+      if (reusedVisualAnalysis) {
+        regionResults.push(JSON.parse(JSON.stringify(info.visualAnalysisResult)));
+        const expected = Math.max(1, Number(info.visualRegionsExpected || 1)), reviewed = Math.max(1, Number(info.visualRegionsReviewed || expected));
+        peerReview.coverageReport.regionsExpected += expected; peerReview.coverageReport.regionsReviewed += reviewed;
+        peerVerificationImages.push({ page: info.number, image: overviewImage });
+        setPeerAnalysisProgress("running", `Reusing the fingerprint-matched visual review for page ${info.number}.`);
+      } else {
+        const pageRole = getPeerDeterministicPageRole(info);
+        let detailedRegions = [];
+        if (pageRole === "Drawing") {
+          peerReview.coverageReport.regionsExpected += 1;
+          setPeerAnalysisProgress("running", `Running the adaptive whole-page review gate on page ${info.number}.`);
+          const overviewResult = await requestPeerVisualAnalysis(info.number, overviewImage, 1, pageRole);
+          peerReview.coverageReport.regionsReviewed += 1;
+          if (shouldPeerExpandOverviewReview(info, overviewResult)) {
+            recordPeerAnalysisMessage(`Page ${info.number} needs enlarged regional review; continuing with both halves.`);
+            detailedRegions = await renderPeerAnalysisRegions(info.number);
+          } else {
+            regionResults.push(overviewResult); peerVerificationImages.push({ page: info.number, image: overviewImage });
+            recordPeerAnalysisMessage(`Page ${info.number} passed the adaptive whole-page gate; two enlarged regional calls were avoided.`);
+          }
+        } else {
+          detailedRegions = await renderPeerAnalysisRegions(info.number);
+        }
+        if (detailedRegions.length) {
+          peerReview.coverageReport.regionsExpected += detailedRegions.length;
+          peerVerificationImages.push(...detailedRegions.map(image => ({ page: info.number, image })));
+          setPeerAnalysisProgress("running", `Reviewing the left and right halves of page ${info.number} separately for reliable local-model throughput.`);
+        }
         for (let regionIndex = 0; regionIndex < detailedRegions.length; regionIndex += 1) {
           const regionLabel = regionIndex ? "right" : "left";
-          setPeerAnalysisProgress("running", `Fallback review of the ${regionLabel} half of page ${info.number} (${regionIndex + 1} of ${detailedRegions.length}).`);
-          try { regionResults.push(await requestPeerVisualAnalysis(info.number, detailedRegions[regionIndex], 1)); peerReview.coverageReport.regionsReviewed += 1; }
-          catch (retryError) {
+          setPeerAnalysisProgress("running", `Reviewing the ${regionLabel} half of page ${info.number} (${regionIndex + 1} of ${detailedRegions.length}).`);
+          try {
+            const regionResult = await requestPeerVisualAnalysis(info.number, detailedRegions[regionIndex], 1, pageRole);
+            regionResults.push(regionResult); peerReview.coverageReport.regionsReviewed += 1;
+            recordPeerAnalysisMessage(`Page ${info.number} ${regionLabel} region returned ${(regionResult.findings || []).length} raw candidate${(regionResult.findings || []).length === 1 ? "" : "s"}; grounded candidates will be counted after filtering.`);
+          }
+          catch (regionError) {
+            if (/sign in|could not be reached/i.test(regionError.message)) throw regionError;
             incompleteRegions.push(regionLabel);
             peerReview.coverageReport.uncoveredAreas.push(`Page ${info.number}, ${regionLabel} region`);
-            recordPeerAnalysisMessage(`${regionLabel[0].toUpperCase()}${regionLabel.slice(1)} half of page ${info.number} could not be completed; manual review is required for that area.`, true);
+            recordPeerAnalysisMessage(`${regionLabel[0].toUpperCase()}${regionLabel.slice(1)} half of page ${info.number} could not be completed; manual review is required for that area. ${regionError.message}`, true);
           }
         }
+        info.visualRegionsExpected = pageRole === "Drawing" ? 1 + detailedRegions.length : detailedRegions.length;
+        info.visualRegionsReviewed = info.visualRegionsExpected - incompleteRegions.length;
       }
       if (!regionResults.length) throw new Error("Local visual AI returned incomplete review information.");
       let result = mergePeerVisualRegionResults(regionResults);
-      const regionalEquipmentHint = result.pageType === "Equipment Table" || result.pageType === "Drawing with Equipment Table";
-      result.equipmentRows = [];
-      result.pageType = "Drawing";
-      if (regionalEquipmentHint || getPeerDeterministicPageRole(info) === "Equipment") try {
+      if (!reusedVisualAnalysis) {
+        result.equipmentRows = [];
+        result.pageType = "Drawing";
+      // The visual page classifier often mistakes connection, power, and nozzle
+      // schedules for the formal equipment list. Only run this separate costly
+      // extraction on pages whose text/title deterministically identifies the
+      // equipment role; other tables remain available to the visual review.
+      if (getPeerDeterministicPageRole(info) === "Equipment") try {
         setPeerAnalysisProgress("running", `Checking page ${info.number} for the formal NS equipment list.`);
         const equipmentCrop = await renderPeerEquipmentTableCrop(info.number);
         const focusedCandidates = (await requestPeerEquipmentExtraction(info.number, [equipmentCrop]))
@@ -1073,8 +2007,15 @@ async function runPeerVisualReview() {
       } catch (equipmentError) {
         recordPeerAnalysisMessage(`The focused equipment-list crop could not be fully read on page ${info.number}; that page was not used as an equipment table.`, true);
       }
+        if (!incompleteRegions.length) {
+          info.visualAnalysisResult = JSON.parse(JSON.stringify(result));
+          info.visualAnalysisCompleted = true;
+        }
+      }
       info.visualReviewed = true;
       info.visualReviewComplete = incompleteRegions.length === 0;
+      savePeerReview(false);
+      await persistPeerAnalysisCache();
       if (incompleteRegions.length) findings.push(createPeerFinding({
         severity: "Manual Review",
         issue: "Visual review was incomplete for part of this page",
@@ -1105,19 +2046,21 @@ async function runPeerVisualReview() {
         if (peerReview.equipmentRows.some(existing => existing.visualRowKey === rowKey)) return;
         peerReview.equipmentRows.push({ id: peerId("equip"), page: info.number, tag: row.tag || "", description: row.description || "", presentColumns: ["tag", "description"], source: "visual-ai", sourceTable: row.sourceTable, tableTitle: row.tableTitle, visualRowKey: rowKey });
       });
-      filterPeerVisualFindings(result.findings || []).forEach(item => findings.push(createPeerFinding({
+      const acceptedRegionalFindings = retainPeerGroundedReviewPrompts(result.findings || []);
+      acceptedRegionalFindings.forEach(item => findings.push(createPeerFinding({
         severity: item.confidence < 0.78 ? "Manual Review" : item.severity === "Manual Review" && item.evidenceType === "Explicit reviewer correction" ? "Warning" : item.severity,
-        issue: getPeerVisualFindingIssue(item),
+        issue: item.verificationStatus === "possible" ? item.issue : getPeerVisualFindingIssue(item),
         details: item.evidenceType === "Explicit reviewer correction"
           ? `Detected from a visible reviewer annotation.${item.location ? ` Location: ${item.location}.` : ""}`
           : `${item.evidence}${item.location ? ` Location: ${item.location}.` : ""} Evidence: ${item.evidenceType}.`,
         page: info.number,
         source: "visual-ai",
         confidence: item.confidence,
+        verificationStatus: item.verificationStatus || "", verificationReason: item.verificationReason || "",
         category: inferPeerEngineerFindingCategory(item), affectedObject: item.affectedObject,
         evidence: item.evidence, requirement: item.requirement, location: item.location, evidenceType: item.evidenceType
       })));
-      const acceptedCount = filterPeerVisualFindings(result.findings || []).length;
+      const acceptedCount = acceptedRegionalFindings.length;
       recordPeerAnalysisMessage(`Page ${info.number} visual review ${incompleteRegions.length ? "partially completed" : "completed"} with ${acceptedCount} potential item${acceptedCount === 1 ? "" : "s"} across all confidence levels.`);
     } catch (error) {
       console.warn(`Visual review failed for page ${info.number}:`, error);
@@ -1126,7 +2069,13 @@ async function runPeerVisualReview() {
       findings.push(createPeerFinding({ severity: "Manual Review", issue: "Visual drawing review could not be completed for this page", details: error.message, page: info.number, source: "visual-ai" }));
     }
   }
-  const ledgerFindings = runPeerEvidenceLedgerRules(peerReview.evidenceLedger || []);
+  const uniqueLedgerFacts = new Map();
+  (peerReview.evidenceLedger || []).forEach(fact => {
+    const key = `${Number(fact.page || 0)}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}`;
+    if (!uniqueLedgerFacts.has(key)) uniqueLedgerFacts.set(key, fact);
+  });
+  peerReview.evidenceLedger = Array.from(uniqueLedgerFacts.values());
+  const ledgerFindings = runPeerEvidenceLedgerRules(peerReview.evidenceLedger);
   findings.push(...ledgerFindings);
   if (!useCalibratedFastPath) recordPeerAnalysisMessage(`Structured evidence comparison found ${ledgerFindings.length} exact repeated-value or description conflict${ledgerFindings.length === 1 ? "" : "s"}.`);
   if (useCalibratedFastPath) {
@@ -1147,25 +2096,66 @@ async function runPeerVisualReview() {
   }
   if (engineerPatternImages.length) {
     try {
-      setPeerAnalysisProgress("running", `Running the document-level engineer coordination check across all ${peerReview.pages.length} pages.`);
-      let patternCandidates = filterPeerVisualFindings(await requestPeerEngineerPatternAnalysis(engineerPatternImages));
+      let patternCandidates = [];
+      recordPeerAnalysisMessage("Starting focused discipline sweeps directly; the redundant document overview is skipped for faster local-model throughput.");
       peerReview.coverageReport.candidatesGenerated += patternCandidates.length;
-      const disciplineSweeps = peerReview.maximumSweep === false
-        ? ["Drawing coordination", "Equipment", "Plumbing", "Electrical"]
-        : ["Drawing coordination", "Equipment", "Plumbing", "Electrical", "Dimensions and clearances", "Schedules and descriptions", "Constructability"];
+      const selectedRoles = new Set(peerReview.pages.map(page => getPeerDeterministicPageRole(page)));
+      const disciplineSweeps = [
+        selectedRoles.has("Drawing") ? "Drawing coordination" : "",
+        selectedRoles.has("Equipment") ? "Equipment" : "",
+        selectedRoles.has("Plumbing") ? "Plumbing" : "",
+        selectedRoles.has("Electrical") ? "Electrical" : ""
+      ].filter(Boolean);
       for (const discipline of disciplineSweeps) {
         try {
           setPeerAnalysisProgress("running", `Running the focused ${discipline.toLowerCase()} sweep across the complete drawing package.`);
-          const role = discipline === "Drawing coordination" ? "Drawing" : discipline;
-          const rolePages = new Set(peerReview.pages.filter(page => getPeerDeterministicPageRole(page) === role).map(page => Number(page.number)));
-          const targetedImages = discipline === "Drawing coordination" ? engineerPatternImages : peerEvidenceImages.filter(entry => rolePages.has(Number(entry.page)));
-          const disciplineCandidates = filterPeerVisualFindings(await requestPeerDisciplineAnalysis(targetedImages.length ? targetedImages : engineerPatternImages, discipline));
+          const rolePages = getPeerDisciplineTargetPageNumbers(discipline, findings);
+          if (!rolePages.size) {
+            recordPeerAnalysisMessage(`${discipline} sweep skipped because no page is assigned to that category.`);
+            continue;
+          }
+          const cachedSweep = peerReview.disciplineSweepCache[discipline];
+          let disciplineCandidates;
+          if (Array.isArray(cachedSweep)) {
+            disciplineCandidates = cachedSweep.map(item => ({ ...item }));
+            recordPeerAnalysisMessage(`Reused ${disciplineCandidates.length} cached ${discipline.toLowerCase()} candidate${disciplineCandidates.length === 1 ? "" : "s"}.`);
+          } else {
+            const isRoleSpecific = ["Equipment", "Plumbing", "Electrical"].includes(discipline);
+            const roleImages = (isRoleSpecific ? peerVerificationImages : engineerPatternImages).filter(entry => rolePages.has(Number(entry.page)));
+            const targetedImages = roleImages.length ? roleImages : engineerPatternImages.slice(0, 2);
+            recordPeerAnalysisMessage(`${discipline} sweep targeted page${rolePages.size === 1 ? "" : "s"} ${Array.from(rolePages).join(", ")} instead of rescanning every page.`);
+            disciplineCandidates = [];
+            const disciplineImageBatchSize = 2;
+            let failedDisciplineBatches = 0;
+            for (let imageOffset = 0; imageOffset < targetedImages.length; imageOffset += disciplineImageBatchSize) {
+              const imageBatch = targetedImages.slice(imageOffset, imageOffset + disciplineImageBatchSize);
+              setPeerAnalysisProgress("running", `Running the focused ${discipline.toLowerCase()} sweep batch ${Math.floor(imageOffset / disciplineImageBatchSize) + 1} of ${Math.ceil(targetedImages.length / disciplineImageBatchSize)}.`);
+              try {
+                const rawBatchCandidates = await requestPeerDisciplineAnalysis(imageBatch, discipline);
+                const batchCandidates = retainPeerGroundedReviewPrompts(rawBatchCandidates);
+                disciplineCandidates.push(...batchCandidates);
+                recordPeerAnalysisMessage(`${discipline} batch ${Math.floor(imageOffset / disciplineImageBatchSize) + 1} retained ${batchCandidates.length} of ${rawBatchCandidates.length} raw candidate${rawBatchCandidates.length === 1 ? "" : "s"}.`);
+              } catch (batchError) {
+                failedDisciplineBatches += 1;
+                const firstBatchFailed = imageOffset === 0;
+                recordPeerAnalysisMessage(`${discipline} batch ${Math.floor(imageOffset / disciplineImageBatchSize) + 1} could not finish; ${firstBatchFailed ? `remaining ${discipline.toLowerCase()} batches will be skipped` : "later batches will continue"}. ${batchError.message}`, true);
+                if (firstBatchFailed) break;
+              }
+            }
+            disciplineCandidates = mergePeerDuplicateFindings(disciplineCandidates);
+            if (!failedDisciplineBatches) {
+              peerReview.disciplineSweepCache[discipline] = disciplineCandidates.map(item => ({ ...item }));
+              savePeerReview(false);
+              await persistPeerAnalysisCache();
+            }
+          }
           patternCandidates = [...patternCandidates, ...disciplineCandidates];
           peerReview.coverageReport.candidatesGenerated += disciplineCandidates.length;
           peerReview.coverageReport.disciplineSweeps[discipline] = { status: "complete", candidates: disciplineCandidates.length };
           recordPeerAnalysisMessage(`${discipline} sweep added ${disciplineCandidates.length} evidence-based candidate${disciplineCandidates.length === 1 ? "" : "s"}.`);
         } catch (disciplineError) {
           peerReview.coverageReport.disciplineSweeps[discipline] = { status: "incomplete", candidates: 0 };
+          recordPeerIncompleteCheck(`${discipline} specialist sweep incomplete`, disciplineError.message);
           recordPeerAnalysisMessage(`The focused ${discipline.toLowerCase()} sweep could not finish; the other review passes will continue. ${disciplineError.message}`, true);
         }
       }
@@ -1173,23 +2163,61 @@ async function runPeerVisualReview() {
       const missingReviewSlots = getPeerMissingEngineerReviewSlots(proposedFindings);
       if (missingReviewSlots.length) {
         try {
-          setPeerAnalysisProgress("running", `Expanding review detail for ${missingReviewSlots.map(item => item.category).join(", ")}. Looking for additional specific locations without duplicating existing findings.`);
-          const detailCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(engineerPatternImages, proposedFindings, missingReviewSlots));
-          patternCandidates = [...patternCandidates, ...detailCandidates];
-          peerReview.coverageReport.candidatesGenerated += detailCandidates.length;
+          let detailExpansionCircuitOpen = false;
+          const detailExpansionImages = selectPeerDetailExpansionImages(engineerPatternImages, [...findings, ...proposedFindings], missingReviewSlots, 2);
+          setPeerAnalysisProgress("running", `Expanding review detail on the ${detailExpansionImages.length} most relevant page${detailExpansionImages.length === 1 ? "" : "s"} for ${missingReviewSlots.map(item => item.category).join(", ")}.`);
+          recordPeerAnalysisMessage(`Detail expansion targeted page${detailExpansionImages.length === 1 ? "" : "s"} ${detailExpansionImages.map(item => item.page).join(", ")} instead of rescanning all ${engineerPatternImages.length} pages.`);
+          const detailCandidates = [];
+          for (let imageOffset = 0; imageOffset < detailExpansionImages.length; imageOffset += 2) {
+            const imageBatch = detailExpansionImages.slice(imageOffset, imageOffset + 2);
+            try {
+              const batchCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(imageBatch, proposedFindings, missingReviewSlots));
+              detailCandidates.push(...batchCandidates);
+              recordPeerAnalysisMessage(`Detail expansion batch ${Math.floor(imageOffset / 2) + 1} found ${batchCandidates.length} candidate${batchCandidates.length === 1 ? "" : "s"}.`);
+            } catch (batchError) {
+              const firstBatchFailed = imageOffset === 0;
+              if (firstBatchFailed) detailExpansionCircuitOpen = true;
+              recordPeerIncompleteCheck(`Detail-expansion batch ${Math.floor(imageOffset / 2) + 1} incomplete`, batchError.message);
+              recordPeerAnalysisMessage(`Detail expansion batch ${Math.floor(imageOffset / 2) + 1} could not finish; ${firstBatchFailed ? "remaining detail-expansion batches will be skipped" : "later batches will continue"}. ${batchError.message}`, true);
+              if (firstBatchFailed) break;
+            }
+          }
+          const mergedDetailCandidates = mergePeerDuplicateFindings(detailCandidates);
+          patternCandidates = [...patternCandidates, ...mergedDetailCandidates];
+          peerReview.coverageReport.candidatesGenerated += mergedDetailCandidates.length;
           proposedFindings = selectPeerVerificationCandidates(patternCandidates, peerReview.maximumSweep === false ? 8 : 12);
-          recordPeerAnalysisMessage(`Detail expansion added ${detailCandidates.length} candidate${detailCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+          recordPeerAnalysisMessage(`Detail expansion added ${mergedDetailCandidates.length} candidate${mergedDetailCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
 
           const remainingTargetSlots = getPeerMissingEngineerReviewSlots(proposedFindings).filter(item => item.category === "Service clearance" || item.category === "Dimension or label");
-          if (remainingTargetSlots.length) {
+          if (remainingTargetSlots.length && !detailExpansionCircuitOpen && mergedDetailCandidates.length) {
             setPeerAnalysisProgress("running", "Rechecking missing panel clearances, tank labels, and overall dimensions against the accepted peer-review examples.");
-            const recoveryCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(engineerPatternImages, proposedFindings, remainingTargetSlots));
-            patternCandidates = [...patternCandidates, ...recoveryCandidates];
-            peerReview.coverageReport.candidatesGenerated += recoveryCandidates.length;
+            const recoveryCandidates = [];
+            for (let imageOffset = 0; imageOffset < detailExpansionImages.length; imageOffset += 2) {
+              try {
+                const batchCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(detailExpansionImages.slice(imageOffset, imageOffset + 2), proposedFindings, remainingTargetSlots));
+                recoveryCandidates.push(...batchCandidates);
+                recordPeerAnalysisMessage(`Missing-target batch ${Math.floor(imageOffset / 2) + 1} found ${batchCandidates.length} candidate${batchCandidates.length === 1 ? "" : "s"}.`);
+              }
+              catch (batchError) {
+                const firstBatchFailed = imageOffset === 0;
+                recordPeerIncompleteCheck(`Missing-target recheck batch ${Math.floor(imageOffset / 2) + 1} incomplete`, batchError.message);
+                recordPeerAnalysisMessage(`Missing-target batch ${Math.floor(imageOffset / 2) + 1} could not finish; ${firstBatchFailed ? "remaining missing-target batches will be skipped" : "later batches will continue"}. ${batchError.message}`, true);
+                if (firstBatchFailed) break;
+              }
+            }
+            const mergedRecoveryCandidates = mergePeerDuplicateFindings(recoveryCandidates);
+            patternCandidates = [...patternCandidates, ...mergedRecoveryCandidates];
+            peerReview.coverageReport.candidatesGenerated += mergedRecoveryCandidates.length;
             proposedFindings = selectPeerVerificationCandidates(patternCandidates, peerReview.maximumSweep === false ? 8 : 12);
-            recordPeerAnalysisMessage(`Missing-target recheck added ${recoveryCandidates.length} candidate${recoveryCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+            recordPeerAnalysisMessage(`Missing-target recheck added ${mergedRecoveryCandidates.length} candidate${mergedRecoveryCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+          } else if (remainingTargetSlots.length) {
+            if (detailExpansionCircuitOpen) recordPeerIncompleteCheck("Missing-target recheck skipped after a timeout", "The matching detail-expansion request shape did not complete.");
+            recordPeerAnalysisMessage(detailExpansionCircuitOpen
+              ? "Skipped the missing-target recheck because detail-expansion batch 1 timed out on the same request shape."
+              : "Skipped the missing-target recheck because the targeted detail pass found no additional grounded evidence; repeating it would add time without a useful lead.", detailExpansionCircuitOpen);
           }
         } catch (detailError) {
+          recordPeerIncompleteCheck("Extra-detail sweep incomplete", detailError.message);
           recordPeerAnalysisMessage(`The extra-detail sweep could not finish, so the completed coordination findings were retained. ${detailError.message}`, true);
         }
       }
@@ -1197,16 +2225,53 @@ async function runPeerVisualReview() {
       if (proposedFindings.length) {
         try {
           setPeerAnalysisProgress("running", `Source-verifying ${proposedFindings.length} proposed finding${proposedFindings.length === 1 ? "" : "s"} against the exact pages, labels, notes, and locations.`);
-          const verifications = await requestPeerEngineerFindingVerification(engineerPatternImages, proposedFindings);
-          patternFindings = selectPeerSourceCheckedFindings(applyPeerEngineerVerifications(proposedFindings, verifications, { retainUnsupported: true }), peerReview.maximumSweep === false ? 12 : 18);
+          const verifications = [];
+          const verificationBatchSize = 4;
+          const failedVerificationBatches = new Map();
+          for (let offset = 0; offset < proposedFindings.length; offset += verificationBatchSize) {
+            const batchCandidates = proposedFindings.slice(offset, offset + verificationBatchSize);
+            const candidatePages = new Set(batchCandidates.map(item => Number(item.page)).filter(Boolean));
+            let verificationImages = peerVerificationImages.filter(entry => candidatePages.has(Number(entry.page)));
+            if (verificationImages.length > 4) verificationImages = engineerPatternImages.filter(entry => candidatePages.has(Number(entry.page)));
+            setPeerAnalysisProgress("running", `Source-verifying findings ${offset + 1}-${Math.min(proposedFindings.length, offset + batchCandidates.length)} of ${proposedFindings.length}.`);
+            try {
+              const batchVerifications = await requestPeerEngineerFindingVerification(verificationImages.length ? verificationImages : engineerPatternImages.slice(0, 2), batchCandidates);
+              batchVerifications.forEach(item => verifications.push({ ...item, candidateIndex: offset + Number(item.candidateIndex) }));
+              const supportedInBatch = batchVerifications.filter(item => item.supported).length;
+              recordPeerAnalysisMessage(`Source-verification batch ${Math.floor(offset / verificationBatchSize) + 1} supported ${supportedInBatch} of ${batchCandidates.length} candidate${batchCandidates.length === 1 ? "" : "s"}.`);
+            } catch (batchError) {
+              batchCandidates.forEach((item, batchIndex) => failedVerificationBatches.set(offset + batchIndex, batchError.message));
+              recordPeerIncompleteCheck(`Source-verification batch ${Math.floor(offset / verificationBatchSize) + 1} incomplete`, batchError.message);
+              recordPeerAnalysisMessage(`Source-verification batch ${Math.floor(offset / verificationBatchSize) + 1} could not finish; later batches will continue. ${batchError.message}`, true);
+            }
+          }
+          const verifiedFindings = applyPeerEngineerVerifications(proposedFindings, verifications, { retainUnsupported: true });
+          const failedBatchPrompts = proposedFindings.flatMap((item, index) => failedVerificationBatches.has(index) ? [{
+            ...item, severity: "Manual Review", issue: /^Verify\b/i.test(String(item.issue || "")) ? item.issue : `Verify - ${item.issue}`,
+            evidence: `Candidate observation: ${String(item.evidence || "The focused review identified a possible coordination concern.").trim()}`,
+            requirement: "Engineer confirmation required", confidence: Math.min(Number(item.confidence) || 0.35, 0.35), verificationStatus: "possible",
+            verificationReason: `This source-verification batch was incomplete: ${failedVerificationBatches.get(index)}`
+          }] : []);
+          patternFindings = selectPeerSourceCheckedFindings([...verifiedFindings, ...failedBatchPrompts], peerReview.maximumSweep === false ? 12 : 18);
           const verifiedCount = patternFindings.filter(item => item.verificationStatus === "verified").length;
           const possibleCount = patternFindings.filter(item => item.verificationStatus === "possible").length;
           peerReview.coverageReport.candidatesVerified += verifiedCount + possibleCount;
           peerReview.coverageReport.unsupportedDiscarded += proposedFindings.length - patternFindings.length;
           recordPeerAnalysisMessage(`Source verification confirmed ${verifiedCount} of ${proposedFindings.length} proposed finding${proposedFindings.length === 1 ? "" : "s"}; ${possibleCount} evidence-located review prompt${possibleCount === 1 ? " was" : "s were"} retained and ${proposedFindings.length - patternFindings.length} unsupported item${proposedFindings.length - patternFindings.length === 1 ? " was" : "s were"} discarded.`);
         } catch (verificationError) {
-          patternFindings = [];
-          recordPeerAnalysisMessage(`Source verification could not finish, so unverified document-level candidates were discarded. ${verificationError.message}`, true);
+          recordPeerIncompleteCheck("Source verification incomplete", verificationError.message);
+          patternFindings = selectPeerSourceCheckedFindings(proposedFindings.map(item => ({
+            ...item,
+            severity: "Manual Review",
+            issue: /^Verify\b/i.test(String(item.issue || "")) ? item.issue : `Verify - ${item.issue}`,
+            evidence: `Candidate observation: ${String(item.evidence || "The focused review identified a possible coordination concern.").trim()}`,
+            requirement: "Engineer confirmation required",
+            confidence: Math.min(Number(item.confidence) || 0.35, 0.35),
+            verificationStatus: "possible",
+            verificationReason: `The focused sweep located this candidate, but the final source-verification response was incomplete: ${verificationError.message}`
+          })), peerReview.maximumSweep === false ? 8 : 12);
+          peerReview.coverageReport.candidatesVerified += patternFindings.length;
+          recordPeerAnalysisMessage(`Source verification could not finish; ${patternFindings.length} focused-sweep candidate${patternFindings.length === 1 ? " was" : "s were"} retained as low-confidence engineer review prompts instead of being discarded. ${verificationError.message}`, true);
         }
       }
       const sameProjectExampleFindings = buildPeerSameProjectReviewExampleFindings(peerReview);
@@ -1225,6 +2290,7 @@ async function runPeerVisualReview() {
       })));
       recordPeerAnalysisMessage(`Document-level engineer coordination found ${patternCandidates.length} candidate${patternCandidates.length === 1 ? "" : "s"}; ${patternFindings.length} distinct source-checked item${patternFindings.length === 1 ? " was" : "s were"} retained.`);
     } catch (patternError) {
+      recordPeerIncompleteCheck("Document-level engineer coordination incomplete", patternError.message);
       recordPeerAnalysisMessage(`The document-level engineer coordination check could not finish; completed page findings were retained. ${patternError.message}`, true);
     }
   }
@@ -1295,7 +2361,11 @@ async function requestPeerEvidenceLedgerExtraction(pageNumber, tiles = []) {
   const facts = []; let failedBatches = 0;
   for (let start = 0; start < tiles.length; start += 2) {
     try { facts.push(...await requestPeerEvidenceLedgerBatch(pageNumber, tiles.slice(start, start + 2))); }
-    catch (error) { failedBatches += 1; recordPeerAnalysisMessage(`Page ${pageNumber} evidence tiles ${start + 1}-${Math.min(start + 2, tiles.length)} could not be read; remaining tiles will continue. ${error.message}`, true); }
+    catch (error) {
+      failedBatches += 1;
+      recordPeerAnalysisMessage(`Page ${pageNumber} evidence tiles ${start + 1}-${Math.min(start + 2, tiles.length)} could not be read. ${error.message}`, true);
+      if (/exceeded|timed? out/i.test(error.message || "")) break;
+    }
   }
   if (!facts.length && failedBatches) throw new Error(`All ${failedBatches} evidence extraction batches failed on page ${pageNumber}.`);
   const seen = new Set();
@@ -1389,6 +2459,14 @@ async function renderPeerEquipmentTableCrop(pageNumber) {
   return crop.toDataURL("image/jpeg", 0.92).split(",")[1] || "";
 }
 
+function isPeerUnsupportedMissingDesignFeature(item = {}) {
+  const requirement = String(item.requirement || "").trim();
+  const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
+  return /^(?:Engineer confirmation required|Engineer standard - confirm)$/i.test(requirement)
+    && /\b(?:NO|NOT|MISSING|ABSENT|WITHOUT|LACKS?)\b/i.test(combined)
+    && /\b(?:FLOW PATH|PRESSURE CONTROL|CONTROL DEVICE|PRESSURE REGULATOR|REGULATOR|VALVE|UNION|CLEARANCE|ACCESS SPACE|DRAIN PATH|OVERFLOW|CONNECTION)\b/i.test(combined);
+}
+
 function filterPeerVisualFindings(items) {
   const allowedTypes = new Set(["Unresolved placeholder", "Objective visible mismatch", "Required reference missing"]);
   return items.filter(item => {
@@ -1404,6 +2482,10 @@ function filterPeerVisualFindings(items) {
     const genericRequirement = /^(?:Engineer confirmation required|Engineer standard - confirm)$/i.test(String(item.requirement || "").trim());
     if (item.evidenceType === "Required reference missing" && genericRequirement) return false;
     if (item.evidenceType === "Objective visible mismatch" && genericRequirement && /\b(?:NO|NOT|MISSING|ABSENT|WITHOUT)\b/i.test(item.evidence || "") && !/["']\s*(?:VERSUS|VS\.?|BUT|WHILE|AND)\s*["']/i.test(item.evidence || "")) return false;
+    // A regional image can locate an object, but it cannot prove that a design
+    // feature is absent from the package. Keep these claims only when a printed
+    // drawing requirement or approved source establishes that the feature is due.
+    if (isPeerUnsupportedMissingDesignFeature(item)) return false;
     const claimsMissingCallout = /not called out|no corresponding callout|missing equipment callout|equipment item is listed|no corresponding equipment (?:label|identifier)|no matching row|no corresponding row|no specific callouts?/i.test(combined);
     // Regional requests cannot prove document-wide absence. The deterministic
     // completeness pass evaluates merged main-list rows and callouts instead.
@@ -1472,12 +2554,36 @@ function extractPeerReviewerCorrection(item = {}) {
   return directiveNote?.[1]?.trim() || "";
 }
 
-async function requestPeerVisualAnalysis(pageNumber, imageInput, retryAttempt = 0) {
+async function requestPeerVisualAnalysis(pageNumber, imageInput, retryAttempt = 0, selectedRole = "Drawing") {
   const session = await getPeerLocalAiSession("Sign in with the Database login to run visual drawing checks.");
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), retryAttempt ? 90000 : 120000);
   const images = Array.isArray(imageInput) ? imageInput : [imageInput];
-  const sourceKnowledge = await buildPeerKnowledgeContext(pageNumber);
-  const prompt = `Review page ${pageNumber} of this clean, unannotated N/S Corporation engineering drawing for potential mundane drafting and coordination errors at every confidence level.${images.length > 1 ? " The supplied images are overlapping regions of the same page; combine their evidence and do not duplicate findings." : " Inspect the complete visible page."} Review geometry, labels, notes, dimensions, equipment tables, quantities, callouts, and the title block.
+  const sourceKnowledge = retryAttempt ? "Applied during the later specialist and source-verification passes." : await buildPeerKnowledgeContext(pageNumber);
+  const roleChecklist = selectedRole === "Equipment"
+    ? "Review only equipment-list, equipment-plan/elevation, quantity, capacity, model, tag, placement, access, and equipment-description coordination on this page. Do not perform plumbing-flow or electrical-circuit checks here."
+    : selectedRole === "Plumbing"
+      ? "Review only flow, plumbing, connection, pipe/hose/tubing, material, schedule, valve, union, drain, overflow, nozzle, and service-label coordination on this page. Do not perform equipment-list completeness or electrical-circuit checks here."
+      : selectedRole === "Electrical"
+        ? "Review only power, circuit, feeder, conductor, voltage, phase, amperage, breaker, control-panel, one-line, wiring-note, and electrical-schedule coordination on this page. Do not perform plumbing-flow or equipment-list completeness checks here."
+        : "Review general drawing coordination, title blocks, dimensions, labels, leaders, linework, notes, and references on this page. Do not assume an Equipment, Plumbing, or Electrical discipline that the reviewer did not assign.";
+  const compactPrompt = `Review the supplied ${selectedRole} region from page ${pageNumber} of a clean N/S Corporation engineering drawing.
+
+AUTHORITATIVE REVIEW CATEGORY: ${selectedRole}
+${roleChecklist}
+
+Return up to six distinct potential findings supported by exact visible evidence. Check every readable note, callout, tag, value, quantity, dimension, leader, and applicable table entry in this region. Keep an honestly low-confidence item when a specific visible condition is worth engineer review, but never invent a requirement, missing object, conflict, or correction.
+
+A valid objective conflict must compare the same object and the same attribute. Do not compare pipe size with nozzle thread/orifice, different connection points, different equipment, or a detail component with its supply line. Repeated equipment in separately named wash bays is not an error by itself. A schedule, parts-list, legend, or equipment-list entry does not require an independent callout unless a visible requirement explicitly says it does.
+
+For every finding provide the affected object, concise issue, exact quoted evidence, applicable visible requirement or "Engineer confirmation required," precise location, evidence type, and confidence. Return each issue once. Return no findings when no supported concern is visible.
+
+Also return visible title-block values, table types, numbered main-equipment callouts, and unresolved UNKNOWN/TBD/placeholders. Leave equipmentRows empty; the formal equipment list is extracted separately at higher resolution. Company knowledge and native CAD evidence are applied later during specialist review and source verification.
+
+Return one complete JSON object only. Include every required property; use empty strings, 0, false, or empty arrays when evidence is unavailable.`;
+  const fullPrompt = `Review page ${pageNumber} of this clean, unannotated N/S Corporation engineering drawing for potential mundane drafting and coordination errors at every confidence level.${images.length > 1 ? " The supplied images are overlapping regions of the same page; combine their evidence and do not duplicate findings." : " Inspect the complete visible page."}
+
+AUTHORITATIVE REVIEW CATEGORY: ${selectedRole}
+${roleChecklist}
 
 Perform the review independently. No reviewer comments, redlines, corrected revision, or answer key will be supplied. You are creating the proposed review annotations from the original drawing. Retain only issues supported by explicit visible evidence: an unresolved UNKNOWN/TBD/placeholder, an objective visible mismatch between two readable values/callouts, a quantity or equipment-count mismatch between a table and the plan/elevation views, a conflicting dimension between views, a missing clearance or access dimension explicitly required by a visible note or approved company knowledge, or a required reference explicitly demanded by a readable note but absent from the same visible region. Write each issue as a concise, actionable proposed annotation and state the exact visible evidence and location. Do not decide that equipment is missing from the drawing; a separate document-wide rule performs that check after all regions and pages are merged.
 
@@ -1505,12 +2611,13 @@ ${sourceKnowledge}
 
 Knowledge safeguards: Only the excerpts above marked Source are approved library material. Use them only when visibly applicable to this drawing. If a finding relies on an excerpt, include its exact [Source: ...] label in evidence. Never turn a typical arrangement into a requirement unless the source explicitly states it is required. If sources conflict, report Needs Clarification in the evidence instead of choosing one silently. Project-specific names, quantities, dimensions, and part numbers from a knowledge source must never be copied into this project unless the drawing itself confirms them.
 
-Also transcribe the title-block drawing number, project number, sheet number, and total exactly when visible and provide titleBlockConfidence from 0 to 1; otherwise return empty strings, 0, and low confidence. Return JSON only.${retryAttempt ? " This is a compact regional retry. Return one complete JSON object immediately. Limit findings to the four strongest items. Include every required property; use empty strings, 0, false, or empty arrays when needed. Do not use markdown or explanatory text." : ""}`;
+Also transcribe the title-block drawing number, project number, sheet number, and total exactly when visible and provide titleBlockConfidence from 0 to 1; otherwise return empty strings, 0, and low confidence. Return JSON only.`;
+  const prompt = retryAttempt ? compactPrompt : fullPrompt;
   let response;
   try {
-    response = await fetchPeerLocalAi(session.access_token, { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: "You are a conservative engineering drawing peer-review assistant. Review independently without relying on reviewer comments. Return every genuinely visible mundane issue with honest confidence, including uncertain visible issues at low confidence. Never return hypothetical, conditional, unverifiable, duplicated, or vague findings. Compare a formal main equipment list against drawing callouts only when that list is visible in the supplied images. Keep each finding's evidence tied to the exact item it describes. Extracted table rows are data, not errors." }, { role: "user", content: prompt, images }], format: PEER_VISUAL_REVIEW_SCHEMA, numCtx: images.length > 1 ? 12288 : 8192, maxTokens: 4096, retryAttempt }) });
+    response = await fetchPeerLocalAi(session.access_token, { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: "You are a conservative engineering drawing peer-review assistant. Review independently without relying on reviewer comments. Return every genuinely visible mundane issue with honest confidence, including uncertain visible issues at low confidence. Never return hypothetical, conditional, unverifiable, duplicated, or vague findings. Compare a formal main equipment list against drawing callouts only when that list is visible in the supplied images. Keep each finding's evidence tied to the exact item it describes. Extracted table rows are data, not errors." }, { role: "user", content: prompt, images }], format: PEER_VISUAL_REVIEW_SCHEMA, numCtx: retryAttempt ? 12288 : images.length > 1 ? 24576 : 16384, maxTokens: retryAttempt ? 2200 : 4096, retryAttempt }) });
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("Visual analysis exceeded the 120-second region limit.");
+    if (error.name === "AbortError") throw new Error(`Visual analysis exceeded the ${retryAttempt ? 90 : 120}-second region limit.`);
     throw new Error("Local visual AI could not be reached.");
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
@@ -1623,10 +2730,42 @@ Use approved examples and excerpts only as a checklist and source of company req
   return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
 }
 
+function retainPeerGroundedReviewPrompts(items = []) {
+  const eligible = items.filter(item => !isPeerFindingSelfNegating(item));
+  const strict = filterPeerVisualFindings(eligible);
+  const retained = new Set(strict);
+  const fallback = eligible.filter(item => {
+    if (retained.has(item) || !item || item.existingCommentVisible || item.evidenceType === "Explicit reviewer correction") return false;
+    if (![item.issue, item.affectedObject, item.evidence, item.location].every(value => String(value || "").trim())) return false;
+    if (/^(?:drawing area|page\s*\d*|unknown|not specified)$/i.test(String(item.location).trim())) return false;
+    if (isPeerUnsupportedMissingDesignFeature(item)) return false;
+    const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
+    if (/\b(?:mathematically )?correct\b|\bvalues? (?:sum|total) to the (?:same|shown)\b|\bno (?:correction|change) (?:is )?(?:needed|required)\b/i.test(combined)) return false;
+    return true;
+  }).map(item => {
+    const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
+    const highlySpeculative = /not called out|no corresponding|missing|absent|does not (?:show|include|repeat|identify|label)|no distinguishing|without (?:an? )?(?:explicit )?/i.test(combined);
+    return {
+      ...item,
+      severity: "Manual Review",
+      issue: /^Verify\b/i.test(String(item.issue || "")) ? item.issue : `Verify - ${item.issue}`,
+      requirement: "Engineer confirmation required",
+      confidence: Math.min(Number(item.confidence) || (highlySpeculative ? 0.1 : 0.25), highlySpeculative ? 0.1 : 0.25),
+      evidenceType: "Objective visible mismatch",
+      verificationStatus: "possible",
+      verificationReason: highlySpeculative
+        ? "The object and location were identified, but the proposed issue depends on an unconfirmed omission or requirement."
+        : "The visual source and location were identified, but the strict automatic filter could not confirm the requirement or comparison."
+    };
+  });
+  return mergePeerDuplicateFindings([...strict, ...fallback]);
+}
+
 async function requestPeerDisciplineAnalysis(pageImages = [], discipline = "Drawing coordination") {
   const session = await getPeerLocalAiSession(`Sign in with the Database login to run the ${discipline.toLowerCase()} sweep.`);
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page}${entry.tile ? ` high-resolution tile ${entry.tile}` : ` ${index % 2 ? "right" : "left"} region`}`).join("; ");
+  const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
   const disciplineChecks = {
     "Drawing coordination": `Compare title blocks, drawing and project numbers, revision information, sheet sequence, view names, repeated dimensions, chained-versus-overall dimensions, elevations, labels, leaders, callouts, line continuity, line weight, and references between plans, elevations, details, schedules, and diagrams. Check arithmetic only from fully readable values.`,
     Equipment: `Compare the formal equipment list against plans, elevations, details, flow diagrams, power schedules, and callouts. Check exact tags, descriptions, quantities, capacities, model/service names, placement, access, orientation, proximity to related equipment, and whether repeated labels identify the same equipment consistently. Do not assume every schedule component needs a drawing callout.`,
@@ -1655,6 +2794,11 @@ Use only these categories: Tank coordination, Service clearance, Valve or union,
 
 ${PEER_ENGINEER_REVIEW_PATTERNS}
 
+PERSISTENT COMPANY PART KNOWLEDGE:
+${sourceKnowledge}
+
+Knowledge safeguards: Use company part records and datasheets to understand part identity, function, accepted numbers, and explicit manufacturer requirements. Apply a requirement only when the current drawing visibly identifies the same part or model. Prior drawing usage is context, not proof that a component belongs in this project. If a finding relies on company knowledge, quote its source label in the evidence.
+
 Return JSON only.`;
   let response;
   try {
@@ -1662,7 +2806,7 @@ Return JSON only.`;
       method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: `You are a meticulous ${discipline.toLowerCase()} drawing reviewer. Complete every checklist comparison, quote exact visible evidence, and never invent a requirement or choose a correction that the drawing does not establish.` }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
-        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 20480, maxTokens: 3200, retryAttempt: 2
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 16384, maxTokens: 1800, retryAttempt: 2
       })
     });
   } catch (requestError) {
@@ -1678,7 +2822,7 @@ Return JSON only.`;
 
 async function requestPeerEngineerDetailExpansion(pageImages = [], existingFindings = [], missingSlots = []) {
   const session = await getPeerLocalAiSession("Sign in with the Database login to expand review detail.");
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 60000);
   const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
   const requestedSlots = missingSlots.map(item => `${item.category}: up to ${item.remaining}${item.targets?.length ? `; required target types: ${item.targets.join(", ")}` : ""}`).join("; ");
   const existing = existingFindings.map(item => `${item.category} | ${item.affectedObject} | ${item.issue} | ${item.location}`).join("\n") || "None";
@@ -1720,7 +2864,7 @@ Approved documents provide review patterns and requirements only. Never copy pro
       })
     });
   } catch (requestError) {
-    if (requestError.name === "AbortError") throw new Error("Extra-detail review exceeded 120 seconds.");
+    if (requestError.name === "AbortError") throw new Error("Extra-detail review exceeded 60 seconds.");
     throw requestError;
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
@@ -1945,9 +3089,10 @@ function updatePeerAnalysisElapsed() {
   if (elapsed) elapsed.textContent = formatPeerAnalysisElapsed(performance.now() - peerAnalysisStartedAt);
 }
 
-function startPeerAnalysisTimer(message) {
+function startPeerAnalysisTimer(message, mode = "review") {
   peerAnalysisStartedAt = performance.now(); peerAnalysisLastMessage = ""; peerAnalysisMessageCount = 0;
-  setPeerAiIndicatorState("working");
+  peerAnalysisMode = mode;
+  setPeerAiIndicatorState(mode === "file-read" ? "preparing" : "working");
   document.getElementById("peerAnalysisMessageHistory")?.replaceChildren();
   const elapsed = document.getElementById("peerAnalysisElapsed"); if (elapsed) elapsed.textContent = "0:00";
   clearInterval(peerAnalysisTimer); peerAnalysisTimer = setInterval(updatePeerAnalysisElapsed, 250);
@@ -1957,6 +3102,7 @@ function startPeerAnalysisTimer(message) {
 function stopPeerAnalysisTimer() {
   updatePeerAnalysisElapsed(); clearInterval(peerAnalysisTimer); peerAnalysisTimer = null; peerAnalysisStartedAt = 0;
   updatePeerAnalysisMessageSummary();
+  peerAnalysisMode = "review";
   setPeerAiIndicatorState(peerAiStatus.ready ? "ready" : "error");
 }
 
@@ -1983,10 +3129,10 @@ function setPeerAnalysisLiveStatus(message) {
 
 function setPeerAnalysisProgress(state, message) {
   const root = document.getElementById("peerAnalysisProgress"); if (!root) return;
-  root.classList.remove("hidden", "is-complete", "is-error");
-  root.classList.toggle("is-complete", state === "complete"); root.classList.toggle("is-error", state === "error");
+  root.classList.remove("hidden", "is-complete", "is-partial", "is-error");
+  root.classList.toggle("is-complete", state === "complete"); root.classList.toggle("is-partial", state === "partial"); root.classList.toggle("is-error", state === "error");
   const status = document.getElementById("peerAnalysisStatus");
-  if (status) { status.textContent = message; status.classList.toggle("is-loading", state === "running"); status.classList.toggle("is-complete", state === "complete"); status.classList.toggle("is-error", state === "error"); }
+  if (status) { status.textContent = message; status.classList.toggle("is-loading", state === "running"); status.classList.toggle("is-complete", state === "complete"); status.classList.toggle("is-partial", state === "partial"); status.classList.toggle("is-error", state === "error"); }
   recordPeerAnalysisMessage(message, state === "error");
 }
 
@@ -2016,8 +3162,20 @@ async function recognizePeerTitleBlock(pageNumber, worker) {
 
 function getPeerEquipmentReadinessFindings() {
   const equipmentPages = peerReview.pages.filter(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment");
-  if (!equipmentPages.length) return [createPeerFinding({ severity: "Manual Review", issue: "No equipment table was detected", details: "The visual review did not identify an equipment list or schedule. If one is present, use the page-type dropdown to mark that page as Equipment and run the checks again." })];
-  if (!peerReview.equipmentRows.some(row => equipmentPages.some(page => Number(page.number) === Number(row.page)) && isPeerValidMainEquipmentRow(row))) return [createPeerFinding({ severity: "Manual Review", issue: "No equipment rows could be extracted from the confirmed equipment-list page", details: "The equipment-list page was identified from its title or multiple valid rows, but row extraction did not complete. Preview that page before relying on equipment completeness checks.", page: equipmentPages[0].number })];
+  const report = peerReview.coverageReport || (peerReview.coverageReport = createPeerCoverageReport());
+  const addCoverageNote = note => {
+    report.uncoveredAreas = Array.isArray(report.uncoveredAreas) ? report.uncoveredAreas : [];
+    if (!report.uncoveredAreas.includes(note)) report.uncoveredAreas.push(note);
+  };
+  if (!equipmentPages.length) {
+    addCoverageNote("Equipment-list coverage: no formal equipment table was detected; confirm the page type if the package contains one.");
+    return [];
+  }
+  if (!peerReview.equipmentRows.some(row => equipmentPages.some(page => Number(page.number) === Number(row.page)) && isPeerValidMainEquipmentRow(row))) {
+    addCoverageNote(`Page ${equipmentPages[0].number}, equipment-list row extraction incomplete`);
+    recordPeerAnalysisMessage(`Equipment-list row extraction was incomplete on page ${equipmentPages[0].number}; this is recorded as a coverage note, not a drawing finding.`, true);
+    return [];
+  }
   return [];
 }
 
@@ -2035,6 +3193,11 @@ function getPeerFindingConfidenceReason(item = {}) {
   return "Created by a deterministic drawing rule; confirm the extracted source values before accepting.";
 }
 
+function getPeerValueComparisonLabels(item = {}) {
+  if (item.evidenceType === "Unresolved placeholder" || /placeholder/i.test(String(item.issue || ""))) return { left: "Equipment table", right: "Required resolution" };
+  return { left: "Equipment table", right: "Drawing / compared source" };
+}
+
 function renderPeerStructuredFinding(item = {}) {
   const details = String(item.details || "");
   const evidence = String(item.evidence || "").trim() || details.split(/\s+Required reference:/i)[0].trim() || [item.listValue, item.comparedValue].filter(Boolean).join(" compared with ") || "Review the cited drawing information.";
@@ -2042,15 +3205,35 @@ function renderPeerStructuredFinding(item = {}) {
   const location = String(item.location || getPeerFindingDetailValue(details, "Location") || (item.page ? `Page ${item.page}` : "Drawing package")).trim();
   const reference = String(item.requirement || getPeerFindingDetailValue(details, "Required reference") || (item.source === "manual" ? "Reviewer direction" : "Drawing package comparison")).trim();
   const confidenceReason = getPeerFindingConfidenceReason(item);
-  return `<h3>${escapePeerHTML(item.issue)}</h3><div class="peer-finding-detail-grid"><section><small>Evidence</small><p>${escapePeerHTML(evidence)}</p></section><section><small>Required action</small><p>${escapePeerHTML(action)}</p></section><section><small>Location</small><p>${escapePeerHTML(location)}</p></section><section><small>Reference</small><p>${escapePeerHTML(reference)}</p></section><section class="peer-finding-confidence-reason"><small>Confidence reason</small><p>${escapePeerHTML(confidenceReason)}</p></section></div>${item.listValue || item.comparedValue ? `<div class="peer-value-compare"><div><small>Equipment table</small><strong>${escapePeerHTML(item.listValue || "Not provided")}</strong></div><span class="peer-compare-arrow" aria-hidden="true">â†’</span><div><small>Drawing / compared source</small><strong>${escapePeerHTML(item.comparedValue || "Not provided")}</strong></div></div>` : ""}`;
+  const comparisonLabels = getPeerValueComparisonLabels(item);
+  return `<h3>${escapePeerHTML(item.issue)}</h3><div class="peer-finding-detail-grid"><section><small>Evidence</small><p>${escapePeerHTML(evidence)}</p></section><section><small>Required action</small><p>${escapePeerHTML(action)}</p></section><section><small>Location</small><p>${escapePeerHTML(location)}</p></section><section><small>Reference</small><p>${escapePeerHTML(reference)}</p></section><section class="peer-finding-confidence-reason"><small>Confidence reason</small><p>${escapePeerHTML(confidenceReason)}</p></section></div>${item.listValue || item.comparedValue ? `<div class="peer-value-compare"><div><small>${escapePeerHTML(comparisonLabels.left)}</small><strong>${escapePeerHTML(item.listValue || "Not provided")}</strong></div><span class="peer-compare-arrow" aria-hidden="true"></span><div><small>${escapePeerHTML(comparisonLabels.right)}</small><strong>${escapePeerHTML(item.comparedValue || "Not provided")}</strong></div></div>` : ""}`;
 }
+
+// Use ASCII HTML entities for separators so the finding detail remains correct
+// even when a browser or copied report passes through a legacy text encoding.
+renderPeerStructuredFinding = function renderPeerStructuredFindingSafe(item = {}) {
+  const details = String(item.details || "");
+  const evidence = String(item.evidence || "").trim() || details.split(/\s+Required reference:/i)[0].trim() || [item.listValue, item.comparedValue].filter(Boolean).join(" compared with ") || "Review the cited drawing information.";
+  const suggestedAction = item.verificationStatus === "possible" ? item.issue : getPeerSuggestedAnnotation(item);
+  const action = String(item.annotationText || suggestedAction || item.issue || "Verify this item").trim();
+  const location = String(item.location || getPeerFindingDetailValue(details, "Location") || (item.page ? `Page ${item.page}` : "Drawing package")).trim();
+  const reference = String(item.requirement || getPeerFindingDetailValue(details, "Required reference") || (item.source === "manual" ? "Reviewer direction" : "Drawing package comparison")).trim();
+  const confidenceReason = getPeerFindingConfidenceReason(item);
+  const comparisonLabels = getPeerValueComparisonLabels(item);
+  const comparison = item.listValue || item.comparedValue
+    ? `<div class="peer-value-compare"><div><small>${escapePeerHTML(comparisonLabels.left)}</small><strong>${escapePeerHTML(item.listValue || "Not provided")}</strong></div><span class="peer-compare-arrow" aria-hidden="true"></span><div><small>${escapePeerHTML(comparisonLabels.right)}</small><strong>${escapePeerHTML(item.comparedValue || "Not provided")}</strong></div></div>`
+    : "";
+  return `<h3>${escapePeerHTML(item.issue)}</h3><div class="peer-finding-detail-grid"><section><small>Evidence</small><p>${escapePeerHTML(evidence)}</p></section><section><small>Required action</small><p>${escapePeerHTML(action)}</p></section><section><small>Location</small><p>${escapePeerHTML(location)}</p></section><section><small>Reference</small><p>${escapePeerHTML(reference)}</p></section><section class="peer-finding-confidence-reason"><small>Confidence reason</small><p>${escapePeerHTML(confidenceReason)}</p></section></div>${comparison}`;
+};
 
 function renderPeerCoverageSummary() {
   const root = document.getElementById("peerCoverageSummary"); if (!root || !peerReview) return;
   const report = peerReview.coverageReport || {}, sweeps = Object.values(report.disciplineSweeps || {}), completedSweeps = sweeps.filter(item => item.status === "complete").length;
   if (!report.pagesTotal && !report.regionsExpected) { root.classList.add("hidden"); root.innerHTML = ""; return; }
   root.classList.remove("hidden");
-  root.innerHTML = `<div><small>Review mode</small><strong>${escapePeerHTML(report.mode || (peerReview.maximumSweep === false ? "Balanced" : "Maximum Sweep"))}</strong><span>${report.pagesReviewed || 0} of ${report.pagesTotal || peerReview.pages.length} pages completed</span></div><div><small>Visual coverage</small><strong>${report.regionsReviewed || 0} / ${report.regionsExpected || 0} regions</strong><span>${report.regionsFailed || 0} uncovered or incomplete</span></div><div><small>Package registry</small><strong>${report.registryObjects || 0} objects</strong><span>${report.evidenceFacts || 0} source-located facts indexed</span></div><div><small>Specialist sweeps</small><strong>${completedSweeps} / ${sweeps.length || 0} completed</strong><span>${report.candidatesGenerated || 0} candidates generated; ${report.unsupportedDiscarded || 0} discarded</span></div>`;
+  const completion = getPeerCoverageCompletionState(report);
+  root.classList.toggle("is-partial", completion.isPartial);
+  root.innerHTML = `<div><small>Review status</small><strong>${completion.isPartial ? "Partial - confirm gaps" : "Complete"}</strong><span>${completion.isPartial ? escapePeerHTML(completion.reasons.slice(0, 2).join("; ")) : `${report.pagesReviewed || 0} of ${report.pagesTotal || peerReview.pages.length} pages completed`}</span></div><div><small>Visual coverage</small><strong>${report.regionsReviewed || 0} / ${report.regionsExpected || 0} regions</strong><span>${report.regionsFailed || 0} uncovered or incomplete</span></div><div><small>Package registry</small><strong>${report.registryObjects || 0} objects</strong><span>${report.evidenceFacts || 0} source-located facts indexed</span></div><div><small>Specialist sweeps</small><strong>${completedSweeps} / ${sweeps.length || 0} completed</strong><span>${report.candidatesGenerated || 0} candidates generated; ${report.unsupportedDiscarded || 0} discarded</span></div>`;
 }
 
 function renderPeerFindings() {
@@ -2062,7 +3245,7 @@ function renderPeerFindings() {
   const counts = peerReview.findings.reduce((result, item) => { const itemTier = item.reviewTier || classifyPeerFindingTier(item); result[itemTier] = (result[itemTier] || 0) + 1; result.accepted += item.status === "Accepted" ? 1 : 0; return result; }, { accepted: 0 });
   document.getElementById("peerFindingCount").textContent = `(${peerReview.findings.length})`;
   const summary = document.getElementById("peerFindingSummary");
-  if (summary) summary.innerHTML = `<span><strong>${peerReview.findings.length - counts.accepted}</strong> not accepted</span><span><strong>${counts.accepted}</strong> accepted</span><span><strong>${counts.Confirmed || 0}</strong> confirmed</span><span><strong>${counts["Evidence-located"] || 0}</strong> evidence-located</span>`;
+  if (summary) summary.innerHTML = `<span class="is-pending"><strong>${peerReview.findings.length - counts.accepted}</strong><small>Pending decision</small></span><span class="is-accepted"><strong>${counts.accepted}</strong><small>Accepted</small></span><span class="is-strong"><strong>${counts.Confirmed || 0}</strong><small>Strong evidence</small></span><span class="is-judgment"><strong>${(counts["Evidence-located"] || 0) + (counts["Review idea"] || 0)}</strong><small>Need judgment</small></span>`;
   const displayed = peerReview.findings.filter(item => {
     const itemTier = item.reviewTier || classifyPeerFindingTier(item);
     if (tier !== "all" && itemTier !== tier) return false;
@@ -2070,15 +3253,24 @@ function renderPeerFindings() {
     if (status === "accepted" && item.status !== "Accepted") return false;
     if (status === "not-accepted" && item.status === "Accepted") return false;
     return !search || `${item.issue} ${item.equipmentTag} ${item.listValue} ${item.comparedValue} ${item.page}`.toLowerCase().includes(search);
+  }).sort((left, right) => {
+    const leftConfidence = Number.isFinite(Number(left.confidence)) ? Number(left.confidence) : -1;
+    const rightConfidence = Number.isFinite(Number(right.confidence)) ? Number(right.confidence) : -1;
+    if (rightConfidence !== leftConfidence) return rightConfidence - leftConfidence;
+    const pageDifference = Number(left.page || Number.MAX_SAFE_INTEGER) - Number(right.page || Number.MAX_SAFE_INTEGER);
+    if (pageDifference) return pageDifference;
+    return String(left.issue || "").localeCompare(String(right.issue || ""));
   });
-  body.innerHTML = displayed.map((item, index) => `<article class="peer-finding-card${item.status === "Accepted" ? " is-accepted" : ""}"><header class="peer-finding-card-head"><div class="peer-finding-identity"><span class="peer-finding-number">${index + 1}</span><div><span class="peer-severity ${item.severity.toLowerCase().replace(/\s/g, "-")}">${escapePeerHTML(item.severity)}</span>${item.confidence !== null && item.confidence !== undefined && Number.isFinite(Number(item.confidence)) ? `<span class="peer-confidence ${Number(item.confidence) >= .92 ? "high" : Number(item.confidence) < .78 ? "low" : "supported"}">${Number(item.confidence) < .78 ? "Low · " : ""}${Math.round(Number(item.confidence) * 100)}% confidence</span>` : item.source === "visual-ai" ? `<span class="peer-confidence low">AI coverage issue</span>` : item.source !== "manual" ? `<span class="peer-confidence rule" title="Rule checks do not have a model confidence score. Confirm the extracted source values in the redline view.">Rule check · confirm source</span>` : ""}${item.equipmentTag ? `<span class="peer-equipment-tag">${escapePeerHTML(item.equipmentTag)}</span>` : ""}</div></div><label class="peer-finding-acceptance"><input type="checkbox" ${item.status === "Accepted" ? "checked" : ""} onchange="togglePeerFindingAccepted('${item.id}',this.checked)"><span><strong>Accepted</strong><small>${item.status === "Accepted" ? "Included in the review" : "Not accepted"}</small></span></label></header><div class="peer-finding-content"><h3>${escapePeerHTML(item.issue)}</h3>${item.details ? `<p class="peer-finding-explanation">${escapePeerHTML(item.details)}</p>` : ""}${item.listValue || item.comparedValue ? `<div class="peer-value-compare"><div><small>Equipment table</small><strong>${escapePeerHTML(item.listValue || "Not provided")}</strong></div><span class="peer-compare-arrow" aria-hidden="true">→</span><div><small>Drawing / compared source</small><strong>${escapePeerHTML(item.comparedValue || "Not provided")}</strong></div></div>` : ""}</div><footer class="peer-finding-card-actions">${item.page ? `<span class="peer-finding-page-label">Page ${item.page}</span>` : `<span></span>`}<button class="secondary" onclick="openPeerComments('${item.id}')">${item.comments.length ? `${item.comments.length} comment${item.comments.length === 1 ? "" : "s"}` : "Add comment"}</button></footer></article>`).join("") || '<div class="peer-empty-findings"><strong>No findings match this view.</strong><span>Run automatic checks or clear the filters.</span></div>';
+  body.innerHTML = displayed.map((item, index) => `<article class="peer-finding-card${item.status === "Accepted" ? " is-accepted" : ""}"><header class="peer-finding-card-head"><div class="peer-finding-identity"><span class="peer-finding-number">${index + 1}</span><div><span class="peer-severity ${item.severity.toLowerCase().replace(/\s/g, "-")}">${escapePeerHTML(item.severity)}</span>${item.confidence !== null && item.confidence !== undefined && Number.isFinite(Number(item.confidence)) ? `<span class="peer-confidence ${Number(item.confidence) >= .92 ? "high" : Number(item.confidence) < .78 ? "low" : "supported"}">${Number(item.confidence) < .78 ? "Low - " : ""}${Math.round(Number(item.confidence) * 100)}% confidence</span>` : item.source === "visual-ai" ? `<span class="peer-confidence low">AI coverage issue</span>` : item.source !== "manual" ? `<span class="peer-confidence rule" title="Rule checks do not have a model confidence score. Confirm the extracted source values in the redline view.">Rule check - confirm source</span>` : ""}${item.equipmentTag ? `<span class="peer-equipment-tag">${escapePeerHTML(item.equipmentTag)}</span>` : ""}</div></div><label class="peer-finding-acceptance"><input type="checkbox" ${item.status === "Accepted" ? "checked" : ""} onchange="togglePeerFindingAccepted('${item.id}',this.checked)"><span><strong>Accepted</strong><small>${item.status === "Accepted" ? "Included in the review" : "Not accepted"}</small></span></label></header><div class="peer-finding-content"><h3>${escapePeerHTML(item.issue)}</h3>${item.details ? `<p class="peer-finding-explanation">${escapePeerHTML(item.details)}</p>` : ""}${item.listValue || item.comparedValue ? `<div class="peer-value-compare"><div><small>${escapePeerHTML(getPeerValueComparisonLabels(item).left)}</small><strong>${escapePeerHTML(item.listValue || "Not provided")}</strong></div><span class="peer-compare-arrow" aria-hidden="true"></span><div><small>${escapePeerHTML(getPeerValueComparisonLabels(item).right)}</small><strong>${escapePeerHTML(item.comparedValue || "Not provided")}</strong></div></div>` : ""}</div><footer class="peer-finding-card-actions">${item.page ? `<span class="peer-finding-page-label">Page ${item.page}</span>` : `<span></span>`}<button class="secondary" onclick="openPeerComments('${item.id}')">${item.comments.length ? `${item.comments.length} comment${item.comments.length === 1 ? "" : "s"}` : "Add comment"}</button></footer></article>`).join("") || '<div class="peer-empty-findings"><strong>No findings match this view.</strong><span>Run automatic checks or clear the filters.</span></div>';
   Array.from(body.querySelectorAll(":scope > .peer-finding-card")).forEach((card, index) => {
     const item = displayed[index], footer = card.querySelector(".peer-finding-card-actions");
     if (!item || !footer) return;
+    const decisionLabel = card.querySelector(".peer-finding-acceptance small");
+    if (decisionLabel) decisionLabel.textContent = item.status === "Accepted" ? "Included in final review" : "Pending decision";
     const content = card.querySelector(".peer-finding-content");
     if (content) content.innerHTML = renderPeerStructuredFinding(item);
     const itemTier = item.reviewTier || classifyPeerFindingTier(item), tierHost = card.querySelector(".peer-finding-identity > div");
-    if (tierHost) tierHost.insertAdjacentHTML("afterbegin", `<span class="peer-tier-badge ${itemTier.toLowerCase().replace(/[^a-z]+/g, "-")}">${escapePeerHTML(itemTier)}</span>`);
+    if (tierHost) tierHost.insertAdjacentHTML("afterbegin", `<span class="peer-tier-badge ${itemTier.toLowerCase().replace(/[^a-z]+/g, "-")}" title="Evidence strength only; this does not accept the finding.">${escapePeerHTML(getPeerFindingTierLabel(itemTier))}</span>`);
     if (item.verificationStatus === "possible") {
       const confidenceBadge = card.querySelector(".peer-confidence");
       if (confidenceBadge) confidenceBadge.textContent = `Possible - ${Math.round(Number(item.confidence || 0) * 100)}% confidence`;
@@ -2100,14 +3292,15 @@ function renderPeerFindings() {
 }
 
 function getPeerFindingReliability(item) { return item.reviewTier || classifyPeerFindingTier(item); }
-function organizePeerFindingGroups(body, displayed) { if (!body || !displayed.length) return; const cards = Array.from(body.querySelectorAll(":scope > .peer-finding-card")), order = ["Confirmed", "Evidence-located", "Review idea", "Manual"], groups = new Map(); displayed.forEach((item, index) => { const label = getPeerFindingReliability(item); if (!groups.has(label)) groups.set(label, []); if (cards[index]) groups.get(label).push(cards[index]); }); body.replaceChildren(); order.forEach(label => { const items = groups.get(label); if (!items?.length) return; const section = document.createElement("section"); section.className = `peer-finding-group${label === "Review idea" ? " is-possible" : ""}`; section.innerHTML = `<div class="peer-finding-group-heading"><strong>${escapePeerHTML(label)}</strong><span>${items.length} item${items.length === 1 ? "" : "s"}</span></div>`; items.forEach(card => section.appendChild(card)); body.appendChild(section); }); }
+function getPeerFindingTierLabel(tier = "") { return ({ Confirmed: "Strong evidence", "Evidence-located": "Source located", "Review idea": "Needs judgment", Manual: "Engineer-added" })[tier] || tier; }
+function organizePeerFindingGroups(body, displayed) { if (!body || !displayed.length) return; const cards = Array.from(body.querySelectorAll(":scope > .peer-finding-card")), order = ["Confirmed", "Evidence-located", "Review idea", "Manual"], groups = new Map(); displayed.forEach((item, index) => { const label = getPeerFindingReliability(item); if (!groups.has(label)) groups.set(label, []); if (cards[index]) groups.get(label).push(cards[index]); }); body.replaceChildren(); order.forEach(label => { const items = groups.get(label); if (!items?.length) return; const section = document.createElement("section"); section.className = `peer-finding-group${label === "Review idea" ? " is-possible" : ""}`; section.innerHTML = `<div class="peer-finding-group-heading"><strong>${escapePeerHTML(getPeerFindingTierLabel(label))}</strong><span>${items.length} item${items.length === 1 ? "" : "s"}</span></div>`; items.forEach(card => section.appendChild(card)); body.appendChild(section); }); }
 
 function updatePeerFindingStatus(id, status) {
   const item = peerReview.findings.find(finding => finding.id === id); if (!item) return;
+  removePeerApprovedFindingFeedback(item);
   item.status = status;
   item.history.push({ action: `Status changed to ${status}`, user: peerCurrentUser, date: new Date().toISOString() });
   if (status === "Fixed") recordPeerResolution(item);
-  recordPeerFindingFeedback(item, status);
   renderPeerFindings(); renderPeerFixList(); savePeerReview(false);
 }
 function togglePeerFindingAccepted(id, accepted) {
@@ -2171,7 +3364,7 @@ function getPeerSuggestedAnnotation(item = {}) {
   const combined = `${item.issue || ""} ${item.details || ""}`;
   const quotedSubject = String(item.details || "").match(/['"]([^'"]{3,80})['"]/)?.[1] || "";
   const subject = getPeerEquipmentShortDescription(item.listValue || item.comparedValue || quotedSubject || item.equipmentTag || "THIS ITEM").toUpperCase();
-  if (/placeholder/i.test(item.issue) && item.comparedValue) return `REPLACE "${item.comparedValue}" WITH FINAL PROJECT VALUE.`;
+  if (/placeholder/i.test(item.issue) && (item.listValue || item.comparedValue)) return `REPLACE "${item.listValue || item.comparedValue}" WITH FINAL PROJECT VALUE.`;
   if (/RO (?:WATER |STORAGE )?TANK/i.test(combined) && /RECLAIM (?:WATER )?TANK/i.test(combined)) return "SHOW AND LABEL SEPARATE RO AND RECLAIM TANKS.";
   if (/clearance/i.test(combined) && /control panel|console/i.test(combined)) return `SHOW REQUIRED CLEARANCE IN FRONT OF ${/RO/i.test(combined) ? "RO " : /RECLAIM/i.test(combined) ? "RECLAIM " : ""}CONTROL PANEL.`;
   if (/ball valve|shut-?off valve/i.test(combined)) return "ADD REQUIRED BALL VALVE AT THIS CONNECTION.";
@@ -2506,20 +3699,21 @@ function updatePeerChecklist(id, field, value) { const item = peerReview.checkli
 
 function getPeerFixItems() {
   if (!peerReview) return [];
-  const findings = peerReview.findings.filter(item => item.status !== "Accepted" || peerReview.fixStates[item.id]).map(item => ({ id: item.id, title: item.issue, tag: item.equipmentTag, description: [item.listValue, item.comparedValue].filter(Boolean).join(" → "), page: item.page, severity: item.severity, sourceStatus: item.status === "Accepted" ? "Accepted" : "Not accepted", comments: item.comments.map(comment => comment.text).join("; ") }));
+  const findings = peerReview.findings.filter(item => item.status === "Accepted").map(item => ({ id: item.id, title: item.issue, tag: item.equipmentTag, description: [item.listValue, item.comparedValue].filter(Boolean).join(" → "), page: item.page, severity: item.severity, sourceStatus: "Accepted", comments: item.comments.map(comment => comment.text).join("; ") }));
   return findings;
 }
 
 function renderPeerFixList() {
   const root = document.getElementById("peerFixList"); if (!root || !peerReview) return;
   const search = (document.getElementById("peerFixSearch")?.value || "").toLowerCase(), filter = document.getElementById("peerFixFilter")?.value || "all", sort = document.getElementById("peerFixSort")?.value || "page";
-  let items = getPeerFixItems().filter(item => `${item.title} ${item.tag} ${item.description} ${item.comments}`.toLowerCase().includes(search));
+  const acceptedItems = getPeerFixItems();
+  let items = acceptedItems.filter(item => `${item.title} ${item.tag} ${item.description} ${item.comments}`.toLowerCase().includes(search));
   items = items.filter(item => filter === "all" || (peerReview.fixStates[item.id]?.status || "Not Started") === filter);
   const severityOrder = { Error: 0, Warning: 1, "Manual Review": 2 }; items.sort((a, b) => sort === "severity" ? (severityOrder[a.severity] - severityOrder[b.severity]) : sort === "status" ? (peerReview.fixStates[a.id]?.status || "").localeCompare(peerReview.fixStates[b.id]?.status || "") : (a.page || 9999) - (b.page || 9999));
   root.innerHTML = items.map(item => {
     const state = peerReview.fixStates[item.id] || { status: "Not Started", notes: "", history: [] };
     return `<article class="peer-fix-item ${state.status === "Fixed" ? "is-fixed" : ""}"><input type="checkbox" aria-label="${state.status === "Fixed" ? "Undo resolved item" : "Resolve item"}" ${state.status === "Fixed" ? "checked" : ""} onchange="togglePeerFixResolution('${item.id}',this.checked)"><div><strong>${escapePeerHTML(item.title)}</strong><p>${item.tag ? `<b>${escapePeerHTML(item.tag)}</b> · ` : ""}${escapePeerHTML(item.description || "Review and resolve this item.")}${item.page ? ` · <button class="peer-page-link" onclick="jumpPeerPage(${item.page})">Page ${item.page}</button>` : ""}</p><small>${escapePeerHTML(item.severity)} · Source status: ${escapePeerHTML(item.sourceStatus)} · Fix status: ${escapePeerHTML(state.status)}</small>${state.notes ? `<p class="peer-fix-note"><b>Resolution:</b> ${escapePeerHTML(state.notes)}</p>` : ""}</div></article>`;
-  }).join("") || "<p>No items match this view.</p>";
+  }).join("") || (acceptedItems.length ? "<p>No accepted findings match this view.</p>" : "<p>Accept findings to add them to the Fix List.</p>");
 }
 
 function ensurePeerFixState(id) { return peerReview.fixStates[id] ||= { status: "Not Started", notes: "", history: [] }; }
@@ -2590,7 +3784,9 @@ function recordPeerResolution(item) { item.history.push({ action: "Resolved", us
 
 function savePeerReview(showToast = true) {
   if (!peerReview) return; peerReview.reviewer = peerCurrentUser; peerReview.updatedAt = new Date().toISOString();
-  const reviews = readPeerReviews().filter(item => item.id !== peerReview.id); reviews.unshift(peerReview);
+  if (peerReview.cadData) putPeerCadData(peerReview.id, peerReview.cadData).catch(error => console.warn("Native CAD evidence could not be saved:", error));
+  const storedReview = peerReview.cadData ? { ...peerReview, cadData: null, cadStored: true } : peerReview;
+  const reviews = readPeerReviews().filter(item => item.id !== peerReview.id); reviews.unshift(storedReview);
   const retained = reviews.slice(0, PEER_HISTORY_LIMIT), removed = reviews.slice(PEER_HISTORY_LIMIT);
   while (retained.length) {
     try { localStorage.setItem(PEER_STORAGE_KEY, JSON.stringify(retained)); break; }
@@ -2599,21 +3795,46 @@ function savePeerReview(showToast = true) {
       removed.push(retained.pop());
     }
   }
-  removed.forEach(item => deletePeerPdf(item.id).catch(() => {}));
+  removed.forEach(item => { deletePeerPdf(item.id).catch(() => {}); deletePeerCadData(item.id).catch(() => {}); });
   if (showToast) showPeerToast(`Review saved locally. Keeping the latest ${retained.length} of ${PEER_HISTORY_LIMIT}.`);
   renderPeerSummary(); updatePeerStorageStatus();
 }
-function completePeerReview() {
+async function completePeerReview() {
   if (!peerReview) return;
-  const unresolved = peerReview.findings.filter(item => item.status !== "Accepted").length;
-  peerReview.status = "Complete";
-  peerReview.completedAt = new Date().toISOString();
-  peerReview.history.push({ action: "Review marked complete", user: peerCurrentUser, date: peerReview.completedAt, note: unresolved ? `${unresolved} finding${unresolved === 1 ? "" : "s"} remained open.` : "All findings were resolved." });
-  const approvedExamples = savePeerAcceptedCorrectionsAsApprovedExamples("review-complete");
-  savePeerReview(false);
-  renderPeerSummary();
-  const learningMessage = approvedExamples ? ` ${approvedExamples} accepted correction${approvedExamples === 1 ? " was" : "s were"} saved as approved examples.` : "";
-  showPeerToast((unresolved ? `Review marked complete. ${unresolved} finding${unresolved === 1 ? "" : "s"} remain open.` : "Review marked complete. All findings are resolved.") + learningMessage);
+  if (peerCheckRunning || peerDrawingLoadRunning) return showPeerToast("Wait for the drawing review to finish before completing and exporting it.");
+  const button = document.getElementById("peerConfirmCompleteButton");
+  if (button?.disabled) return;
+  const exportReport = Boolean(document.getElementById("peerCompleteReportExport")?.checked);
+  const exportExcel = Boolean(document.getElementById("peerCompleteExcelExport")?.checked);
+  const allowLearning = document.querySelector('input[name="peerCompleteLearning"]:checked')?.value === "yes";
+  if (button) { button.disabled = true; button.textContent = "Completing Review..."; }
+  try {
+    const completedDrawing = await buildPeerReviewedDrawingPdf(false);
+    const unresolved = peerReview.findings.filter(item => item.status !== "Accepted").length;
+    peerReview.status = "Complete";
+    peerReview.completedAt = new Date().toISOString();
+    peerReview.completedExportName = `${peerExportBaseName()} - Completed Drawing.pdf`;
+    peerReview.knowledgeConsent = allowLearning;
+    const selectedExports = ["completed drawing PDF", exportReport ? "review report PDF" : "", exportExcel ? "Excel workbook" : ""].filter(Boolean);
+    peerReview.history.push({ action: "Review completed and final files exported", user: peerCurrentUser, date: peerReview.completedAt, note: `${selectedExports.join(", ")}. ${completedDrawing.accepted.length} accepted redline${completedDrawing.accepted.length === 1 ? "" : "s"} included. ${unresolved} finding${unresolved === 1 ? "" : "s"} remained unresolved. AI learning ${allowLearning ? "approved" : "declined"}.` });
+    const knowledge = allowLearning ? savePeerReviewDecisionsAsKnowledge() : { accepted: 0, rejected: 0, total: 0, removed: removePeerReviewDecisionsFromKnowledge() };
+    savePeerReview(false);
+    renderPeerSummary();
+    downloadPeerFile(completedDrawing.bytes, peerReview.completedExportName, "application/pdf");
+    const optionalExportErrors = [];
+    if (exportReport) try { await exportPeerPDF(); } catch (error) { optionalExportErrors.push(`review report: ${error?.message || "could not be built"}`); }
+    if (exportExcel) try { exportPeerExcel(); } catch (error) { optionalExportErrors.push(`Excel workbook: ${error?.message || "could not be built"}`); }
+    closePeerModal("peerExportModal");
+    const knowledgeMessage = allowLearning
+      ? knowledge.total ? `${knowledge.total} finalized decision${knowledge.total === 1 ? " was" : "s were"} saved as future review knowledge.` : "Learning was approved, but there were no new finalized decisions to save."
+      : `AI learning was declined; no decisions were saved${knowledge.removed ? ` and ${knowledge.removed} previously saved decision${knowledge.removed === 1 ? " was" : "s were"} removed` : ""}.`;
+    const exportMessage = optionalExportErrors.length ? ` The completed drawing was downloaded, but ${optionalExportErrors.join("; ")}.` : ` ${selectedExports.length} file${selectedExports.length === 1 ? " was" : "s were"} downloaded.`;
+    showPeerToast(`Review complete.${exportMessage} ${knowledgeMessage}`);
+  } catch (error) {
+    showPeerToast(`The review was not completed because the final PDF could not be built: ${error?.message || "Unknown error"}`);
+  } finally {
+    if (button) { button.disabled = false; button.innerHTML = "<span>Complete Review</span><small>Download selected files</small>"; }
+  }
 }
 function readPeerReviews() { try { const reviews = JSON.parse(localStorage.getItem(PEER_STORAGE_KEY) || "[]"); return Array.isArray(reviews) ? reviews : []; } catch { return []; } }
 
@@ -2629,14 +3850,14 @@ async function removePeerReviewHistory(id) {
   const review = readPeerReviews().find(item => item.id === id); if (!review) return;
   if (!window.confirm(`Remove ${review.filename || "this peer review"} from local history?`)) return;
   localStorage.setItem(PEER_STORAGE_KEY, JSON.stringify(readPeerReviews().filter(item => item.id !== id)));
-  await deletePeerPdf(id); renderPeerSavedReviews();
+  await Promise.all([deletePeerPdf(id), deletePeerCadData(id)]); renderPeerSavedReviews();
 }
 
 async function clearPeerReviewHistory() {
   const reviews = readPeerReviews(); if (!reviews.length) return;
   if (!window.confirm("Remove all saved peer reviews and their PDFs from this browser?")) return;
   localStorage.removeItem(PEER_STORAGE_KEY);
-  await Promise.all(reviews.map(item => deletePeerPdf(item.id).catch(() => {}))); renderPeerSavedReviews();
+  await Promise.all(reviews.flatMap(item => [deletePeerPdf(item.id).catch(() => {}), deletePeerCadData(item.id).catch(() => {})])); renderPeerSavedReviews();
 }
 
 async function updatePeerStorageStatus() {
@@ -2655,7 +3876,7 @@ async function updatePeerStorageStatus() {
 
 function formatPeerStorageBytes(bytes) { if (!bytes) return "0 B"; const units = ["B", "KB", "MB", "GB"]; const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024))); return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`; }
 function isPeerStorageFullError(error) { return error?.name === "QuotaExceededError" || /quota|storage|space/i.test(error?.message || ""); }
-function renderPeerSummary() { if (!peerReview) return; document.getElementById("peerReviewTypeBadge").textContent = PEER_REVIEW_TYPES[peerReview.type].label; document.getElementById("peerReviewTitle").textContent = peerReview.filename || "New Review"; document.getElementById("peerReviewMeta").textContent = `${peerReview.filename || "No PDF uploaded"} · ${peerCurrentUser} · ${new Date(peerReview.createdAt).toLocaleDateString()} · ${peerReview.status}`; }
+function renderPeerSummary() { if (!peerReview) return; document.getElementById("peerReviewTypeBadge").textContent = PEER_REVIEW_TYPES[peerReview.type].label; document.getElementById("peerReviewTitle").textContent = peerReview.filename || "New Review"; document.getElementById("peerReviewMeta").textContent = `${peerReview.filename || "No drawing uploaded"}${peerReview.sourceFormat ? ` | ${peerReview.sourceFormat}` : ""} | ${peerCurrentUser} | ${new Date(peerReview.createdAt).toLocaleDateString()} | ${peerReview.status}`; }
 
 function populatePeerFixFilter() { const select = document.getElementById("peerFixFilter"); PEER_FIX_STATUSES.forEach(status => select?.add(new Option(status, status))); }
 function populatePeerFindingFilter() { return document.getElementById("peerFindingStatus"); }
@@ -2664,10 +3885,13 @@ function openPeerExportModal() {
   if (!peerReview) return;
   const accepted = peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.page).length;
   const unresolved = peerReview.findings.filter(item => item.status !== "Accepted").length;
-  const summary = document.getElementById("peerExportSummary"), markedButton = document.getElementById("peerExportMarkedButton"), markedDescription = document.getElementById("peerExportMarkedDescription");
-  if (summary) summary.innerHTML = `<span><strong>${peerReview.findings.length}</strong> total findings</span><span><strong>${accepted}</strong> accepted redline${accepted === 1 ? "" : "s"}</span><span><strong>${unresolved}</strong> unresolved</span><span><strong>${escapePeerHTML(peerReview.status || "In Progress")}</strong> review status</span>`;
-  if (markedButton) markedButton.disabled = accepted === 0;
-  if (markedDescription) markedDescription.textContent = accepted ? `Build the original drawing with ${accepted} accepted redline${accepted === 1 ? "" : "s"} placed on the reviewed pages.` : "Accept at least one redline before building the marked drawing.";
+  const summary = document.getElementById("peerExportSummary"), markedDescription = document.getElementById("peerExportMarkedDescription");
+  if (summary) summary.innerHTML = `<span><strong>${peerReview.findings.length}</strong> total findings</span><span><strong>${accepted}</strong> accepted redline${accepted === 1 ? "" : "s"}</span><span><strong>${unresolved}</strong> pending decision</span><span><strong>${escapePeerHTML(peerReview.sourceFormat || "PDF")}</strong> source</span>`;
+  if (markedDescription) markedDescription.textContent = accepted ? `Drawing PDF with ${accepted} accepted redline${accepted === 1 ? "" : "s"} placed on the reviewed pages.` : "Drawing PDF without redlines; no findings currently have saved accepted redlines.";
+  const report = document.getElementById("peerCompleteReportExport"), excel = document.getElementById("peerCompleteExcelExport");
+  if (report) report.checked = false; if (excel) excel.checked = false;
+  const learningValue = peerReview.knowledgeConsent === false ? "no" : "yes";
+  document.querySelectorAll('input[name="peerCompleteLearning"]').forEach(input => { input.checked = input.value === learningValue; });
   document.getElementById("peerExportModal")?.classList.remove("hidden");
 }
 function getPeerReportRows() { return peerReview.findings.map(item => ({ Severity: item.severity, "Equipment Tag": item.equipmentTag, Issue: item.issue, "Equipment List Value": item.listValue, "Compared Value": item.comparedValue, Page: item.page || "", Status: item.status, Comments: item.comments.map(comment => `${comment.user}: ${comment.text}`).join(" | "), "Resolution Note": item.resolutionNote })); }
@@ -2692,45 +3916,48 @@ function drawPeerPdfArrow(page, startX, startY, targetX, targetY, color) {
   });
 }
 
+async function buildPeerReviewedDrawingPdf(requireAccepted = true) {
+  if (!peerReview) throw new Error("No peer review is open.");
+  const accepted = peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.page);
+  if (requireAccepted && !accepted.length) throw new Error("Accept at least one redline before downloading the marked PDF.");
+  const file = await getPeerPdf(peerReview.id);
+  if (!file) throw new Error("The saved drawing PDF is unavailable.");
+  const doc = await PDFLib.PDFDocument.load(await file.arrayBuffer()), font = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  accepted.forEach(item => {
+    const page = doc.getPages()[item.page - 1]; if (!page) return;
+    const { width, height } = page.getSize(), size = Math.max(5.5, Math.min(8, width / 135)), maxWidth = Math.min(width * .21, 165);
+    const lines = wrapPeerPdfText(font, item.annotationText, size, maxWidth - 14), lineHeight = size * 1.25;
+    const boxWidth = Math.max(72, Math.min(maxWidth, Math.max(...lines.map(line => font.widthOfTextAtSize(line, size)), 62) + 10));
+    const boxHeight = Math.max(19, lines.length * lineHeight + 8);
+    const x = Math.min(width - boxWidth - 5, Math.max(5, Number(item.annotationX || .08) * width));
+    const y = Math.min(height - boxHeight - 5, Math.max(5, height - Number(item.annotationY || .1) * height - boxHeight));
+    const red = PDFLib.rgb(.88, 0, 0);
+    const targetX = Math.max(3, Math.min(width - 3, Number(item.annotationTargetX ?? .5) * width));
+    const targetY = Math.max(3, Math.min(height - 3, height - Number(item.annotationTargetY ?? .5) * height));
+    if (item.annotationShowArrow !== false) {
+      const leaderStart = getPeerLeaderStart(x, y, boxWidth, boxHeight, targetX, targetY);
+      drawPeerPdfArrow(page, leaderStart.x, leaderStart.y, targetX, targetY, red);
+    }
+    page.drawRectangle({ x, y, width: boxWidth, height: boxHeight, color: PDFLib.rgb(1, 1, 1), opacity: .9, borderColor: red, borderWidth: 1.5 });
+    lines.forEach((line, index) => page.drawText(line, { x: x + 7, y: y + boxHeight - 8 - size - index * lineHeight, size, font, color: PDFLib.rgb(.84, 0, 0) }));
+  });
+  return { bytes: await doc.save(), accepted };
+}
+
 async function exportAcceptedPeerRedlines() {
   if (!peerReview) return;
-  const accepted = peerReview.findings.filter(item => item.annotationAccepted && item.annotationText && item.page);
-  if (!accepted.length) return showPeerToast("Accept at least one redline before downloading the marked PDF.");
   try {
-    const file = await getPeerPdf(peerReview.id);
-    if (!file) throw new Error("The saved original PDF is unavailable.");
-    const doc = await PDFLib.PDFDocument.load(await file.arrayBuffer()), font = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
-    accepted.forEach(item => {
-      const page = doc.getPages()[item.page - 1]; if (!page) return;
-      const { width, height } = page.getSize(), size = Math.max(5.5, Math.min(8, width / 135)), maxWidth = Math.min(width * .21, 165);
-      const lines = wrapPeerPdfText(font, item.annotationText, size, maxWidth - 14), lineHeight = size * 1.25;
-      const boxWidth = Math.max(72, Math.min(maxWidth, Math.max(...lines.map(line => font.widthOfTextAtSize(line, size)), 62) + 10));
-      const boxHeight = Math.max(19, lines.length * lineHeight + 8);
-      const x = Math.min(width - boxWidth - 5, Math.max(5, Number(item.annotationX || .08) * width));
-      const y = Math.min(height - boxHeight - 5, Math.max(5, height - Number(item.annotationY || .1) * height - boxHeight));
-      const red = PDFLib.rgb(.88, 0, 0);
-      const targetX = Math.max(3, Math.min(width - 3, Number(item.annotationTargetX ?? .5) * width));
-      const targetY = Math.max(3, Math.min(height - 3, height - Number(item.annotationTargetY ?? .5) * height));
-      if (item.annotationShowArrow !== false) {
-        const leaderStart = getPeerLeaderStart(x, y, boxWidth, boxHeight, targetX, targetY);
-        drawPeerPdfArrow(page, leaderStart.x, leaderStart.y, targetX, targetY, red);
-      }
-      page.drawRectangle({ x, y, width: boxWidth, height: boxHeight, color: PDFLib.rgb(1, 1, 1), opacity: .9, borderColor: red, borderWidth: 1.5 });
-      lines.forEach((line, index) => page.drawText(line, { x: x + 7, y: y + boxHeight - 8 - size - index * lineHeight, size, font, color: PDFLib.rgb(.84, 0, 0) }));
-    });
-    const bytes = await doc.save();
-    const approvedExamples = savePeerAcceptedCorrectionsAsApprovedExamples("final-pdf");
-    savePeerReview(false);
-    downloadPeerFile(bytes, `${(peerReview.filename || "Peer Review").replace(/\.pdf$/i, "")} - Accepted Redlines.pdf`, "application/pdf");
+    const markedDrawing = await buildPeerReviewedDrawingPdf(true);
+    downloadPeerFile(markedDrawing.bytes, `${(peerReview.filename || "Peer Review").replace(/\.(?:pdf|dwg)$/i, "")} - Accepted Redlines.pdf`, "application/pdf");
     closePeerModal("peerExportModal");
-    showPeerToast(`Accepted-redline PDF built.${approvedExamples ? ` ${approvedExamples} correction${approvedExamples === 1 ? " was" : "s were"} saved as approved examples.` : " Approved examples were already current."}`);
+    showPeerToast(`Marked drawing preview downloaded with ${markedDrawing.accepted.length} accepted redline${markedDrawing.accepted.length === 1 ? "" : "s"}. Review knowledge was not changed.`);
   } catch (error) { showPeerToast(error.message || "The accepted redline PDF could not be created."); }
 }
 
-function peerExportBaseName() { return `${(peerReview.filename || "Peer Review").replace(/\.pdf$/i, "")} - ${PEER_REVIEW_TYPES[peerReview.type].label}`.replace(/[\\/:*?"<>|]/g, "-"); }
+function peerExportBaseName() { return `${(peerReview.filename || "Peer Review").replace(/\.(?:pdf|dwg)$/i, "")} - ${PEER_REVIEW_TYPES[peerReview.type].label}`.replace(/[\\/:*?"<>|]/g, "-"); }
 function downloadPeerFile(data, filename, type) { const url = URL.createObjectURL(new Blob([data], { type })); const link = document.createElement("a"); link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 
-function openPeerPdfDB() { return new Promise((resolve, reject) => { const request = indexedDB.open(PEER_PDF_DB, 2); request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(PEER_PDF_STORE)) request.result.createObjectStore(PEER_PDF_STORE); if (!request.result.objectStoreNames.contains(PEER_KNOWLEDGE_STORE)) request.result.createObjectStore(PEER_KNOWLEDGE_STORE, { keyPath: "id" }); }; request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
+function openPeerPdfDB() { return new Promise((resolve, reject) => { const request = indexedDB.open(PEER_PDF_DB, 4); request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(PEER_PDF_STORE)) request.result.createObjectStore(PEER_PDF_STORE); if (!request.result.objectStoreNames.contains(PEER_CAD_STORE)) request.result.createObjectStore(PEER_CAD_STORE); if (!request.result.objectStoreNames.contains(PEER_KNOWLEDGE_STORE)) request.result.createObjectStore(PEER_KNOWLEDGE_STORE, { keyPath: "id" }); if (!request.result.objectStoreNames.contains(PEER_ANALYSIS_CACHE_STORE)) request.result.createObjectStore(PEER_ANALYSIS_CACHE_STORE, { keyPath: "key" }); }; request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
 async function savePeerPdf(id, file) {
   const candidates = readPeerReviews().filter(item => item.id !== id);
   while (true) {
@@ -2746,11 +3973,27 @@ async function savePeerPdf(id, file) {
 async function putPeerPdf(id, file) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_PDF_STORE, "readwrite"); tx.objectStore(PEER_PDF_STORE).put(file, id); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
 async function deletePeerPdf(id) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_PDF_STORE, "readwrite"); tx.objectStore(PEER_PDF_STORE).delete(id); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
 async function getPeerPdf(id) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const request = db.transaction(PEER_PDF_STORE).objectStore(PEER_PDF_STORE).get(id); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
+async function putPeerCadData(id, data) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_CAD_STORE, "readwrite"); tx.objectStore(PEER_CAD_STORE).put(data, id); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
+async function getPeerCadData(id) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const request = db.transaction(PEER_CAD_STORE).objectStore(PEER_CAD_STORE).get(id); request.onsuccess = () => { db.close(); resolve(request.result || null); }; request.onerror = () => { db.close(); reject(request.error); }; }); }
+async function deletePeerCadData(id) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_CAD_STORE, "readwrite"); tx.objectStore(PEER_CAD_STORE).delete(id); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
 async function putPeerKnowledgeSource(source) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_KNOWLEDGE_STORE, "readwrite"); tx.objectStore(PEER_KNOWLEDGE_STORE).put(source); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
 async function getPeerKnowledgeSource(id) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const request = db.transaction(PEER_KNOWLEDGE_STORE).objectStore(PEER_KNOWLEDGE_STORE).get(id); request.onsuccess = () => { db.close(); resolve(request.result); }; request.onerror = () => { db.close(); reject(request.error); }; }); }
 async function getAllPeerKnowledgeSources() { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const request = db.transaction(PEER_KNOWLEDGE_STORE).objectStore(PEER_KNOWLEDGE_STORE).getAll(); request.onsuccess = () => { db.close(); resolve((request.result || []).sort((left, right) => String(right.addedAt).localeCompare(String(left.addedAt)))); }; request.onerror = () => { db.close(); reject(request.error); }; }); }
 async function deletePeerKnowledgeSource(id) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_KNOWLEDGE_STORE, "readwrite"); tx.objectStore(PEER_KNOWLEDGE_STORE).delete(id); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
+async function putPeerAnalysisCacheEntry(entry) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const tx = db.transaction(PEER_ANALYSIS_CACHE_STORE, "readwrite"); tx.objectStore(PEER_ANALYSIS_CACHE_STORE).put(entry); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; }); }
+async function getPeerAnalysisCacheEntry(key) { const db = await openPeerPdfDB(); return new Promise((resolve, reject) => { const request = db.transaction(PEER_ANALYSIS_CACHE_STORE).objectStore(PEER_ANALYSIS_CACHE_STORE).get(key); request.onsuccess = () => { db.close(); resolve(request.result); }; request.onerror = () => { db.close(); reject(request.error); }; }); }
 
+function reportPeerDrawingRead(message) {
+  setPeerStatus(message);
+  if (peerAnalysisMode === "file-read" && peerAnalysisStartedAt) setPeerAnalysisProgress("running", message);
+}
+function finishPeerDrawingRead(message, error = false) {
+  setPeerStatus(message, error);
+  if (peerAnalysisMode === "file-read" && peerAnalysisStartedAt) {
+    setPeerAnalysisProgress(error ? "error" : "complete", message);
+    stopPeerAnalysisTimer();
+  }
+}
 function setPeerStatus(message, error = false) { const status = document.getElementById("peerUploadStatus"); if (status) { status.textContent = message; status.classList.toggle("is-error", error); } }
 function showPeerToast(message) { const toast = document.getElementById("peerToast"); toast.textContent = message; toast.classList.remove("hidden"); clearTimeout(showPeerToast.timer); showPeerToast.timer = setTimeout(() => toast.classList.add("hidden"), 3200); }
 function formatPeerDate(value) { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleString() : ""; }

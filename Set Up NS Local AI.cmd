@@ -16,7 +16,8 @@ if errorlevel 1 if not exist "%NS_NODE%" (
 
 if not exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
   echo Ollama is required for Local AI.
-  echo Install Ollama, then run this setup once more.
+  echo Select Download for Windows, run OllamaSetup.exe with the normal choices,
+  echo then run this setup once more. The standalone ZIP is not needed.
   start "" "https://ollama.com/download/windows"
   pause
   exit /b 1
@@ -44,6 +45,7 @@ if errorlevel 1 (
   echo.
   echo Installing the approved Qwen3-VL 8B model.
   echo This is a large one-time download and may take a while.
+  echo Ollama will keep it in "%USERPROFILE%\.ollama\models", outside this project.
   "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" pull qwen3-vl:8b-instruct
   if errorlevel 1 (
     echo.
@@ -55,6 +57,8 @@ if errorlevel 1 (
 
 echo.
 echo Local AI setup is complete.
+echo The approved model is qwen3-vl:8b-instruct.
+echo Ollama keeps its models in "%USERPROFILE%\.ollama\models" by default.
 echo It will start automatically whenever you sign in to Windows.
 echo Close and reopen Chrome, allow Local network access for the N/S website if asked,
 echo then select Try Reconnecting.
