@@ -12,7 +12,7 @@ const PEER_DATABASE_KNOWLEDGE_ENABLED_KEY = "ns-peer-review-database-knowledge-e
 const PEER_PARTS_STORAGE_KEY = "nsPartsDatabaseV1";
 const PEER_DATABASE_TABLES = Object.freeze({ master: "parts_master", aliases: "part_number_aliases", usage: "drawing_usage", documents: "documents" });
 const PEER_DATABASE_DOCUMENTS_BUCKET = "document-library";
-const PEER_AI_ANALYSIS_CACHE_VERSION = "20260806-quality-model-routing-v8";
+const PEER_AI_ANALYSIS_CACHE_VERSION = "20260807-white-background-ai-render-v10";
 const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-quality-model-ledger-v4";
 const COMPANY_AI_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
 const COMPANY_AI_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
@@ -245,6 +245,45 @@ async function getPeerLocalAiSession(loginMessage = "Sign in with the Database l
 
 async function fetchPeerLocalAi(token, options = {}) {
   return getPeerLocalAiClient().fetch("/api/local-ai", { ...options, token });
+}
+
+function fillPeerCanvasWhite(canvas, contextOptions = undefined) {
+  const context = canvas.getContext("2d", contextOptions);
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.restore();
+  return context;
+}
+
+async function renderPeerPdfPageOnCanvas(page, viewport, canvas, contextOptions = undefined) {
+  const context = fillPeerCanvasWhite(canvas, contextOptions);
+  await page.render({ canvasContext: context, viewport, background: "rgb(255,255,255)" }).promise;
+  return context;
+}
+
+function getPeerCanvasVisualDiagnostics(canvas) {
+  const width = Math.min(160, Math.max(1, canvas.width)), height = Math.min(160, Math.max(1, canvas.height));
+  const probe = document.createElement("canvas"); probe.width = width; probe.height = height;
+  const context = fillPeerCanvasWhite(probe, { willReadFrequently: true });
+  context.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, width, height);
+  const pixels = context.getImageData(0, 0, width, height).data;
+  let dark = 0, ink = 0;
+  for (let index = 0; index < pixels.length; index += 4) {
+    const luminance = 0.2126 * pixels[index] + 0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2];
+    if (luminance <= 32) dark += 1;
+    if (luminance < 238) ink += 1;
+  }
+  const total = Math.max(1, pixels.length / 4);
+  return { darkRatio: dark / total, inkRatio: ink / total, width: canvas.width, height: canvas.height };
+}
+
+function encodePeerAiCanvas(canvas, label, quality = 0.9, minimumInkRatio = 0.00015) {
+  const diagnostics = getPeerCanvasVisualDiagnostics(canvas);
+  if (diagnostics.darkRatio >= 0.92) throw new Error(`${label} rendered almost entirely black (${Math.round(diagnostics.darkRatio * 100)}% dark pixels).`);
+  if (diagnostics.inkRatio < minimumInkRatio) throw new Error(`${label} rendered without enough visible drawing content (${(diagnostics.inkRatio * 100).toFixed(3)}% ink pixels).`);
+  return canvas.toDataURL("image/jpeg", quality).split(",")[1] || "";
 }
 
 function recordPeerAiModelUsage(payload, phase) {
@@ -559,7 +598,7 @@ async function readPeerDatabaseDocumentText(documentRow = {}) {
             const page = await pdf.getPage(pageNumber), base = page.getViewport({ scale: 1 });
             const viewport = page.getViewport({ scale: Math.min(1.7, 2400 / Math.max(base.width, 1)) });
             const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-            await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+            await renderPeerPdfPageOnCanvas(page, viewport, canvas);
             const result = await withPeerTimeout(worker.recognize(canvas), 45000, `Database datasheet OCR exceeded 45 seconds on page ${pageNumber}.`);
             const pageText = String(result.data?.text || "").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
             if (pageText) text += `\nPage ${pageNumber} (OCR): ${pageText}`;
@@ -1201,6 +1240,8 @@ function applyPeerCadSheetMetadata() {
     page.sheetTotal = peerReview.pages.length;
     page.pageNumberDetected = true;
     page.metadataConfidence = 1;
+    page.tableTypes = Array.from(new Set([...(page.tableTypes || []).filter(type => type !== "Other"), ...getPeerNativeTableTypesForPage(page.number)]));
+    if (!page.tableTypes.length) page.tableTypes = ["Other"];
     const recommendation = getPeerPageRoleRecommendation(page);
     page.recommendedCategory = recommendation.role;
     page.categoryRecommendationReason = recommendation.reason;
@@ -1340,6 +1381,37 @@ function analyzePeerPage(number, text, totalPages = 0) {
 
 function detectPeerTableTypes(text = "") { const value = String(text).toUpperCase(), types = []; if (/EQUIPMENT LIST[^\n]{0,80}(?:SUPPLIED BY NS|TO BE SUPPLIED BY NS)/.test(value)) types.push("Main Equipment List"); if (/POWER REQUIREMENT/.test(value)) types.push("Power Requirement"); if (/CONNECTIONS? TABLE/.test(value)) types.push("Connections"); if (/FITTINGS?.{0,20}VALVES?.{0,20}COMPONENTS?/.test(value)) types.push("Fittings Valves Components"); if (/NOZZLE SCHEDULE/.test(value)) types.push("Nozzle Schedule"); if (/GENERAL NOTES?/.test(value)) types.push("General Notes"); return types.length ? types : ["Other"]; }
 
+function getPeerCadTablesForPage(pageNumber) {
+  const tables = peerReview?.cadData?.tables || [], number = Number(pageNumber || 0);
+  const exact = tables.filter(table => Number(table.page || 0) === number);
+  if (exact.length || peerReview?.pages?.length !== 1) return exact;
+  return tables;
+}
+
+function getPeerNativeTableTypesForPage(pageNumber) {
+  const types = new Set();
+  getPeerCadTablesForPage(pageNumber).forEach(rawTable => {
+    const table = structurePeerCadTable(rawTable);
+    const text = `${table.title || ""} ${(table.cells || []).slice(0, 80).map(cell => cell.value).join(" ")}`;
+    detectPeerTableTypes(text).filter(type => type !== "Other").forEach(type => types.add(type));
+    if (/CONDUIT\s*\/?\s*CABLE SCHEDULE|CIRCUIT BREAKER|\bF\.?L\.?A\.?\b/i.test(text)) types.add("Power Requirement");
+  });
+  return Array.from(types);
+}
+
+function getPeerPageDisciplines(page = {}) {
+  const disciplines = new Set(["Drawing coordination"]);
+  const manualRole = page.categoryManuallySet && ["Equipment", "Plumbing", "Electrical"].includes(page.category) ? page.category : "";
+  if (manualRole) { disciplines.add(manualRole); return disciplines; }
+  const text = `${page.text || ""} ${page.ocrText || ""} ${page.sheetTitle || ""} ${page.cadLayout || ""}`.toUpperCase();
+  const tableTypes = new Set([...(page.tableTypes || []), ...getPeerNativeTableTypesForPage(page.number)]);
+  const nativeTableText = getPeerCadTablesForPage(page.number).map(table => `${table.title || ""} ${(table.cells || []).slice(0, 120).map(cell => cell.value).join(" ")}`).join(" ").toUpperCase();
+  if (tableTypes.has("Main Equipment List") || /EQUIPMENT LIST|EQUIPMENT LAYOUT/.test(`${text} ${nativeTableText}`)) disciplines.add("Equipment");
+  if (tableTypes.has("Connections") || tableTypes.has("Fittings Valves Components") || tableTypes.has("Nozzle Schedule") || /FLOW LAYOUT|FLOW DIAGRAM|PLUMBING LAYOUT|CONNECTIONS? TABLE|FITTINGS?.{0,30}VALVES?|NOZZLE SCHEDULE/.test(`${text} ${nativeTableText}`)) disciplines.add("Plumbing");
+  if (tableTypes.has("Power Requirement") || /ELECTRICAL LAYOUT|ELECTRICAL ONE[- ]LINE|POWER REQUIREMENT|CONDUIT\s*\/?\s*CABLE SCHEDULE|CIRCUIT BREAKER|POWER FEEDER/.test(`${text} ${nativeTableText}`)) disciplines.add("Electrical");
+  return disciplines;
+}
+
 function getPeerPageRoleRecommendation(page = {}) {
   const text = String(page.text || page.ocrText || "").toUpperCase();
   const nativeMetadata = `${page.sheetTitle || ""} ${page.cadLayout || ""} ${page.drawingNumber || ""}`.toUpperCase();
@@ -1458,7 +1530,7 @@ async function renderPeerPages() {
 
 async function renderPeerPageCanvas(number, target) {
   if (!peerPdfDocument) { target.textContent = "Preview available when the saved PDF is loaded."; return; }
-  try { const page = await peerPdfDocument.getPage(number); const viewport = page.getViewport({ scale: 0.48 }); const canvas = document.createElement("canvas"); canvas.width = viewport.width; canvas.height = viewport.height; await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise; target.replaceChildren(canvas); }
+  try { const page = await peerPdfDocument.getPage(number); const viewport = page.getViewport({ scale: 0.48 }); const canvas = document.createElement("canvas"); canvas.width = viewport.width; canvas.height = viewport.height; await renderPeerPdfPageOnCanvas(page, viewport, canvas); target.replaceChildren(canvas); }
   catch { target.textContent = "Preview unavailable."; }
 }
 
@@ -1612,7 +1684,16 @@ async function runPeerChecks() {
     const equipmentReadiness = peerIncludesEquipmentReview() && peerReview.pages.some(page => page.visualEquipmentTableDetected || getPeerDeterministicPageRole(page) === "Equipment") ? getPeerEquipmentReadinessFindings() : [];
     const completeness = runPeerDocumentCompletenessRules();
     const cadFindings = runPeerCadRules(peerReview.cadData);
-    if (peerReview.cadData) recordPeerAnalysisMessage(`Native CAD tag and table checks found ${cadFindings.length} evidence-located item${cadFindings.length === 1 ? "" : "s"}.`);
+    if (peerReview.cadData) {
+      const nativeAudits = buildPeerCadNativeAudit(peerReview.cadData);
+      peerReview.coverageReport = peerReview.coverageReport || createPeerCoverageReport();
+      peerReview.coverageReport.nativeAudits = {
+        componentRows: nativeAudits.componentRows, componentRowsNeedingReview: nativeAudits.componentRowsNeedingReview,
+        electricalRows: nativeAudits.electricalRows, electricalRowsNeedingReview: nativeAudits.electricalRowsNeedingReview
+      };
+      recordPeerAnalysisMessage(`Native CAD audits indexed ${nativeAudits.componentRows} fitting/component row${nativeAudits.componentRows === 1 ? "" : "s"} and ${nativeAudits.electricalRows} electrical run${nativeAudits.electricalRows === 1 ? "" : "s"}; ${nativeAudits.componentRowsNeedingReview + nativeAudits.electricalRowsNeedingReview} row${nativeAudits.componentRowsNeedingReview + nativeAudits.electricalRowsNeedingReview === 1 ? "" : "s"} need engineer review before becoming confirmed corrections.`);
+      recordPeerAnalysisMessage(`Native CAD tag and table checks found ${cadFindings.length} evidence-located item${cadFindings.length === 1 ? "" : "s"}.`);
+    }
     const ruleEquipmentRows = peerReview.equipmentRows.filter(row => row.source !== "visual-ai");
     const automatic = peerIncludesEquipmentReview()
       ? [...runPeerInitialRules(peerReview.pages), ...runPeerEquipmentRules(ruleEquipmentRows), ...runPeerEquipmentNamingRules(ruleEquipmentRows), ...naming, ...equipmentReadiness, ...completeness, ...cadFindings, ...visualFindings]
@@ -1646,7 +1727,7 @@ async function runPeerChecks() {
 function runPeerCadRules(cad) {
   if (!cad) return [];
   const nativeEquipmentRows = peerReview.equipmentRows.filter(row => row.source === "native-cad");
-  const findings = [...runPeerCadEquipmentQualityRules(nativeEquipmentRows), ...runPeerCadTableComparisonRules(cad.tables || []), ...runPeerCadTableQualityRules(cad.tables || []), ...runPeerCadTextSequenceRules(cad.texts || [])], pageForItem = item => Number(item.page || 0) || (() => { const index = cad.layouts.indexOf(item.layout); return index >= 0 ? index + 1 : 0; })();
+  const findings = [...runPeerCadEquipmentQualityRules(nativeEquipmentRows), ...runPeerCadTableComparisonRules(cad.tables || []), ...runPeerCadTableQualityRules(cad.tables || []), ...runPeerCadElectricalScheduleRules(cad), ...runPeerCadTextSequenceRules(cad.texts || [])], pageForItem = item => Number(item.page || 0) || (() => { const index = cad.layouts.indexOf(item.layout); return index >= 0 ? index + 1 : 0; })();
   const tagPattern = /^(?:[A-Z]{1,8}[- ]?\d{1,4}[A-Z]?|\d{1,3}[A-Z]?)$/i;
   cad.tables.forEach(table => {
     const rows = new Map(); table.cells.forEach(cell => { if (!rows.has(cell.row)) rows.set(cell.row, []); rows.get(cell.row)[cell.column] = String(cell.value || "").trim(); });
@@ -1755,7 +1836,7 @@ async function runPeerMarkupReview() {
 async function getPeerRedMarkupRegions(pageNumber) {
   const page = await peerPdfDocument.getPage(pageNumber), viewport = page.getViewport({ scale: 1.5 });
   const source = document.createElement("canvas"); source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
-  const context = source.getContext("2d", { willReadFrequently: true }); await page.render({ canvasContext: context, viewport }).promise;
+  const context = await renderPeerPdfPageOnCanvas(page, viewport, source, { willReadFrequently: true });
   const pixels = context.getImageData(0, 0, source.width, source.height), rows = new Array(source.height).fill(0), bounds = new Array(source.height).fill(null);
   for (let y = 0; y < source.height; y += 1) for (let x = 0; x < source.width; x += 1) {
     const offset = (y * source.width + x) * 4, red = pixels.data[offset], green = pixels.data[offset + 1], blue = pixels.data[offset + 2];
@@ -1791,7 +1872,7 @@ function reconcilePeerTitleBlockMetadata() {
 }
 
 function createPeerCoverageReport() {
-  return { mode: peerReview?.maximumSweep === false ? "Balanced" : "Maximum Sweep", pagesTotal: peerReview?.pages?.length || 0, pagesReviewed: 0, regionsExpected: 0, regionsReviewed: 0, regionsFailed: 0, evidenceFacts: 0, registryObjects: 0, candidatesGenerated: 0, candidatesVerified: 0, unsupportedDiscarded: 0, disciplineSweeps: {}, uncoveredAreas: [], incompleteChecks: [], partialReasons: [], reviewStatus: "running", tierCounts: {} };
+  return { mode: peerReview?.maximumSweep === false ? "Balanced" : "Maximum Sweep", pagesTotal: peerReview?.pages?.length || 0, pagesReviewed: 0, regionsExpected: 0, regionsReviewed: 0, regionsFailed: 0, evidenceFacts: 0, registryObjects: 0, candidatesGenerated: 0, candidatesVerified: 0, unsupportedDiscarded: 0, disciplineSweeps: {}, nativeAudits: {}, uncoveredAreas: [], incompleteChecks: [], partialReasons: [], reviewStatus: "running", tierCounts: {} };
 }
 
 function recordPeerIncompleteCheck(label, detail = "") {
@@ -1860,7 +1941,12 @@ function shouldPeerExpandOverviewReview(page = {}, result = {}) {
   const unresolved = Array.isArray(result.unresolvedLabels) ? result.unresolvedLabels : [];
   const callouts = Array.isArray(result.callouts) ? result.callouts : [];
   const denseSelectableText = String(page.text || page.ocrText || "").length >= 6500;
-  return findings.length >= 4 || unresolved.length > 0 || callouts.length >= 10 || denseSelectableText;
+  const nativeTables = getPeerCadTablesForPage(page.number);
+  const nativeCells = nativeTables.reduce((total, table) => total + (table.cells || []).length, 0);
+  const nativeCallouts = (peerReview?.cadData?.callouts || []).filter(item => !Number(item.page || 0) || Number(item.page) === Number(page.number)).length;
+  const nativeDimensions = (peerReview?.cadData?.dimensions || []).filter(item => !Number(item.page || 0) || Number(item.page) === Number(page.number)).length;
+  const denseNativeEvidence = nativeTables.length >= 4 || nativeCells >= 180 || nativeCallouts >= 20 || nativeDimensions >= 20;
+  return findings.length >= 4 || unresolved.length > 0 || callouts.length >= 10 || denseSelectableText || denseNativeEvidence;
 }
 
 function getPeerDisciplineTargetPageNumbers(discipline, currentFindings = []) {
@@ -1868,7 +1954,7 @@ function getPeerDisciplineTargetPageNumbers(discipline, currentFindings = []) {
   const roleByDiscipline = { "Drawing coordination": "Drawing", Equipment: "Equipment", Plumbing: "Plumbing", Electrical: "Electrical" };
   const role = roleByDiscipline[discipline];
   if (role) {
-    let matches = pages.filter(page => getPeerDeterministicPageRole(page) === role);
+    let matches = pages.filter(page => getPeerPageDisciplines(page).has(discipline));
     if (!matches.length) matches = pages.filter(page => String(page.category || "") === role);
     return new Set(matches.map(page => Number(page.number)));
   }
@@ -2208,13 +2294,9 @@ async function runPeerVisualReview() {
       }
       recordPeerAnalysisMessage("Starting focused discipline sweeps directly; the redundant document overview is skipped for faster local-model throughput.");
       peerReview.coverageReport.candidatesGenerated += patternCandidates.length;
-      const selectedRoles = new Set(peerReview.pages.map(page => getPeerDeterministicPageRole(page)));
-      const disciplineSweeps = [
-        selectedRoles.has("Drawing") ? "Drawing coordination" : "",
-        selectedRoles.has("Equipment") ? "Equipment" : "",
-        selectedRoles.has("Plumbing") ? "Plumbing" : "",
-        selectedRoles.has("Electrical") ? "Electrical" : ""
-      ].filter(Boolean);
+      const selectedDisciplines = new Set(peerReview.pages.flatMap(page => Array.from(getPeerPageDisciplines(page))));
+      const disciplineSweeps = ["Drawing coordination", "Equipment", "Plumbing", "Electrical"].filter(discipline => selectedDisciplines.has(discipline));
+      recordPeerAnalysisMessage(`Native page signals selected ${disciplineSweeps.join(", ")} specialist coverage${disciplineSweeps.length > 1 ? " for composite-sheet content" : ""}.`);
       for (const discipline of disciplineSweeps) {
         try {
           setPeerAnalysisProgress("running", `Running the focused ${discipline.toLowerCase()} sweep across the complete drawing package.`);
@@ -2290,7 +2372,7 @@ async function runPeerVisualReview() {
           setPeerAnalysisProgress("running", `Expanding review detail across ${detailScope} for ${missingReviewSlots.map(item => item.category).join(", ")}.`);
           recordPeerAnalysisMessage(`Detail expansion targeted ${detailScope} instead of rescanning all ${engineerPatternImages.length} pages.`);
           const detailCandidates = [];
-          const factOnlyImageBatchSize = proposedFindings.length === 0 && detailExpansionImages.every(entry => entry.observationTile) ? 4 : 2;
+          const factOnlyImageBatchSize = proposedFindings.length === 0 && detailExpansionImages.every(entry => entry.observationTile) ? 1 : 2;
           for (let imageOffset = 0; imageOffset < detailExpansionImages.length; imageOffset += factOnlyImageBatchSize) {
             const imageBatch = detailExpansionImages.slice(imageOffset, imageOffset + factOnlyImageBatchSize);
             try {
@@ -2318,6 +2400,10 @@ async function runPeerVisualReview() {
             }
           }
           const mergedDetailCandidates = mergePeerDuplicateFindings(detailCandidates);
+          if (detailExpansionImages.some(entry => entry.observationTile) && detailObservationFacts.length === 0) {
+            recordPeerIncompleteCheck("Dense-page visual fact transcription returned no facts", "The quality model inspected each enlarged region separately but did not return any source-located facts.");
+            recordPeerAnalysisMessage("The dense-page quality pass returned no source-located facts after separate quadrant requests; visual fact coverage is marked incomplete instead of silently complete.", true);
+          }
           patternCandidates = [...patternCandidates, ...mergedDetailCandidates];
           peerReview.coverageReport.candidatesGenerated += mergedDetailCandidates.length;
           proposedFindings = selectPeerVerificationCandidates(patternCandidates, peerReview.maximumSweep === false ? 8 : 12);
@@ -2471,15 +2557,15 @@ async function renderPeerAnalysisImage(pageNumber) {
   const page = await peerPdfDocument.getPage(pageNumber), base = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({ scale: Math.min(1.25, 1800 / base.width) });
   const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-  return canvas.toDataURL("image/jpeg", 0.88).split(",")[1] || "";
+  await renderPeerPdfPageOnCanvas(page, viewport, canvas);
+  return encodePeerAiCanvas(canvas, `Page ${pageNumber} whole-page AI image`, 0.88);
 }
 
 async function renderPeerAnalysisRegions(pageNumber) {
   const page = await peerPdfDocument.getPage(pageNumber), base = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({ scale: Math.min(1.5, 2600 / base.width) });
   const source = document.createElement("canvas"); source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
-  await page.render({ canvasContext: source.getContext("2d"), viewport }).promise;
+  await renderPeerPdfPageOnCanvas(page, viewport, source);
   const regionCount = 2;
   return Array.from({ length: regionCount }, (_, regionIndex) => {
     const overlap = Math.floor(source.width * 0.035), segment = Math.ceil(source.width / regionCount);
@@ -2487,8 +2573,8 @@ async function renderPeerAnalysisRegions(pageNumber) {
     const end = Math.min(source.width, (regionIndex + 1) * segment + (regionIndex < regionCount - 1 ? overlap : 0));
     const width = end - start;
     const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = source.height;
-    canvas.getContext("2d").drawImage(source, start, 0, width, source.height, 0, 0, width, source.height);
-    return canvas.toDataURL("image/jpeg", 0.88).split(",")[1] || "";
+    fillPeerCanvasWhite(canvas).drawImage(source, start, 0, width, source.height, 0, 0, width, source.height);
+    return encodePeerAiCanvas(canvas, `Page ${pageNumber} ${regionIndex ? "right" : "left"} AI region`, 0.88);
   });
 }
 
@@ -2496,7 +2582,7 @@ async function renderPeerEvidenceTiles(pageNumber) {
   const page = await peerPdfDocument.getPage(pageNumber), base = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({ scale: Math.min(2.05, 5000 / base.width) });
   const source = document.createElement("canvas"); source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
-  await page.render({ canvasContext: source.getContext("2d"), viewport }).promise;
+  await renderPeerPdfPageOnCanvas(page, viewport, source);
   const columns = 2, rows = 2, overlapX = Math.floor(source.width * 0.025), overlapY = Math.floor(source.height * 0.025);
   const segmentWidth = Math.ceil(source.width / columns), segmentHeight = Math.ceil(source.height / rows);
   return Array.from({ length: columns * rows }, (_, tileIndex) => {
@@ -2506,8 +2592,8 @@ async function renderPeerEvidenceTiles(pageNumber) {
     const startY = Math.max(0, row * segmentHeight - (row ? overlapY : 0));
     const endY = Math.min(source.height, (row + 1) * segmentHeight + (row < rows - 1 ? overlapY : 0));
     const canvas = document.createElement("canvas"); canvas.width = endX - startX; canvas.height = endY - startY;
-    canvas.getContext("2d").drawImage(source, startX, startY, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
-    return { tile: tileIndex + 1, column: column + 1, row: row + 1, image: canvas.toDataURL("image/jpeg", 0.94).split(",")[1] || "" };
+    fillPeerCanvasWhite(canvas).drawImage(source, startX, startY, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+    return { tile: tileIndex + 1, column: column + 1, row: row + 1, image: encodePeerAiCanvas(canvas, `Page ${pageNumber} evidence tile ${tileIndex + 1}`, 0.94, 0.00003) };
   });
 }
 
@@ -2603,7 +2689,7 @@ async function renderPeerEquipmentTableCrop(pageNumber) {
   const source = document.createElement("canvas");
   source.width = Math.ceil(viewport.width);
   source.height = Math.ceil(viewport.height);
-  await page.render({ canvasContext: source.getContext("2d"), viewport }).promise;
+  await renderPeerPdfPageOnCanvas(page, viewport, source);
   const startX = Math.floor(source.width * 0.53);
   const startY = Math.floor(source.height * 0.43);
   const width = Math.floor(source.width * 0.39);
@@ -2611,8 +2697,8 @@ async function renderPeerEquipmentTableCrop(pageNumber) {
   const crop = document.createElement("canvas");
   crop.width = width;
   crop.height = height;
-  crop.getContext("2d").drawImage(source, startX, startY, width, height, 0, 0, width, height);
-  return crop.toDataURL("image/jpeg", 0.92).split(",")[1] || "";
+  fillPeerCanvasWhite(crop).drawImage(source, startX, startY, width, height, 0, 0, width, height);
+  return encodePeerAiCanvas(crop, `Page ${pageNumber} equipment-table AI crop`, 0.92, 0.00003);
 }
 
 function isPeerUnsupportedMissingDesignFeature(item = {}) {
@@ -3459,7 +3545,7 @@ async function recognizePeerTitleBlock(pageNumber, worker) {
   const viewport = page.getViewport({ scale: renderScale });
   const source = document.createElement("canvas");
   source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
-  await page.render({ canvasContext: source.getContext("2d"), viewport }).promise;
+  await renderPeerPdfPageOnCanvas(page, viewport, source);
 
   // Drawing title blocks are normally concentrated in the lower-right corner.
   // Enlarging only this region is substantially faster than OCR on the entire sheet.
@@ -3511,6 +3597,9 @@ function getPeerFindingConfidenceReason(item = {}) {
 
 function getPeerValueComparisonLabels(item = {}) {
   if (item.evidenceType === "Unresolved placeholder" || /placeholder/i.test(String(item.issue || ""))) return { left: "Equipment table", right: "Required resolution" };
+  if (item.source === "cad-equipment-quality") return { left: "Equipment-table field", right: "Compared equipment-table field" };
+  if (item.source === "cad-table-comparison" || item.source === "cad-table-rule") return { left: "First schedule entry", right: "Compared schedule entry" };
+  if (item.source === "cad-electrical-audit") return { left: "Electrical schedule", right: "Required completion or exception" };
   return { left: "Equipment table", right: "Drawing / compared source" };
 }
 
@@ -3545,11 +3634,12 @@ renderPeerStructuredFinding = function renderPeerStructuredFindingSafe(item = {}
 function renderPeerCoverageSummary() {
   const root = document.getElementById("peerCoverageSummary"); if (!root || !peerReview) return;
   const report = peerReview.coverageReport || {}, sweeps = Object.values(report.disciplineSweeps || {}), completedSweeps = sweeps.filter(item => item.status === "complete").length;
+  const audits = report.nativeAudits || {}, auditRows = Number(audits.componentRows || 0) + Number(audits.electricalRows || 0), auditReview = Number(audits.componentRowsNeedingReview || 0) + Number(audits.electricalRowsNeedingReview || 0);
   if (!report.pagesTotal && !report.regionsExpected) { root.classList.add("hidden"); root.innerHTML = ""; return; }
   root.classList.remove("hidden");
   const completion = getPeerCoverageCompletionState(report);
   root.classList.toggle("is-partial", completion.isPartial);
-  root.innerHTML = `<div><small>Review status</small><strong>${completion.isPartial ? "Partial - confirm gaps" : "Complete"}</strong><span>${completion.isPartial ? escapePeerHTML(completion.reasons.slice(0, 2).join("; ")) : `${report.pagesReviewed || 0} of ${report.pagesTotal || peerReview.pages.length} pages completed`}</span></div><div><small>Visual coverage</small><strong>${report.regionsReviewed || 0} / ${report.regionsExpected || 0} regions</strong><span>${report.regionsFailed || 0} uncovered or incomplete</span></div><div><small>Package registry</small><strong>${report.registryObjects || 0} objects</strong><span>${report.evidenceFacts || 0} source-located facts indexed</span></div><div><small>Specialist sweeps</small><strong>${completedSweeps} / ${sweeps.length || 0} completed</strong><span>${report.candidatesGenerated || 0} candidates generated; ${report.unsupportedDiscarded || 0} discarded</span></div>`;
+  root.innerHTML = `<div><small>Review status</small><strong>${completion.isPartial ? "Partial - confirm gaps" : "Complete"}</strong><span>${completion.isPartial ? escapePeerHTML(completion.reasons.slice(0, 2).join("; ")) : `${report.pagesReviewed || 0} of ${report.pagesTotal || peerReview.pages.length} pages completed`}</span></div><div><small>Visual coverage</small><strong>${report.regionsReviewed || 0} / ${report.regionsExpected || 0} regions</strong><span>${report.regionsFailed || 0} uncovered or incomplete</span></div><div><small>Package registry</small><strong>${report.registryObjects || 0} objects</strong><span>${report.evidenceFacts || 0} source-located facts indexed</span></div><div><small>Native audits</small><strong>${auditRows} rows</strong><span>${auditReview} component or electrical rows need judgment</span></div><div><small>Specialist sweeps</small><strong>${completedSweeps} / ${sweeps.length || 0} completed</strong><span>${report.candidatesGenerated || 0} candidates generated; ${report.unsupportedDiscarded || 0} discarded</span></div>`;
 }
 
 function renderPeerFindings() {
@@ -3668,7 +3758,7 @@ async function openPeerPagePreview(pageNumber) {
     const viewport = page.getViewport({ scale: Math.min(2, availableWidth / baseViewport.width) });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    await renderPeerPdfPageOnCanvas(page, viewport, canvas);
     canvasRoot.replaceChildren(canvas);
   } catch (error) {
     canvasRoot.innerHTML = `<p class="peer-preview-error">${escapePeerHTML(error.message || "This page could not be previewed.")}</p>`;
@@ -3924,7 +4014,7 @@ async function openPeerRedlinePreview(id) {
     const highResolutionWidth = Math.max(2200, Math.min(3600, window.innerWidth * 2.4));
     const viewport = page.getViewport({ scale: Math.min(3, highResolutionWidth / baseViewport.width) });
     const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    await renderPeerPdfPageOnCanvas(page, viewport, canvas);
     const base = document.createElement("canvas"); base.width = canvas.width; base.height = canvas.height;
     const baseContext = base.getContext("2d"); baseContext.drawImage(canvas, 0, 0);
     acceptedOnPage.forEach(accepted => drawPeerRedlineAnnotation(baseContext, base, accepted, accepted.annotationText));

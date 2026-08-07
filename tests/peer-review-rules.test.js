@@ -239,6 +239,34 @@ assert.strictEqual(conventionalPlaceholderFinding.severity, "Manual Review", "A 
 assert.strictEqual(conventionalPlaceholderFinding.verificationStatus, "possible");
 assert(conventionalPlaceholderFinding.issue.startsWith("Confirm"));
 
+const componentAuditTable = {
+  handle: "COMPONENT-AUDIT", page: 1, cells: [
+    { row: 0, column: 0, value: "FITTINGS / VALVES / COMPONENTS TABLE" },
+    { row: 1, column: 0, value: "VALVE / FITTING TAG" }, { row: 1, column: 1, value: "DESCRIPTION" }, { row: 1, column: 2, value: "TOTAL QTY" },
+    { row: 2, column: 0, value: "BV1" }, { row: 2, column: 1, value: "BALL VALVE" }, { row: 2, column: 2, value: "1" },
+    { row: 3, column: 0, value: "UN1" }, { row: 3, column: 1, value: "UNION" }, { row: 3, column: 2, value: "2" }
+  ]
+};
+const electricalAuditTable = {
+  handle: "ELECTRICAL-AUDIT", page: 2, cells: [
+    { row: 0, column: 0, value: "CONDUIT / CABLE SCHEDULE" },
+    { row: 1, column: 0, value: "RUN #" }, { row: 1, column: 1, value: "FROM" }, { row: 1, column: 2, value: "TO" }, { row: 1, column: 3, value: "CONDUIT AND CABLE SIZE" },
+    { row: 2, column: 0, value: "1" }, { row: 2, column: 1, value: "PANEL A" }, { row: 2, column: 2, value: "" }, { row: 2, column: 3, value: "TO BE DETERMINED" }
+  ]
+};
+const nativeAudit = rules.buildPeerCadNativeAudit({ tables: [componentAuditTable, electricalAuditTable], texts: [
+  { page: 1, text: "BV1" }, { page: 1, text: "UN1" }
+] });
+assert.strictEqual(nativeAudit.componentRows, 2, "Native audit should inventory component schedule rows without automatically creating missing-component findings");
+assert.strictEqual(nativeAudit.componentRowsNeedingReview, 1, "A component text count that differs from its schedule quantity should remain an audit prompt");
+assert.strictEqual(nativeAudit.electricalRows, 1);
+assert.strictEqual(nativeAudit.electricalRowsNeedingReview, 1);
+const electricalAuditFindings = rules.runPeerCadElectricalScheduleRules({ tables: [electricalAuditTable], texts: [] });
+assert.strictEqual(electricalAuditFindings.length, 2, "Blank endpoints and explicitly deferred sizing should become separate needs-judgment prompts");
+assert(electricalAuditFindings.every(item => item.severity === "Manual Review" && item.verificationStatus === "possible"));
+assert(electricalAuditFindings.some(item => item.issue.includes("blank TO field")));
+assert(electricalAuditFindings.some(item => item.issue.includes("deferred electrical sizing")));
+
 const numberedSourceLabelFindings = rules.runPeerCadTextSequenceRules([
   { page: 3, handle: "P1", point: [100, 300], text: "FROM RO PUMP 1" },
   { page: 3, handle: "P2", point: [100, 200], text: "FROM RO PUMP 2" },
@@ -847,7 +875,10 @@ assert(peerReviewHtml.includes('onclick="openPeerExportModal()"') && peerReviewH
 assert(peerReviewHtml.includes('name="peerCompleteLearning" value="yes"') && peerReviewHtml.includes('name="peerCompleteLearning" value="no"'));
 assert(peerReviewHtml.includes('id="peerCompleteDrawingExport"') && peerReviewHtml.includes('id="peerCompleteReportExport"') && peerReviewHtml.includes('id="peerCompleteExcelExport"'));
 assert(peerReviewHtml.includes('id="peerDatabaseKnowledgeToggle"'));
-assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("highres-fact-diagnostics-v7"));
+assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("white-background-ai-render-v10"));
+assert(peerReviewSource.includes("fillPeerCanvasWhite") && peerReviewSource.includes('background: "rgb(255,255,255)"'), "Every PDF canvas should render onto an explicit white background");
+assert(peerReviewSource.includes("getPeerCanvasVisualDiagnostics") && peerReviewSource.includes("rendered almost entirely black") && peerReviewSource.includes("rendered without enough visible drawing content"), "AI drawing images should be checked for black or blank renders before submission");
+assert(peerReviewSource.includes("Page ${pageNumber} whole-page AI image") && peerReviewSource.includes("Page ${pageNumber} evidence tile ${tileIndex + 1}") && peerReviewSource.includes("equipment-table AI crop"), "Whole-page, quadrant, and equipment AI images should use the checked encoder");
 assert(peerReviewSource.includes("The overview and first specialist pass returned no candidates"), "A zero-candidate DWG review should reuse the existing detail call with enlarged regions");
 assert(peerReviewSource.includes("NATIVE DRAWING NAVIGATION INDEX") && peerReviewSource.includes("It is not proof of a defect"), "The enlarged visual pass should receive native navigation hints without treating them as defect evidence");
 assert(peerReviewSource.includes("PEER_DETAIL_OBSERVATION_SCHEMA") && peerReviewSource.includes("VISUAL FACT LEDGER - REQUIRED EVEN WHEN FINDINGS IS EMPTY"), "The enlarged pass should transcribe neutral observations instead of requiring the local model to infer defects directly");
@@ -857,7 +888,12 @@ assert(peerReviewSource.includes("requestPeerEnlargedObservationFacts") && peerR
 assert(peerReviewSource.includes("format: PEER_EVIDENCE_LEDGER_SCHEMA, numCtx: 12288, maxTokens: 3600"), "The fact-only path should use the compact evidence schema and context budget");
 assert(peerReviewSource.includes("useFactOnlyPass") && peerReviewSource.includes("engineering conclusions will be evaluated separately"), "The zero-result enlarged-region branch should bypass the combined detail-review prompt");
 assert(peerReviewSource.includes("renderPeerEvidenceTiles(focusPage)") && peerReviewSource.includes("four high-resolution quadrants"), "A zero-fact pass should receive readable high-resolution quadrant crops in one request");
-assert(peerReviewSource.includes("factOnlyImageBatchSize") && peerReviewSource.includes("? 4 : 2"), "Four observation quadrants should remain one model request rather than two batches");
+assert(peerReviewSource.includes("factOnlyImageBatchSize") && peerReviewSource.includes("? 1 : 2"), "Dense observation quadrants should be transcribed separately so one unreadable composite response cannot hide every region");
+assert(peerReviewSource.includes("getPeerPageDisciplines") && peerReviewSource.includes("selectedDisciplines"), "Composite sheets must activate every applicable specialist discipline instead of one mutually exclusive page role");
+assert(peerReviewSource.includes("nativeCells >= 180") && peerReviewSource.includes("denseNativeEvidence"), "Dense native CAD evidence must override an empty whole-page visual gate");
+assert(peerReviewSource.includes("Dense-page visual fact transcription returned no facts"), "A dense quality pass that returns no facts must be recorded as incomplete coverage");
+assert(peerReviewSource.includes("buildPeerCadNativeAudit") && peerReviewSource.includes("Native CAD audits indexed"), "Review output must report component and electrical native-audit coverage");
+assert(peerReviewSource.includes('Compared equipment-table field') && peerReviewSource.includes('Required completion or exception'), "Finding comparisons must label table-to-table and electrical-audit evidence accurately");
 assert(peerReviewSource.includes("stats.lowConfidence") && peerReviewSource.includes("stats.incomplete") && peerReviewSource.includes("stats.invalidImage") && peerReviewSource.includes("stats.duplicate"), "Fact diagnostics should distinguish raw, accepted, and rejected observation responses");
 assert(peerReviewSource.includes("singleSheetNativeFallback"), "A native equipment table in a single-sheet DWG should receive page 1 when page classification is unavailable");
 assert(peerReviewSource.includes("peerReview.findings = (peerReview.findings || []).filter(item => !isPeerFindingSelfNegating(item))"));

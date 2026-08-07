@@ -102,7 +102,7 @@ function getPeerCadCanonicalAttribute(heading = "", tableTitle = "") {
   const title = cleanPeerCadCellValue(tableTitle).toUpperCase();
   if (/^(?:ITEM|ITEM #|ITEM NO\.?|ITEM NUMBER|TAG|EQUIPMENT TAG|SUB ASM ITEM #?|SUB ASSEMBLY ITEM #?|FLOW LINE #?|LOCATION(?: OF)?(?: \(ON)? FLOW LINE #?:?\)?|VALVE\s*\/\s*FITTING TAG|RUN #?|CONNECTION #?)$/.test(header)) return "tag";
   if (/PART\s*\/\s*ITEM DESCRIPTION|EQUIPMENT DESCRIPTION|COMPONENT(?: DESCRIPTION)?|^DESCRIPTION(?:\s*\/\s*SPECIFICATIONS)?$|SYSTEM\s*\/\s*ARCH/.test(header)) return "description";
-  if (/^(?:QTY\.?|QUANTITY|COUNT|QTY\. OF CONTROL PANEL\(S\)|QTY\. PER SUB-ASM)$/.test(header)) return "quantity";
+  if (/^(?:QTY\.?|QUANTITY|COUNT|TOTAL QTY\.?|QTY\. OF CONTROL PANEL\(S\)|QTY\. PER SUB-ASM)$/.test(header)) return "quantity";
   if (/^(?:VOLTAGE|SYSTEM POWER)(?:\b.*)?$/.test(header)) return "voltage";
   if (/^PHASE$/.test(header)) return "phase";
   if (/^(?:HORSEPOWER|HP)$/.test(header)) return "horsepower";
@@ -569,6 +569,128 @@ function runPeerCadTableQualityRules(tables = []) {
         ? `${placeholders.length} native part-number cells use a repeated template-style placeholder for ${shownTags}. Confirm the schedule convention before treating every cell as a defect.`
         : `${placeholders.length} native part-number cell${placeholders.length === 1 ? "" : "s"} remain unresolved for ${shownTags}.`,
       location
+    }));
+  });
+  return findings;
+}
+
+function getPeerCadNativeAuditRows(rawTable = {}) {
+  const table = structurePeerCadTable(rawTable);
+  const rows = new Map();
+  table.cells.forEach(cell => {
+    if (!rows.has(cell.row)) rows.set(cell.row, []);
+    rows.get(cell.row).push(cell);
+  });
+  return Array.from(rows.entries()).sort((left, right) => Number(left[0]) - Number(right[0])).map(([row, cells]) => {
+    const directTagCell = cells.find(cell => String(cell.directTag || "").trim());
+    const values = attribute => cells.filter(cell => cell.attribute === attribute).map(cell => cleanPeerCadCellValue(cell.value)).filter(Boolean);
+    return {
+      table, row: Number(row), cells,
+      tag: cleanPeerCadCellValue(directTagCell?.directTag || directTagCell?.tag || ""),
+      tagNamespace: directTagCell?.tagNamespace || cells.find(cell => cell.tagNamespace)?.tagNamespace || "",
+      object: cleanPeerCadCellValue(cells.find(cell => cell.object)?.object || ""),
+      quantity: values("quantity")[0] || "",
+      from: values("from")[0] || "",
+      to: values("to")[0] || "",
+      conduitSize: values("conduit size")[0] || "",
+      joined: cells.map(cell => cleanPeerCadCellValue(cell.value)).filter(Boolean).join(" | ")
+    };
+  }).filter(row => row.tag);
+}
+
+function buildPeerCadNativeAudit(cad = {}) {
+  const componentRows = [], electricalRows = [];
+  (cad.tables || []).forEach(rawTable => {
+    const rows = getPeerCadNativeAuditRows(rawTable);
+    rows.forEach(row => {
+      const tableText = `${row.table.title || ""} ${row.joined}`.toUpperCase();
+      if (row.tagNamespace === "component-tag" || /FITTINGS?.*VALVES?.*COMPONENTS?/.test(tableText)) componentRows.push(row);
+      if (row.tagNamespace === "electrical-run" || /CONDUIT\s*\/?\s*CABLE SCHEDULE/.test(tableText)) electricalRows.push(row);
+    });
+  });
+  const textItems = (cad.texts || []).map(item => ({ ...item, cleaned: cleanPeerCadCellValue(item.text || item.value || "") })).filter(item => item.cleaned);
+  const componentChecks = componentRows.map(row => {
+    const tagPattern = new RegExp(`(^|[^A-Z0-9])${String(row.tag).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Z0-9]|$)`, "i");
+    const occurrences = textItems.filter(item => tagPattern.test(item.cleaned));
+    const expectedQuantity = /^\d+$/.test(row.quantity) ? Number(row.quantity) : null;
+    const status = !occurrences.length ? "review" : expectedQuantity !== null && expectedQuantity !== occurrences.length ? "review" : "pass";
+    return {
+      tag: row.tag, object: row.object, page: Number(row.table.page || 0), row: row.row + 1,
+      tableTitle: row.table.title, tableHandle: row.table.handle || "", expectedQuantity,
+      visibleOccurrences: occurrences.length, occurrencePages: Array.from(new Set(occurrences.map(item => Number(item.page || 0)).filter(Boolean))),
+      status,
+      note: !occurrences.length
+        ? "No exact top-level native text occurrence was indexed outside the component schedule; this is an audit prompt, not proof that the component is missing."
+        : expectedQuantity !== null && expectedQuantity !== occurrences.length
+          ? "The indexed text count differs from the schedule quantity; repeated plans, details, and legends must be separated before treating it as a finding."
+          : "The component tag has at least one indexed native-text occurrence."
+    };
+  });
+  const electricalChecks = electricalRows.map(row => {
+    const missing = [];
+    if (!row.from) missing.push("FROM");
+    if (!row.to) missing.push("TO");
+    const deferred = /TO BE DETERMINED|\bTBD\b|SIZED BY (?:G\.?C\.?|E\.?C\.?)|BY ELECTRICAL CONTRACTOR/i.test(row.joined);
+    return {
+      tag: row.tag, object: row.object, page: Number(row.table.page || 0), row: row.row + 1,
+      tableTitle: row.table.title, tableHandle: row.table.handle || "", from: row.from, to: row.to,
+      conduitSize: row.conduitSize, missing, deferred, status: missing.length || deferred ? "review" : "pass",
+      evidence: row.joined
+    };
+  });
+  return {
+    componentChecks,
+    electricalChecks,
+    componentRows: componentChecks.length,
+    componentRowsNeedingReview: componentChecks.filter(item => item.status === "review").length,
+    electricalRows: electricalChecks.length,
+    electricalRowsNeedingReview: electricalChecks.filter(item => item.status === "review").length
+  };
+}
+
+function runPeerCadElectricalScheduleRules(cad = {}) {
+  const audit = buildPeerCadNativeAudit(cad), findings = [];
+  const missingGroups = new Map(), deferredGroups = new Map();
+  audit.electricalChecks.forEach(item => {
+    const key = `${item.page}|${item.tableHandle}|${item.missing.join("+")}`;
+    if (item.missing.length) {
+      if (!missingGroups.has(key)) missingGroups.set(key, []);
+      missingGroups.get(key).push(item);
+    }
+    if (item.deferred) {
+      const deferredKey = `${item.page}|${item.tableHandle}`;
+      if (!deferredGroups.has(deferredKey)) deferredGroups.set(deferredKey, []);
+      deferredGroups.get(deferredKey).push(item);
+    }
+  });
+  missingGroups.forEach(items => {
+    const first = items[0], tags = items.map(item => item.tag), missing = first.missing;
+    const rows = items.map(item => item.row), location = `Page ${first.page || 1}, ${first.tableTitle}, row${rows.length === 1 ? "" : "s"} ${rows.join(", ")}`;
+    findings.push(createPeerFinding({
+      severity: "Manual Review", equipmentTag: tags.join(", "), source: "cad-electrical-audit", confidence: .88,
+      verificationStatus: "possible", evidenceType: "Incomplete schedule field", category: "Electrical coordination",
+      affectedObject: `Electrical run${tags.length === 1 ? "" : "s"} ${tags.join(", ")}`, page: first.page,
+      issue: `Confirm the blank ${missing.join(" and ")} field${missing.length === 1 ? "" : "s"} for electrical run${tags.length === 1 ? ` ${tags[0]}` : `s ${tags.join(", ")}`}`,
+      listValue: items.map(item => `${item.tag}: ${item.evidence}`).join(" / "), comparedValue: `Completed ${missing.join(" and ")} information or approved exception`,
+      evidence: `${location} ${items.length === 1 ? "has an identified run" : "have identified runs"} but no readable value in the ${missing.join(" and ")} column${missing.length === 1 ? "" : "s"}.`,
+      requirement: "Confirm whether the blank source or destination field is intentional; complete it when required for installation coordination.",
+      verificationReason: "The native schedule proves that the field is blank, but the drawing may intentionally defer or omit that connection.",
+      details: `${location} requires engineer confirmation before the blank field is treated as a drawing error.`, location
+    }));
+  });
+  deferredGroups.forEach(items => {
+    const first = items[0], tags = items.map(item => item.tag), rows = items.map(item => item.row);
+    const location = `Page ${first.page || 1}, ${first.tableTitle}, row${rows.length === 1 ? "" : "s"} ${rows.join(", ")}`;
+    findings.push(createPeerFinding({
+      severity: "Manual Review", equipmentTag: tags.join(", "), source: "cad-electrical-audit", confidence: .84,
+      verificationStatus: "possible", evidenceType: "Deferred schedule value", category: "Electrical coordination",
+      affectedObject: `Electrical run${tags.length === 1 ? "" : "s"} ${tags.join(", ")}`, page: first.page,
+      issue: `Confirm the deferred electrical sizing for run${tags.length === 1 ? ` ${tags[0]}` : `s ${tags.join(", ")}`}`,
+      listValue: items.map(item => `${item.tag}: ${item.evidence}`).join(" / "), comparedValue: "Final sizing basis or approved contractor-deferred scope",
+      evidence: `${location} contains an explicit TBD or contractor-sizing statement.`,
+      requirement: "Confirm that the deferred electrical sizing has an approved responsibility and completion path.",
+      verificationReason: "The deferral is visible, but it may be an approved division-of-responsibility note rather than a drawing defect.",
+      details: `${location} defers part of the electrical sizing; confirm the responsible party and final design basis.`, location
     }));
   });
   return findings;
@@ -1611,4 +1733,4 @@ function runPeerEquipmentRules(rows = []) {
   return findings;
 }
 
-if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, runPeerCadTableQualityRules, runPeerCadTextSequenceRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, hasPeerExplicitVisualComparison, isPeerNonConflictDisclaimerFinding, isPeerCrossScopeVisualComparison, isPeerContradictoryMissingFlowFinding, isPeerFindingSelfNegating, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };
+if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, runPeerCadTableQualityRules, buildPeerCadNativeAudit, runPeerCadElectricalScheduleRules, runPeerCadTextSequenceRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, hasPeerExplicitVisualComparison, isPeerNonConflictDisclaimerFinding, isPeerCrossScopeVisualComparison, isPeerContradictoryMissingFlowFinding, isPeerFindingSelfNegating, arePeerFindingsSameCorrection, isPeerFindingGrounded, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };

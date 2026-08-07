@@ -5866,7 +5866,7 @@ summary {
 .peer-finding-level-guide > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; padding: 0 13px 13px; }
 .peer-finding-level-guide p { margin: 0; font-size: .84rem; line-height: 1.45; }
 @media (max-width: 760px) { .peer-finding-level-guide > div { grid-template-columns: 1fr; } }
-.peer-coverage-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0 4px; padding: 13px; border: 1px solid #c5d9e4; border-radius: 10px; background: #edf5f8; }
+.peer-coverage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0 4px; padding: 13px; border: 1px solid #c5d9e4; border-radius: 10px; background: #edf5f8; }
 .peer-coverage-summary.is-partial { border-color: #dbb96d; background: #fff9e8; }
 .peer-coverage-summary > div { display: grid; gap: 3px; min-width: 0; padding: 9px 11px; border-radius: 8px; background: #fff; }
 .peer-coverage-summary small { color: #687f8d; font-size: .7rem; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
