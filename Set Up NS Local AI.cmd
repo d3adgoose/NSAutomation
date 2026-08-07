@@ -55,9 +55,24 @@ if errorlevel 1 (
   )
 )
 
+"%LOCALAPPDATA%\Programs\Ollama\ollama.exe" list 2>nul | findstr /i /c:"qwen3-vl:30b-a3b-instruct" >nul
+if errorlevel 1 (
+  echo.
+  echo Installing the enhanced Qwen3-VL 30B quality model.
+  echo This optional one-time download is about 20 GB and improves dense drawing review.
+  echo Peer Review will continue to use the 8B fast model if this download cannot finish.
+  "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" pull qwen3-vl:30b-a3b-instruct
+  if errorlevel 1 (
+    echo.
+    echo The quality-model download did not finish. Fast Local AI is still available.
+    echo Run setup again later to resume the quality-model download.
+  )
+)
+
 echo.
 echo Local AI setup is complete.
-echo The approved model is qwen3-vl:8b-instruct.
+echo Fast model: qwen3-vl:8b-instruct.
+echo Quality model: qwen3-vl:30b-a3b-instruct when installed.
 echo Ollama keeps its models in "%USERPROFILE%\.ollama\models" by default.
 echo It will start automatically whenever you sign in to Windows.
 echo Close and reopen Chrome, allow Local network access for the N/S website if asked,

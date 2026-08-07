@@ -44,6 +44,10 @@ assert(localAiServer.includes("warmLocalAiModel") && localAiServer.includes('`${
   "The Local AI readiness check must warm the selected model before the user starts a review.");
 assert(localAiServer.includes("authenticatedUserCache") && localAiServer.includes("selectedModelCache"),
   "Repeated review requests must reuse short-lived authentication and installed-model checks.");
+assert(localAiServer.includes('requestedTier === "quality"') && localAiServer.includes('body.modelTier === "quality"'),
+  "The Local AI gateway must support explicit fast-versus-quality model routing.");
+assert(localAiServer.includes('selected.tier === "quality" ? 12288 : 24576') && localAiServer.includes("usedModelFallback"),
+  "Quality requests must use a GPU-safe context cap and report automatic fallback behavior.");
 assert(localAiServer.includes('/api/cad-peer-review') && localAiServer.includes('handleCadPeerReview(req, res)'),
   "The local gateway must expose native DWG conversion for Peer Review.");
 assert(localAiServer.includes('searchParams.get("filename")') && localAiServer.includes('accoreconsole.exe'),
@@ -90,6 +94,10 @@ assert(peerReview.includes("[401, 403, 503].includes(response.status)"),
   "DWG progress polling must stop after an authentication or gateway failure instead of flooding the console.");
 assert(specificationAi.includes("window.NSLocalAIClient.fetch") && peerReview.includes("fetchPeerLocalAi"),
   "Specification and Peer Review must both use the shared Local AI connector.");
+assert(peerReview.includes('modelTier: "quality"') && peerReview.includes("recordPeerAiModelUsage"),
+  "Peer Review must route difficult visual passes to the quality model and report the model used.");
+assert(localAiSetup.includes("qwen3-vl:30b-a3b-instruct") && peerHtml.includes("qwen3-vl:30b-a3b-instruct"),
+  "Local AI setup and Peer Review guidance must include the optional quality model.");
 assert(!specificationAi.includes("targetAddressSpace") && !peerReview.includes("targetAddressSpace"),
   "Feature pages must not maintain separate deployed-to-local address-space logic.");
 assert(html.includes('pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor-pdf.worker.min.js?v=3.11.174"'),

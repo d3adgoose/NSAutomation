@@ -72,6 +72,24 @@ function peerValuesEquivalent(left, right, field = "") {
   return normalizePeerValue(left, field) === normalizePeerValue(right, field);
 }
 
+function getPeerHorsepowerReferences(value = "") {
+  const references = [];
+  const pattern = /(?:^|[^\d/])(\d+(?:\s*\/\s*\d+|\.\d+)?)\s*HP\b/gi;
+  for (const match of String(value || "").matchAll(pattern)) {
+    const shownValue = match[1].replace(/\s+/g, "");
+    const fraction = shownValue.match(/^(\d+)\/(\d+)$/);
+    const numericValue = fraction
+      ? Number(fraction[1]) / Number(fraction[2])
+      : Number(shownValue);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) continue;
+    references.push({
+      key: String(Math.round(numericValue * 1000000) / 1000000),
+      shown: `${shownValue}HP`
+    });
+  }
+  return references;
+}
+
 function cleanPeerCadCellValue(value = "") {
   return String(value || "")
     .replace(/\\P/g, " ").replace(/%%C/g, " DIA ").replace(/\\U\+0278/gi, " PH ")
@@ -364,10 +382,76 @@ function runPeerCadEquipmentQualityRules(rows = []) {
     const ambiguousStructure = Boolean(row.structureAmbiguous);
     const common = { page: row.page, equipmentTag: row.tag, source: "cad-equipment-quality", confidence: ambiguousStructure ? .84 : .99, verificationStatus: ambiguousStructure ? "possible" : "verified", verificationReason: ambiguousStructure ? "The value is source-located, but this row inherits a merged table cell and should be confirmed in the drawing preview." : "", evidenceType: "Objective visible mismatch", category: "Schedule or table", affectedObject: row.description, location };
     if (!String(row.quantity || "").trim()) findings.push(createPeerFinding({ ...common, severity: "Warning", issue: `Complete the equipment quantity for ${row.tag}`, evidence: `${location} has a blank QTY. PER SUB-ASM cell for ${row.description}.`, requirement: "Complete the detected Equipment List quantity column.", details: `${location} has a tag and description but its detected quantity cell is blank.` }));
-    const ratingText = `${row.details || ""} ${row.purpose || ""}`.trim() || row.rawValues || "";
-    const horsepowerValues = Array.from(ratingText.matchAll(/\b(\d+(?:\.\d+)?)\s*HP\b/gi)).map(match => match[1]);
-    const distinctHorsepower = Array.from(new Set(horsepowerValues));
-    if (distinctHorsepower.length > 1) findings.push(createPeerFinding({ ...common, severity: "Warning", issue: `Coordinate the horsepower references for ${row.tag}`, listValue: `${distinctHorsepower[0]}HP`, comparedValue: `${distinctHorsepower[1]}HP`, evidence: `${location} uses both ${distinctHorsepower.map(value => `${value}HP`).join(" and ")} within the same equipment row.`, requirement: "Use one coordinated equipment rating within the same schedule row.", details: `${location} contains conflicting horsepower references in its description/details/purpose cells.` }));
+    const horsepowerFields = [
+      { name: "equipment details", value: row.details },
+      { name: "purpose", value: row.purpose }
+    ].map(field => {
+      const distinct = new Map();
+      getPeerHorsepowerReferences(field.value).forEach(reference => {
+        if (!distinct.has(reference.key)) distinct.set(reference.key, reference);
+      });
+      return { ...field, references: Array.from(distinct.values()) };
+    });
+    // A component list can intentionally contain motors with different ratings
+    // (for example a 1HP curtain and multiple 1/2HP brushes). Only compare fields
+    // that each state one unambiguous rating for the scheduled item.
+    const coordinatedHorsepower = horsepowerFields
+      .filter(field => field.references.length === 1)
+      .map(field => ({ ...field, reference: field.references[0] }));
+    const distinctHorsepower = new Map();
+    coordinatedHorsepower.forEach(field => {
+      if (!distinctHorsepower.has(field.reference.key)) distinctHorsepower.set(field.reference.key, field);
+    });
+    if (distinctHorsepower.size > 1) {
+      const [leftRating, rightRating] = Array.from(distinctHorsepower.values());
+      findings.push(createPeerFinding({
+        ...common, severity: "Warning", issue: `Coordinate the horsepower references for ${row.tag}`,
+        listValue: leftRating.reference.shown, comparedValue: rightRating.reference.shown,
+        evidence: `${location} shows ${leftRating.reference.shown} in the ${leftRating.name} and ${rightRating.reference.shown} in the ${rightRating.name}.`,
+        requirement: "Use one coordinated equipment rating for the same scheduled item.",
+        details: `${location} contains conflicting horsepower references in separate schedule fields.`
+      }));
+    }
+    const servicePattern = /\b(FRESH\s*WATER|RECLAIM|RO)\s+(PUMP|TANK|RINSE ARCH|SYSTEM|CONTROL PANEL|CONSOLE|FILTER)\b/gi;
+    const getServiceReferences = value => Array.from(String(value || "").matchAll(servicePattern)).map(match => ({
+      service: match[1].replace(/\s+/g, "").toUpperCase() === "FRESHWATER" ? "FRESHWATER" : match[1].toUpperCase(),
+      equipment: match[2].toUpperCase(), shown: match[0].replace(/\s+/g, " ").trim()
+    }));
+    const descriptionServices = getServiceReferences(row.description), detailServices = getServiceReferences(row.details);
+    const descriptionServiceNames = new Set(descriptionServices.map(item => item.service));
+    const serviceConflict = descriptionServiceNames.size === 1 ? descriptionServices.flatMap(description => detailServices
+      .filter(detail => detail.equipment === description.equipment && detail.service !== description.service)
+      .map(detail => ({ description, detail })))[0] : null;
+    if (serviceConflict) findings.push(createPeerFinding({
+      ...common, severity: "Warning", issue: `Coordinate the water-service description for ${row.tag}`,
+      listValue: serviceConflict.description.shown, comparedValue: serviceConflict.detail.shown,
+      evidence: `${location} identifies ${row.tag} as "${serviceConflict.description.shown}" in the item description but "${serviceConflict.detail.shown}" in the equipment details.`,
+      requirement: "Use one coordinated water service for the same scheduled equipment item.",
+      details: `${location} assigns different freshwater, reclaim, or RO services to the same ${serviceConflict.description.equipment.toLowerCase()}.`
+    }));
+    const quantity = String(row.quantity || "").replace(/\s+/g, " ").trim();
+    const pluralQuantityMatch = quantity.match(/^1(?:\.0+)?\s+(SETS|PAIRS|UNITS|PIECES|TANKS|PUMPS|BLOWERS)\b/i);
+    if (pluralQuantityMatch) findings.push(createPeerFinding({
+      ...common, severity: "Warning", issue: `Correct the singular quantity wording for ${row.tag}`,
+      listValue: quantity, comparedValue: quantity.replace(new RegExp(`${pluralQuantityMatch[1]}\\b`, "i"), pluralQuantityMatch[1].replace(/S$/i, "")),
+      evidence: `${location} uses the singular count 1 with the plural quantity unit "${pluralQuantityMatch[1]}".`,
+      requirement: "Use singular quantity wording with a count of one.", details: `${location} should use a singular unit after quantity 1.`
+    }));
+    const pluralEquipment = String(row.description || "").match(/\b(TANKS|PUMPS|BLOWERS|DRYERS|COMPRESSORS|MOTORS|PANELS|SIGNS|MIRRORS|FILTERS|CONSOLES|ARCHES)\b/i)?.[1] || "";
+    const detailRepeatsPlural = pluralEquipment && new RegExp(`\\b${pluralEquipment}\\b`, "i").test(String(row.details || ""));
+    const purposeServices = new Set([
+      /\bFRESH(?:\s*WATER)?\b/i.test(String(row.purpose || "")) ? "FRESHWATER" : "",
+      /\bRECLAIM(?:ED)?\b/i.test(String(row.purpose || "")) ? "RECLAIM" : "",
+      /\bRO\b/i.test(String(row.purpose || "")) ? "RO" : ""
+    ].filter(Boolean));
+    if (/^1(?:\.0+)?$/.test(quantity) && detailRepeatsPlural && purposeServices.size >= 2) findings.push(createPeerFinding({
+      ...common, severity: "Manual Review", confidence: .62, verificationStatus: "possible",
+      verificationReason: "The source row is readable, but quantity 1 may represent one assembly containing multiple physical units.",
+      issue: `Confirm the scheduled quantity for ${row.tag}`, listValue: quantity, comparedValue: `Plural ${pluralEquipment.toLowerCase()} serving ${Array.from(purposeServices).join(" and ")}`,
+      evidence: `${location} schedules quantity 1 while both the item description and details use "${pluralEquipment}", and the purpose identifies ${Array.from(purposeServices).join(" and ")} services.`,
+      requirement: "Confirm whether the quantity represents one assembly or multiple physical units.",
+      details: `${location} contains a singular scheduled quantity with plural equipment wording and multiple named services.`
+    }));
     findings.push(...getPeerEquipmentSpecificationFindings(row, common));
     commonWordingCorrections.forEach(correction => {
       if (!correction.pattern.test(row.rawValues || "")) return;
@@ -409,7 +493,29 @@ function runPeerCadTableComparisonRules(tables = []) {
     if (inheritedContinuation) return;
     const ambiguousStructure = !String(left.directTag || "").trim() || !String(right.directTag || "").trim();
     const object = left.object || right.object || left.tag;
+    const leftDescription = cleanPeerCadCellValue(left.object || "");
+    const rightDescription = cleanPeerCadCellValue(right.object || "");
+    const duplicateTagRootCause = sameEquipmentTable
+      && leftDescription
+      && rightDescription
+      && normalizePeerEquipmentName(leftDescription) !== normalizePeerEquipmentName(rightDescription);
     const evidence = `Native CAD table ${left.table.title}, row ${Number(left.row) + 1}, ${left.heading} shows "${left.value}"; table ${right.table.title}, row ${Number(right.row) + 1}, ${right.heading} shows "${right.value}" for ${left.tag}.`;
+    if (duplicateTagRootCause) {
+      findings.push(createPeerFinding({
+        severity: "Error", equipmentTag: left.tag,
+        issue: `Coordinate duplicate equipment tag ${left.tag} used for different equipment names`,
+        listValue: `${leftDescription} - ${left.heading}: ${left.value}`,
+        comparedValue: `${rightDescription} - ${right.heading}: ${right.value}`,
+        details: `The duplicate tag is the root cause of the conflicting ${left.attribute}; coordinate the tag assignment and its associated row values together.`,
+        evidence: `Native CAD table ${left.table.title} assigns equipment tag ${left.tag} to "${leftDescription}" with ${left.heading} "${left.value}" and "${rightDescription}" with ${right.heading} "${right.value}".`,
+        requirement: "Assign a unique equipment tag to each distinct scheduled item and coordinate its associated row values.",
+        location: `Native CAD table ${left.table.handle}, rows ${Number(left.row) + 1} and ${Number(right.row) + 1}`,
+        page: Number(right.table.page || left.table.page || 0), relatedPages: [Number(left.table.page || 0), Number(right.table.page || 0)].filter(Boolean),
+        source: "cad-table-comparison", confidence: .99, verificationStatus: "verified",
+        evidenceType: "Objective visible mismatch", category: "Schedule or table", affectedObject: `Equipment tag ${left.tag}`
+      }));
+      return;
+    }
     findings.push(createPeerFinding({
       severity: "Warning", equipmentTag: left.tag, issue: `Coordinate the ${left.attribute} for ${object}`,
       listValue: left.value, comparedValue: right.value, details: evidence,
@@ -760,7 +866,14 @@ function selectPeerVerificationCandidates(items = [], targetMax = 12) {
       _peerSupported: isPeerEngineerFindingSupported(item, category),
       _peerIndex: index
     };
-  }).filter(item => Number(item.confidence || 0) >= 0.3);
+  }).filter(item => {
+    const confidence = Number(item.confidence || 0);
+    if (confidence >= 0.3) return true;
+    return item.verificationStatus === "possible"
+      && confidence >= 0.2
+      && Boolean(String(item.evidence || "").trim())
+      && Boolean(String(item.location || "").trim());
+  });
   const buckets = new Map();
   prepared.forEach(item => {
     const key = item.category || "General coordination";
@@ -971,6 +1084,7 @@ function isPeerFindingSelfNegating(item = {}) {
     .replace(/\s+/g, " ");
   const explicitNeutralConflict = hasPeerExplicitVisualComparison(item)
     && /\b(?:COORDINATE|VERIFY|CONFLICT|MISMATCH|INCONSISTENT|DIFFERENT)\b/i.test(String(item.issue || ""));
+  if (isPeerContradictoryMissingFlowFinding(item)) return true;
   if (/\b(?:label(?:s)?|callout(?:s)?|value(?:s)?|rating(?:s)?|dimension(?:s)?) (?:are|is|appear|appears) (?:fully )?(?:consistent|matching|identical|the same)\b/i.test(combined)) return true;
   if (/\bno (?:visible )?(?:conflict|mismatch|discrepancy|inconsistency)(?: exists| is shown| is visible)?\b/i.test(combined)) return true;
   if (/\b(?:not|isn't|is not) (?:a )?(?:(?:confirmed|supported|visible) )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not (?:visibly )?(?:show|confirm|support|establish) (?:a )?(?:defect|error|conflict|mismatch|discrepancy)\b|\bdoes not constitute (?:a )?(?:drawing |design )?(?:defect|error|conflict|mismatch|discrepancy)\b|\blacks? (?:confirmed|visible|source) evidence.{0,80}\b(?:defect|correction|conflict|mismatch|discrepancy)\b|\brequired correction was not confirmed\b|\bacceptable variation\b|\bno visible requirement\b.{0,160}\b(?:mandates?|requires?|establishes?)\b/i.test(combined) && !explicitNeutralConflict) return true;
@@ -1013,13 +1127,25 @@ function isPeerCrossScopeVisualComparison(item = {}) {
     .map(value => String(value || ""))
     .join(" ")
     .replace(/\s+/g, " ");
-  const buildings = new Set(Array.from(combined.matchAll(/\bBUILDING\s+([A-Z0-9]+)\b/gi)).map(match => match[1].toUpperCase()));
-  const bays = new Set(Array.from(combined.matchAll(/\bWASH\s+BAY\s+([A-Z0-9]+)\b/gi)).map(match => match[1].toUpperCase()));
+  const buildings = new Set(Array.from(combined.matchAll(/\bBUILDING(?:\s*[-/:]\s*|\s+)([A-Z0-9]+)\b/gi)).map(match => match[1].toUpperCase()));
+  const bays = new Set(Array.from(combined.matchAll(/\bWASH(?:\s*[-/:]\s*|\s+)BAY(?:\s*[-/:]\s*|\s+)([A-Z0-9]+)\b/gi)).map(match => match[1].toUpperCase()));
   const distinctScopes = buildings.size >= 2 || bays.size >= 2;
   if (!distinctScopes) return false;
   const treatsRepeatedTagAsSameObject = /\bSAME\s+(?:VALVE|COMPONENT|TAG|EQUIPMENT|DEVICE|INSTRUMENT|PUMP|TANK|PANEL)\b|\b(?:VALVE|COMPONENT|TAG|DEVICE|INSTRUMENT)\s+[A-Z]{1,8}[- ]?\d+[A-Z]?\b.{0,180}\b(?:ALSO|BOTH|REPEATED|DUPLICATE)\b/i.test(combined);
   const projectWideIdentity = /\b(?:PROJECT-WIDE|GLOBAL|SAME PHYSICAL|SHARED ACROSS (?:BUILDINGS|BAYS))\b/i.test(String(item.requirement || ""));
   return treatsRepeatedTagAsSameObject && !projectWideIdentity;
+}
+
+function isPeerContradictoryMissingFlowFinding(item = {}) {
+  const issue = `${item.issue || ""} ${item.details || ""}`.replace(/\s+/g, " ");
+  const evidence = String(item.evidence || "").replace(/\s+/g, " ");
+  const claimsMissingRouteOrControl = /\b(?:NO|NOT|MISSING|ABSENT|WITHOUT|LACKS?)\b.{0,140}\b(?:FLOW PATH|PRESSURE CONTROL|CONTROL DEVICE|VALVE|UNION|CONNECTION)\b/i.test(issue);
+  if (!claimsMissingRouteOrControl || !evidence) return false;
+  const componentTags = new Set(Array.from(evidence.matchAll(/\b(?:BV|UN|SV|CV|PR|PG)[- ]?\d+[A-Z]?\b/gi)).map(match => normalizePeerValue(match[0], "tag")));
+  const routeArrows = (evidence.match(/(?:→|->|â†’)/g) || []).length;
+  const namesBothRouteEnds = /\bFROM\s+[^.;]{1,100}\b(?:ARCH|TANK|PUMP|SYSTEM|MACHINE)\b/i.test(evidence)
+    || /\b(?:PUMP|TANK|SYSTEM|MACHINE)\b[^.;]{1,180}\b(?:ARCH|TANK|PUMP|SYSTEM|MACHINE)\b/i.test(evidence);
+  return (routeArrows >= 2 && componentTags.size >= 1) || (componentTags.size >= 2 && namesBothRouteEnds);
 }
 
 function isPeerFindingGrounded(item = {}) {
@@ -1031,12 +1157,14 @@ function isPeerFindingGrounded(item = {}) {
 }
 
 function arePeerFindingsSameCorrection(left = {}, right = {}) {
-  const leftCategory = getPeerFindingCategoryKey(left), rightCategory = getPeerFindingCategoryKey(right);
-  if (!leftCategory || leftCategory !== rightCategory) return false;
   const leftTag = normalizePeerValue(left.equipmentTag || "", "tag"), rightTag = normalizePeerValue(right.equipmentTag || "", "tag");
   // Explicitly different equipment tags are different review targets. Similar
   // correction wording or a shared table location must never collapse them.
   if (leftTag && rightTag && leftTag !== rightTag) return false;
+  const duplicateTagCorrection = item => /\b(?:DUPLICATE EQUIPMENT TAG|SAME EQUIPMENT TAG USES DIFFERENT EQUIPMENT NAMES|CONFLICTING CAD TABLE DESCRIPTIONS)\b/i.test(String(item.issue || ""));
+  if (leftTag && leftTag === rightTag && duplicateTagCorrection(left) && duplicateTagCorrection(right)) return true;
+  const leftCategory = getPeerFindingCategoryKey(left), rightCategory = getPeerFindingCategoryKey(right);
+  if (!leftCategory || leftCategory !== rightCategory) return false;
   const tableRow = item => Number(String(getPeerFindingLocation(item)).match(/\b(?:TABLE|LIST) ROW\s+(\d+)\b/i)?.[1] || 0);
   const leftTableRow = tableRow(left), rightTableRow = tableRow(right);
   if (leftTableRow && rightTableRow && leftTableRow !== rightTableRow) return false;
@@ -1196,6 +1324,64 @@ function getPeerLedgerFindingCategory(attribute = "") {
 function runPeerEvidenceLedgerRules(facts = []) {
   const reliable = facts.filter(fact => Number(fact.confidence || 0) >= 0.72 && String(fact.attribute || "").trim() && String(fact.value || "").trim() && String(fact.location || "").trim());
   const findings = [], seen = new Set();
+  const duplicateEquipmentTags = new Set();
+  const equipmentFactsByTag = new Map();
+  reliable.filter(fact => /\bEQUIPMENT LIST\b/i.test(String(fact.sourceType || ""))).forEach(fact => {
+    const tag = normalizePeerValue(fact.tag || "", "tag");
+    if (!tag) return;
+    if (!equipmentFactsByTag.has(tag)) equipmentFactsByTag.set(tag, []);
+    equipmentFactsByTag.get(tag).push(fact);
+  });
+  equipmentFactsByTag.forEach(tagFacts => {
+    const rows = new Map();
+    tagFacts.forEach(fact => {
+      const rowKey = `${Number(fact.page || 0)}|${normalizePeerLedgerLocation(fact.location)}`;
+      if (!rows.has(rowKey)) rows.set(rowKey, { page: Number(fact.page || 0), location: fact.location, object: fact.object, facts: [] });
+      const row = rows.get(rowKey);
+      if (!row.object && fact.object) row.object = fact.object;
+      row.facts.push(fact);
+    });
+    const distinctRows = Array.from(rows.values()).filter(row => String(row.object || "").trim());
+    const descriptions = new Map();
+    distinctRows.forEach(row => {
+      const normalized = normalizePeerEquipmentName(row.object);
+      if (normalized && !descriptions.has(normalized)) descriptions.set(normalized, row);
+    });
+    if (descriptions.size <= 1) return;
+    const tag = String(tagFacts[0].tag || "").trim();
+    duplicateEquipmentTags.add(normalizePeerValue(tag, "tag"));
+    const representativeRows = Array.from(descriptions.values());
+    const associatedConflicts = [];
+    const attributes = new Set(tagFacts.map(fact => String(fact.attribute || "")).filter(attribute => attribute && attribute !== "description"));
+    attributes.forEach(attribute => {
+      const values = representativeRows.map(row => row.facts.find(fact => fact.attribute === attribute)?.value || "").filter(Boolean);
+      const distinctValues = Array.from(new Map(values.map(value => [normalizePeerLedgerValue(value, attribute), value])).values());
+      if (distinctValues.length > 1) associatedConflicts.push({ attribute, values: distinctValues });
+    });
+    const rowLabel = row => {
+      const details = associatedConflicts.map(conflict => {
+        const value = row.facts.find(fact => fact.attribute === conflict.attribute)?.value;
+        return value ? `${conflict.attribute}: ${value}` : "";
+      }).filter(Boolean);
+      return `${row.object}${details.length ? ` - ${details.join(", ")}` : ""}`;
+    };
+    const pages = Array.from(new Set(representativeRows.map(row => row.page).filter(Boolean))).sort((left, right) => left - right);
+    const conflictEvidence = associatedConflicts.length
+      ? ` The rows also show ${associatedConflicts.map(conflict => `different ${conflict.attribute} values ${conflict.values.map(value => `"${value}"`).join(" and ")}`).join("; ")}.`
+      : "";
+    findings.push(createPeerFinding({
+      severity: "Error", equipmentTag: tag,
+      issue: `Coordinate duplicate equipment tag ${tag} used for different equipment names`,
+      annotationText: `COORDINATE DUPLICATE EQUIPMENT TAG ${tag.toUpperCase()} USED FOR DIFFERENT EQUIPMENT NAMES.`,
+      listValue: rowLabel(representativeRows[0]), comparedValue: representativeRows.slice(1).map(rowLabel).join("; "),
+      details: `Equipment tag ${tag} is assigned to distinct Equipment List rows.${conflictEvidence}`,
+      page: pages[0] || 0, relatedPages: pages.slice(1), source: "evidence-ledger", confidence: Math.min(...tagFacts.map(fact => Number(fact.confidence))),
+      verificationStatus: "verified", category: "Schedule or table", affectedObject: `Equipment tag ${tag}`,
+      evidence: `Equipment tag ${tag} is assigned to ${representativeRows.map(row => `"${row.object}"`).join(" and ")}.${conflictEvidence}`,
+      requirement: "Assign a unique equipment tag to each distinct scheduled item and coordinate its associated row values.",
+      location: representativeRows.map(row => row.location).join("; "), evidenceType: "Objective visible mismatch"
+    }));
+  });
   const factsByAttribute = new Map();
   reliable.forEach(fact => {
     const attribute = String(fact.attribute || "");
@@ -1207,6 +1393,12 @@ function runPeerEvidenceLedgerRules(facts = []) {
       for (let rightIndex = leftIndex + 1; rightIndex < attributeFacts.length; rightIndex += 1) {
         const left = attributeFacts[leftIndex], right = attributeFacts[rightIndex];
         if (!peerLedgerFactsReferToSameObject(left, right) || !peerLedgerValuesConflict(left, right)) continue;
+        const sharedEquipmentTag = normalizePeerValue(left.tag || "", "tag");
+        if (sharedEquipmentTag
+          && sharedEquipmentTag === normalizePeerValue(right.tag || "", "tag")
+          && duplicateEquipmentTags.has(sharedEquipmentTag)
+          && /\bEQUIPMENT LIST\b/i.test(String(left.sourceType || ""))
+          && /\bEQUIPMENT LIST\b/i.test(String(right.sourceType || ""))) continue;
         const leftSource = `${left.page}|${normalizePeerValue(left.sourceType)}|${normalizePeerLedgerLocation(left.location)}`;
         const rightSource = `${right.page}|${normalizePeerValue(right.sourceType)}|${normalizePeerLedgerLocation(right.location)}`;
         if (leftSource === rightSource) continue;
@@ -1340,11 +1532,17 @@ function runPeerEquipmentNamingRules(rows = []) {
     byTag.get(tag).push(row);
   });
   byTag.forEach(group => {
-    const descriptions = new Set(group.map(row => normalizePeerEquipmentName(row.description)).filter(Boolean));
-    if (descriptions.size <= 1) return;
-    group.forEach(row => findings.push(createPeerFinding({
-      severity: "Error", equipmentTag: row.tag, issue: "Potential inconsistency: the same equipment tag uses different equipment names", listValue: row.description, page: row.page
-    })));
+    const descriptions = Array.from(new Map(group.map(row => [normalizePeerEquipmentName(row.description), String(row.description || "").trim()])).entries())
+      .filter(([normalized]) => normalized).map(([, shown]) => shown);
+    if (descriptions.length <= 1) return;
+    const pages = Array.from(new Set(group.map(row => Number(row.page || 0)).filter(Boolean)));
+    findings.push(createPeerFinding({
+      severity: "Error", equipmentTag: group[0].tag, issue: `Coordinate duplicate equipment tag ${group[0].tag} used for different equipment names`,
+      listValue: descriptions[0], comparedValue: descriptions.slice(1).join("; "), page: pages[0] || 0, relatedPages: pages,
+      verificationStatus: "verified", category: "Schedule or table", affectedObject: `Equipment tag ${group[0].tag}`,
+      evidence: `Equipment tag ${group[0].tag} is assigned to ${descriptions.map(value => `"${value}"`).join(" and ")}.`,
+      requirement: "Assign a unique equipment tag to each distinct scheduled item.", location: pages.length ? `Equipment List, page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}` : "Native Equipment List"
+    }));
   });
   return findings;
 }
@@ -1401,10 +1599,16 @@ function runPeerEquipmentRules(rows = []) {
       findings.push(createPeerFinding({ severity: "Error", equipmentTag: row.tag, issue: `Potential inconsistency: ${label.toLowerCase()} mismatch`, listValue: row[field], comparedValue: comparison[field], page: row.page }));
     });
   });
-  findDuplicatePeerValues(rows.map(row => row.tag), value => normalizePeerValue(value, "tag")).forEach(indices => indices.forEach(index => findings.push(createPeerFinding({
-    severity: "Error", equipmentTag: rows[index].tag, issue: "Potential inconsistency: duplicate equipment tag", page: rows[index].page
-  }))));
+  findDuplicatePeerValues(rows.map(row => row.tag), value => normalizePeerValue(value, "tag")).forEach(indices => {
+    const group = indices.map(index => rows[index]), pages = Array.from(new Set(group.map(row => Number(row.page || 0)).filter(Boolean)));
+    findings.push(createPeerFinding({
+      severity: "Error", equipmentTag: group[0].tag, issue: "Potential inconsistency: duplicate equipment tag",
+      listValue: String(group.length), comparedValue: "1 unique use", page: pages[0] || 0, relatedPages: pages,
+      evidence: `Equipment tag ${group[0].tag} appears ${group.length} times in the extracted equipment list.`,
+      location: pages.length ? `Equipment List, page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}` : "Native Equipment List"
+    }));
+  });
   return findings;
 }
 
-if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, runPeerCadTableQualityRules, runPeerCadTextSequenceRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, hasPeerExplicitVisualComparison, isPeerNonConflictDisclaimerFinding, isPeerCrossScopeVisualComparison, isPeerFindingSelfNegating, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };
+if (typeof module !== "undefined") module.exports = { PEER_REVIEW_TYPES, PEER_PAGE_CATEGORIES, PEER_ENGINEER_FINDING_CATEGORIES, normalizePeerHeader, mapPeerEquipmentHeader, normalizePeerValue, cleanPeerCadCellValue, getPeerCadCanonicalAttribute, getPeerCadTagNamespace, structurePeerCadTable, isPeerCadEquipmentTable, extractPeerCadEquipmentRows, runPeerCadEquipmentQualityRules, runPeerCadTableComparisonRules, runPeerCadTableQualityRules, runPeerCadTextSequenceRules, extractPeerCadEvidenceFacts, extractPeerCadMainEquipmentCallouts, normalizePeerDrawingIdentifier, normalizePeerEquipmentName, getPeerEquipmentShortDescription, peerEquipmentNamesEquivalent, isPeerMajorEquipmentRow, isPeerMarkupColor, peerValuesEquivalent, findDuplicatePeerValues, getPeerCoverageCompletionState, inferPeerEngineerFindingCategory, getPeerEngineerRedlineIssue, getPeerDimensionLabelTarget, selectPeerEngineerFindings, selectPeerVerificationCandidates, selectPeerSourceCheckedFindings, getPeerMissingEngineerReviewSlots, buildPeerSameProjectReviewExampleFindings, isPeerVerificationSelfRejecting, applyPeerEngineerVerifications, normalizePeerFindingPhrase, peerFindingTokenSimilarity, getPeerFindingAffectedObject, getPeerFindingLocation, getPeerFindingEvidence, getPeerFindingCategoryKey, hasPeerExplicitVisualComparison, isPeerNonConflictDisclaimerFinding, isPeerCrossScopeVisualComparison, isPeerContradictoryMissingFlowFinding, isPeerFindingSelfNegating, isPeerFindingGrounded, arePeerFindingsSameCorrection, mergePeerDuplicateFindings, prioritizePeerFindings, normalizePeerLedgerValue, peerLedgerFactsReferToSameObject, peerLedgerValuesConflict, runPeerEvidenceLedgerRules, runPeerNamingConventionRules, runPeerEquipmentNamingRules, runPeerInitialRules, runPeerEquipmentRules };

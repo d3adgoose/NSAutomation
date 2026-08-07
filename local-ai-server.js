@@ -79,20 +79,34 @@ async function authenticatedUser(req) {
   return user;
 }
 
-async function selectLocalAiModel() {
+async function selectLocalAiModel(requestedTier = "fast") {
   const now = Date.now();
-  if (selectedModelCache?.expiresAt > now) return selectedModelCache.value;
-  const response = await fetch(`${OLLAMA_URL}/api/tags`);
-  if (!response.ok) throw new Error("Ollama is not available.");
-  const data = await response.json();
-  const installed = new Set((data.models || []).flatMap(item => [item.name, item.model]).filter(Boolean));
-  const selected = installed.has(FAST_MODEL)
-    ? { ready: true, model: FAST_MODEL, preferred: true }
-    : installed.has(FALLBACK_MODEL)
-      ? { ready: true, model: FALLBACK_MODEL, preferred: false }
-      : { ready: false, model: FAST_MODEL, preferred: true };
-  selectedModelCache = { value: selected, expiresAt: now + (selected.ready ? SELECTED_MODEL_CACHE_MS : 3000) };
-  return selected;
+  let installed;
+  if (selectedModelCache?.expiresAt > now) {
+    installed = selectedModelCache.value;
+  } else {
+    const response = await fetch(`${OLLAMA_URL}/api/tags`);
+    if (!response.ok) throw new Error("Ollama is not available.");
+    const data = await response.json();
+    installed = new Set((data.models || []).flatMap(item => [item.name, item.model]).filter(Boolean));
+    selectedModelCache = { value: installed, expiresAt: now + (installed.size ? SELECTED_MODEL_CACHE_MS : 3000) };
+  }
+  const wantsQuality = requestedTier === "quality";
+  const qualityReady = installed.has(FALLBACK_MODEL);
+  const fastReady = installed.has(FAST_MODEL);
+  const model = wantsQuality && qualityReady ? FALLBACK_MODEL : fastReady ? FAST_MODEL : qualityReady ? FALLBACK_MODEL : FAST_MODEL;
+  const tier = model === FALLBACK_MODEL ? "quality" : "fast";
+  return {
+    ready: fastReady || qualityReady,
+    model,
+    tier,
+    requestedTier: wantsQuality ? "quality" : "fast",
+    preferred: tier === "fast",
+    usedFallback: wantsQuality && !qualityReady && fastReady,
+    fastModel: fastReady ? FAST_MODEL : "",
+    qualityModel: qualityReady ? FALLBACK_MODEL : "",
+    qualityReady
+  };
 }
 
 function warmLocalAiModel(model) {
@@ -364,7 +378,7 @@ async function handleAi(req, res) {
   }
 
   if (req.method === "GET") {
-    const selected = await selectLocalAiModel();
+    const selected = await selectLocalAiModel("fast");
     let loaded = false;
     try {
       const runningResponse = await fetch(`${OLLAMA_URL}/api/ps`);
@@ -378,7 +392,8 @@ async function handleAi(req, res) {
   if (req.method !== "POST") return send(res, 405, { error: "Method not allowed." });
   const body = await readJson(req);
   if (!Array.isArray(body.messages) || !body.messages.length) return send(res, 400, { error: "No analysis content was provided." });
-  const selected = await selectLocalAiModel();
+  const requestedTier = body.modelTier === "quality" ? "quality" : "fast";
+  const selected = await selectLocalAiModel(requestedTier);
   if (!selected.ready) return send(res, 503, { error: `Install ${FAST_MODEL} in Ollama before using Local AI.` });
 
   const ollamaController = new AbortController();
@@ -390,6 +405,8 @@ async function handleAi(req, res) {
   res.once("close", cancelOllamaIfBrowserLeft);
   let response;
   try {
+    const maximumContext = selected.tier === "quality" ? 12288 : 24576;
+    const maximumPrediction = selected.tier === "quality" ? 5000 : 8192;
     response = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
       signal: ollamaController.signal,
@@ -404,8 +421,8 @@ async function handleAi(req, res) {
         options: {
           temperature: 0.1,
           seed: 7 + Math.max(0, Number(body.retryAttempt) || 0),
-          num_ctx: Math.min(24576, Math.max(8192, Number(body.numCtx) || 16384)),
-          num_predict: Math.min(8192, Math.max(1024, Number(body.maxTokens) || 4096))
+          num_ctx: Math.min(maximumContext, Math.max(8192, Number(body.numCtx) || (selected.tier === "quality" ? 12288 : 16384))),
+          num_predict: Math.min(maximumPrediction, Math.max(1024, Number(body.maxTokens) || 4096))
         }
       })
     });
@@ -429,7 +446,14 @@ async function handleAi(req, res) {
     throw Object.assign(new Error(`Ollama returned ${response.status}${detail ? `: ${detail}` : "."}`), { status: 502 });
   }
   const result = await response.json();
-  send(res, 200, { model: selected.model, user: user.email || user.id, content: result.message?.content || "" });
+  send(res, 200, {
+    model: selected.model,
+    modelTier: selected.tier,
+    requestedModelTier: selected.requestedTier,
+    usedModelFallback: selected.usedFallback,
+    user: user.email || user.id,
+    content: result.message?.content || ""
+  });
 }
 
 function serveFile(req, res) {
@@ -466,6 +490,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`N/S Automation is available at http://127.0.0.1:${PORT}`);
-  console.log(`Preferred Local AI model: ${FAST_MODEL}`);
-  console.log(`Fallback Local AI model: ${FALLBACK_MODEL}`);
+  console.log(`Fast Local AI model: ${FAST_MODEL}`);
+  console.log(`Quality Local AI model: ${FALLBACK_MODEL}`);
 });

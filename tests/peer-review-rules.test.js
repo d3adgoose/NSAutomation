@@ -145,6 +145,28 @@ assert(reusableSpecificationFindings.some(item => item.issue.includes("mounting 
 assert(reusableSpecificationFindings.some(item => item.issue.includes("left/right quantity allocation") && item.equipmentTag === "23A"));
 assert(!reusableSpecificationFindings.some(item => item.equipmentTag === "24A"), "Matching bracket lengths and complete left/right allocations must not become findings");
 
+const reusable2830QualityFindings = rules.runPeerCadEquipmentQualityRules([
+  { ...nativeEquipmentRows[0], page: 1, nativeRowNumber: 22, tag: "12", description: "5HP FRESHWATER PUMP", quantity: "1", details: "5HP RECLAIM PUMP: 5HP PUMP WITH TEFC MOTOR", purpose: "TO PUMP FRESHWATER TO FRESHWATER RINSE ARCH", rawValues: "" },
+  { ...nativeEquipmentRows[0], page: 1, nativeRowNumber: 17, tag: "7C", description: "5HP RECLAIM SYSTEM", quantity: "1 SETS", details: "SUMP PUMP SYSTEM", purpose: "PUMPS RECLAIM WATER", rawValues: "" },
+  { ...nativeEquipmentRows[0], page: 1, nativeRowNumber: 20, tag: "9", description: "750 GAL. TANKS", quantity: "1", details: "750 GALLON WATER TANKS", purpose: "TO STORE FRESH AND RECLAIM WATER", rawValues: "" }
+]);
+assert.strictEqual(reusable2830QualityFindings.length, 3, "Generic equipment quality rules should find a same-row water-service conflict, singular quantity grammar, and a supported plural-equipment quantity prompt");
+assert(reusable2830QualityFindings.some(item => item.equipmentTag === "12" && item.issue.includes("water-service description") && item.listValue.includes("FRESHWATER PUMP") && item.comparedValue.includes("RECLAIM PUMP")));
+assert(reusable2830QualityFindings.some(item => item.equipmentTag === "7C" && item.issue.includes("singular quantity wording") && item.listValue === "1 SETS" && item.comparedValue === "1 SET"));
+assert(reusable2830QualityFindings.some(item => item.equipmentTag === "9" && item.verificationStatus === "possible" && item.confidence === .62));
+const fractionalHorsepowerFindings = rules.runPeerCadEquipmentQualityRules([
+  { ...nativeEquipmentRows[0], page: 1, tag: "1A", description: "BRUSH SYSTEM", quantity: "1", details: "MITTER CURTAIN 1HP; ROCKER PANEL BRUSHES 1/2HP; WRAP-AROUND BRUSHES 1/2HP", purpose: "WASH VEHICLES", rawValues: "" },
+  { ...nativeEquipmentRows[0], page: 1, tag: "2A", description: "PUMP", quantity: "1", details: "1/2HP PUMP", purpose: "0.5HP PUMP CONTROLS", rawValues: "" },
+  { ...nativeEquipmentRows[0], page: 1, tag: "3A", description: "PUMP", quantity: "1", details: "1/2HP PUMP", purpose: "3/4HP PUMP CONTROLS", rawValues: "" }
+]);
+assert(!fractionalHorsepowerFindings.some(item => item.equipmentTag === "1A" && item.issue.includes("horsepower")), "Different motor sizes within one assembly component list must not become a horsepower conflict");
+assert(!fractionalHorsepowerFindings.some(item => item.equipmentTag === "2A" && item.issue.includes("horsepower")), "Equivalent fractional and decimal horsepower values must compare as the same rating");
+assert(fractionalHorsepowerFindings.some(item => item.equipmentTag === "3A" && item.listValue === "1/2HP" && item.comparedValue === "3/4HP"), "True cross-field fractional horsepower conflicts must retain the complete fractions");
+assert.strictEqual(rules.runPeerCadEquipmentQualityRules([
+  { ...nativeEquipmentRows[0], page: 1, tag: "11", description: "FLOAT SWITCHES", quantity: "1", details: "NORMALLY CLOSED FLOAT SWITCH", purpose: "MAINTAINS WATER LEVELS", rawValues: "" },
+  { ...nativeEquipmentRows[0], page: 1, tag: "20", description: "FRESHWATER / RECLAIM TANK SYSTEM", quantity: "1 SET", details: "DUAL-SERVICE TANK SYSTEM", purpose: "STORES FRESH AND RECLAIM WATER", rawValues: "" }
+]).length, 0, "Assembly quantities and descriptions that do not repeat a plural physical-equipment noun must remain valid");
+
 const multirowEquipmentTable = rules.structurePeerCadTable({
   handle: "EQ-MULTI", page: 1, cells: [
     { row: 0, column: 0, value: "EQUIPMENT LIST - TO BE SUPPLIED BY NS" },
@@ -158,6 +180,35 @@ const multirowEquipmentTable = rules.structurePeerCadTable({
   ]
 });
 assert.strictEqual(rules.runPeerCadTableComparisonRules([multirowEquipmentTable]).length, 0, "Sibling component lines beneath one merged equipment tag must not be treated as conflicting repeated values");
+
+const duplicateTagPartNumberTable = rules.structurePeerCadTable({
+  handle: "EQ-DUPLICATE-TAG", page: 1, cells: [
+    { row: 0, column: 0, value: "EQUIPMENT LIST - TO BE SUPPLIED BY NS" },
+    { row: 1, column: 0, value: "ITEM #" }, { row: 1, column: 1, value: "PART / ITEM DESCRIPTION" },
+    { row: 1, column: 2, value: "SUB ASM ITEM #" }, { row: 1, column: 3, value: "SUB ASM NS PART #" },
+    { row: 2, column: 0, value: "14" }, { row: 2, column: 1, value: "WASH SOAP" },
+    { row: 2, column: 2, value: "14" }, { row: 2, column: 3, value: "6000-0017" },
+    { row: 3, column: 0, value: "14" }, { row: 3, column: 1, value: "RINSE AID" },
+    { row: 3, column: 2, value: "14" }, { row: 3, column: 3, value: "6000-0008" }
+  ]
+});
+const duplicateTagPartNumberFindings = rules.runPeerCadTableComparisonRules([duplicateTagPartNumberTable]);
+assert.strictEqual(duplicateTagPartNumberFindings.length, 1);
+assert(duplicateTagPartNumberFindings[0].issue.includes("duplicate equipment tag 14"), "Different part numbers on differently named rows with one tag should report the duplicate-tag root cause");
+assert(duplicateTagPartNumberFindings[0].evidence.includes("WASH SOAP") && duplicateTagPartNumberFindings[0].evidence.includes("RINSE AID") && duplicateTagPartNumberFindings[0].evidence.includes("6000-0017") && duplicateTagPartNumberFindings[0].evidence.includes("6000-0008"));
+const consolidatedDuplicateTagFindings = rules.prioritizePeerFindings([
+  ...duplicateTagPartNumberFindings,
+  ...rules.runPeerEquipmentRules([
+    { tag: "14", description: "WASH SOAP", page: 1, presentColumns: ["tag", "description"] },
+    { tag: "14", description: "RINSE AID", page: 1, presentColumns: ["tag", "description"] }
+  ]),
+  ...rules.runPeerEquipmentNamingRules([
+    { tag: "14", description: "WASH SOAP", page: 1 },
+    { tag: "14", description: "RINSE AID", page: 1 }
+  ])
+], 36);
+assert.strictEqual(consolidatedDuplicateTagFindings.length, 1, "Duplicate tag, conflicting name, and associated part-number evidence should consolidate into one correction");
+assert(consolidatedDuplicateTagFindings[0].evidence.includes("6000-0017") && consolidatedDuplicateTagFindings[0].evidence.includes("6000-0008"), "The consolidated finding should keep the richer associated part-number evidence");
 
 const componentPlaceholderTable = rules.structurePeerCadTable({
   handle: "COMPONENT-PLACEHOLDERS", page: 2, cells: [
@@ -232,6 +283,28 @@ assert(evidenceLedgerFindings.some(item => item.issue.includes("description") &&
 assert(evidenceLedgerFindings.some(item => item.category === "Piping specification"));
 assert(evidenceLedgerFindings.some(item => item.category === "Electrical coordination"));
 
+const duplicateEquipmentLedgerFindings = rules.runPeerEvidenceLedgerRules([
+  { page: 1, sourceType: "Equipment List", tag: "14", objectIdentifier: "14", object: "WASH SOAP (NOT SHOWN IN LAYOUT)", attribute: "description", value: "WASH SOAP (NOT SHOWN IN LAYOUT)", location: "Equipment List row 31", confidence: .99 },
+  { page: 1, sourceType: "Equipment List", tag: "14", objectIdentifier: "14", object: "WASH SOAP (NOT SHOWN IN LAYOUT)", attribute: "part number", value: "6000-0017", location: "Equipment List row 31", confidence: .99 },
+  { page: 1, sourceType: "Equipment List", tag: "14", objectIdentifier: "14", object: "RINSE AID (NOT SHOWN IN LAYOUT)", attribute: "description", value: "RINSE AID (NOT SHOWN IN LAYOUT)", location: "Equipment List row 32", confidence: .99 },
+  { page: 1, sourceType: "Equipment List", tag: "14", objectIdentifier: "14", object: "RINSE AID (NOT SHOWN IN LAYOUT)", attribute: "part number", value: "6000-0008", location: "Equipment List row 32", confidence: .99 }
+]);
+assert.strictEqual(duplicateEquipmentLedgerFindings.length, 1, "Evidence-ledger attribute conflicts under differently named rows with one tag should consolidate at their duplicate-tag root cause");
+assert(duplicateEquipmentLedgerFindings[0].issue.includes("duplicate equipment tag 14"));
+assert(duplicateEquipmentLedgerFindings[0].evidence.includes("WASH SOAP") && duplicateEquipmentLedgerFindings[0].evidence.includes("RINSE AID"));
+assert(duplicateEquipmentLedgerFindings[0].evidence.includes("6000-0017") && duplicateEquipmentLedgerFindings[0].evidence.includes("6000-0008"), "The consolidated evidence-ledger finding must retain the conflicting associated part numbers");
+assert.strictEqual(rules.prioritizePeerFindings([
+  ...duplicateEquipmentLedgerFindings,
+  ...rules.runPeerEquipmentRules([
+    { tag: "14", description: "WASH SOAP (NOT SHOWN IN LAYOUT)", page: 1, presentColumns: ["tag", "description"] },
+    { tag: "14", description: "RINSE AID (NOT SHOWN IN LAYOUT)", page: 1, presentColumns: ["tag", "description"] }
+  ]),
+  ...rules.runPeerEquipmentNamingRules([
+    { tag: "14", description: "WASH SOAP (NOT SHOWN IN LAYOUT)", page: 1 },
+    { tag: "14", description: "RINSE AID (NOT SHOWN IN LAYOUT)", page: 1 }
+  ])
+], 36).length, 1, "The final review should show one tag-14 root-cause finding across ledger, duplicate, and naming rules");
+
 const unrelatedLedgerFindings = rules.runPeerEvidenceLedgerRules([
   { page: 1, sourceType: "Plan", tag: "CA3", object: "Wash bay", attribute: "length", value: `50'-0"`, location: "Building A CA3", confidence: .98 },
   { page: 1, sourceType: "Plan", tag: "CA1", object: "Wash bay", attribute: "length", value: `52'-6"`, location: "Building A CA1", confidence: .98 },
@@ -293,6 +366,7 @@ const equipment = rules.runPeerEquipmentRules([
 ]);
 assert(equipment.some(item => item.issue.includes("duplicate equipment tag")));
 assert(equipment.some(item => item.issue.includes("missing equipment tag")));
+assert.strictEqual(equipment.filter(item => item.issue.includes("duplicate equipment tag")).length, 1, "One duplicate-tag group should create one finding instead of one finding per row");
 assert(equipment.every(item => item.issue.startsWith("Potential inconsistency")));
 
 const initial = rules.runPeerInitialRules([{ number: 1, text: "", blank: true, drawingNumber: "", projectNumber: "", pageNumberDetected: false, fingerprint: "" }]);
@@ -338,7 +412,15 @@ const equipmentNames = rules.runPeerEquipmentNamingRules([
   { tag: "P 101", description: "5 HP Reclaim Pump", page: 2 },
   { tag: "P-101", description: "10HP Reclaim Pump", page: 3 }
 ]);
-assert(equipmentNames.some(item => item.issue.includes("same equipment tag uses different equipment names")));
+assert.strictEqual(equipmentNames.length, 1, "Different descriptions under one normalized tag should be consolidated into one finding");
+assert(equipmentNames[0].issue.includes("duplicate equipment tag"));
+assert(/5\s*HP/.test(equipmentNames[0].listValue) && /10\s*HP/.test(equipmentNames[0].comparedValue));
+const mergedEquipmentTagFindings = rules.prioritizePeerFindings([
+  ...equipment.filter(item => rules.normalizePeerValue(item.equipmentTag, "tag") === "P101"),
+  ...equipmentNames
+], 36);
+assert.strictEqual(mergedEquipmentTagFindings.length, 1, "Generic duplicate-tag and conflicting-name rules should merge into one correction for the same tag");
+assert(/10\s*HP/.test(mergedEquipmentTagFindings[0].comparedValue), "The evidence-rich conflicting-name finding should win duplicate merging");
 
 [
   ["7A", "PRESSURE GAUGE, LIQUID-FILLED (0-100 PSI) SET TO 60 PSI"],
@@ -494,6 +576,25 @@ assert.strictEqual(rules.isPeerCrossScopeVisualComparison(crossBuildingTagCompar
 assert.strictEqual(rules.isPeerFindingGrounded(crossBuildingTagComparison), false);
 assert.strictEqual(rules.isPeerCrossScopeVisualComparison({ ...crossBuildingTagComparison, requirement: "Project-wide tags identify the SAME PHYSICAL valve shared across buildings" }), false, "An explicit project-wide identity requirement may establish a cross-scope comparison");
 
+const hyphenatedBuildingTankComparison = {
+  source: "visual-ai", page: 3, affectedObject: "4000 GAL RECLAIM TANK", location: "Building-A schematic; Building-B schematic",
+  issue: "Valve configuration discrepancy between schematic and callout.",
+  evidence: "In Building-A, the 4000 GAL RECLAIM TANK has valve BV1 and TBS (X3). In contrast, in Building-B, the same tank type has a different valve configuration and no visible TBS (X3) callout.",
+  requirement: "Coordinate repeated drawing information", evidenceType: "Objective visible mismatch", confidence: .7
+};
+assert.strictEqual(rules.isPeerCrossScopeVisualComparison(hyphenatedBuildingTankComparison), true, "Hyphenated building labels must remain separate object scopes; matching tank type is not shared physical identity");
+assert.strictEqual(rules.isPeerFindingGrounded(hyphenatedBuildingTankComparison), false);
+
+const contradictoryMissingFlowFinding = {
+  source: "visual-ai", page: 3, affectedObject: "RO rinse arch", location: "Building C, Wash Bay 2",
+  issue: "Verify - RO RINSE ARCH has no visible flow path or pressure control device for this branch.",
+  evidence: "FROM RO PUMP 2 → BV14 → UN7 → SV4 → RO RINSE ARCH",
+  requirement: "Engineer confirmation required.", evidenceType: "Objective visible mismatch", confidence: .25
+};
+assert.strictEqual(rules.isPeerContradictoryMissingFlowFinding(contradictoryMissingFlowFinding), true, "A missing-flow claim must reject itself when its evidence supplies a connected component route");
+assert.strictEqual(rules.isPeerFindingSelfNegating(contradictoryMissingFlowFinding), true);
+assert.strictEqual(rules.isPeerFindingGrounded(contradictoryMissingFlowFinding), false);
+
 const unsupportedDrainCandidate = {
   source: "visual-ai", page: 2, location: "Flow layout", confidence: .35,
   category: "Drain or overflow", affectedObject: "Reclaim tank", issue: "ADD DRAIN",
@@ -523,6 +624,14 @@ const broadVerificationCandidates = rules.selectPeerVerificationCandidates([
 assert(broadVerificationCandidates.length >= 10 && broadVerificationCandidates.length <= 12, "Maximum Sweep should source-verify a broad discipline-balanced candidate set after deduplication");
 assert(broadVerificationCandidates.some(item => item.category === "Electrical coordination"));
 assert(broadVerificationCandidates.some(item => item.category === "Schedule or table"));
+const lowConfidenceVerificationLead = rules.selectPeerVerificationCandidates([{
+  source: "visual-ai", page: 1, category: "Equipment arrangement", affectedObject: "reclaim pump",
+  issue: "Verify reclaim-pump access", evidence: "The reclaim pump is visibly placed against the tank outline.",
+  requirement: "Engineer confirmation required", location: "Page 1 equipment plan, beside reclaim tank", confidence: .25,
+  verificationStatus: "possible", verificationReason: "The exact object and condition are visible, but the arrangement requirement needs source verification."
+}], 12);
+assert.strictEqual(lowConfidenceVerificationLead.length, 1, "A specific evidence-located low-confidence visual lead should reach source verification instead of being discarded before verification");
+assert.strictEqual(rules.selectPeerVerificationCandidates([{ ...lowConfidenceVerificationLead[0], confidence: .1 }], 12).length, 0, "Highly speculative visual leads must remain below the source-verification threshold");
 
 const unrelatedDrainListCandidate = { source: "visual-ai", page: 2, category: "Drain or overflow", affectedObject: "drain curtains connections", issue: "ADD DRAIN ROUTE", evidence: "Drain curtains are shown at the rinse arch.", requirement: "Coordinate repeated drawing information", location: "Elevation", confidence: .55 };
 assert.strictEqual(rules.applyPeerEngineerVerifications([unrelatedDrainListCandidate], [{
@@ -605,7 +714,7 @@ assert(peerReviewSource.includes("remaining detail-expansion batches will be ski
 assert(peerReviewSource.includes("remaining missing-target batches will be skipped"));
 assert(peerReviewSource.includes("remaining ${discipline.toLowerCase()} batches will be skipped"));
 assert(peerReviewSource.includes("Skipped the missing-target recheck because detail-expansion batch 1 timed out"));
-assert(peerReviewSource.includes("Extra-detail review exceeded 60 seconds"));
+assert(peerReviewSource.includes("Extra-detail review exceeded 120 seconds"));
 assert(peerReviewSource.includes("supported ${supportedInBatch} of ${batchCandidates.length}"));
 assert(peerReviewSource.includes("retainPeerGroundedReviewPrompts"));
 assert(peerReviewSource.includes("isPeerUnsupportedMissingDesignFeature") && peerReviewSource.includes("if (isPeerUnsupportedMissingDesignFeature(item)) return false;"));
@@ -636,7 +745,7 @@ assert(peerReviewSource.includes("instead of rescanning every page"));
 assert(peerReviewSource.includes("disciplineImageBatchSize = 2"));
 assert(peerReviewSource.includes("maxTokens: 1800"));
 assert(peerReviewSource.includes("requestPeerEvidenceLedgerBatch(pageNumber, tiles.slice(start, start + 2))"));
-assert(peerReviewSource.includes("evidence extraction batch exceeded 75 seconds"));
+assert(peerReviewSource.includes("evidence extraction batch exceeded 120 seconds"));
 assert(peerReviewSource.includes("PEER_EVIDENCE_LEDGER_CACHE_VERSION") && peerReviewSource.includes("Building the high-resolution evidence ledger for page"));
 assert(peerReviewSource.includes("objectIdentifier") && peerReviewSource.includes("Distinct schedule rows may use the same generic object name"));
 assert(peerReviewSource.includes('item.source === "evidence-ledger"') && peerReviewSource.includes("neutralIssue"), "Evidence-ledger actions must remain neutral even after finding deduplication");
@@ -738,7 +847,19 @@ assert(peerReviewHtml.includes('onclick="openPeerExportModal()"') && peerReviewH
 assert(peerReviewHtml.includes('name="peerCompleteLearning" value="yes"') && peerReviewHtml.includes('name="peerCompleteLearning" value="no"'));
 assert(peerReviewHtml.includes('id="peerCompleteDrawingExport"') && peerReviewHtml.includes('id="peerCompleteReportExport"') && peerReviewHtml.includes('id="peerCompleteExcelExport"'));
 assert(peerReviewHtml.includes('id="peerDatabaseKnowledgeToggle"'));
-assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("visual-relationship-validation-v1"));
+assert(peerReviewHtml.includes("mammoth.browser.min.js") && peerReviewHtml.includes("highres-fact-diagnostics-v7"));
+assert(peerReviewSource.includes("The overview and first specialist pass returned no candidates"), "A zero-candidate DWG review should reuse the existing detail call with enlarged regions");
+assert(peerReviewSource.includes("NATIVE DRAWING NAVIGATION INDEX") && peerReviewSource.includes("It is not proof of a defect"), "The enlarged visual pass should receive native navigation hints without treating them as defect evidence");
+assert(peerReviewSource.includes("PEER_DETAIL_OBSERVATION_SCHEMA") && peerReviewSource.includes("VISUAL FACT LEDGER - REQUIRED EVEN WHEN FINDINGS IS EMPTY"), "The enlarged pass should transcribe neutral observations instead of requiring the local model to infer defects directly");
+assert(peerReviewSource.includes("Observation-ledger comparison produced") && peerReviewSource.includes("candidates will use normal source verification"), "Conflicts derived from visual observations must enter the existing source-verification path");
+assert(peerReviewSource.includes("enlarged regions of page"), "Activity messages should describe two crops of one sheet as regions rather than separate pages");
+assert(peerReviewSource.includes("requestPeerEnlargedObservationFacts") && peerReviewSource.includes("This is transcription only. Do not identify defects"), "A zero-result review should use a dedicated fact-only prompt instead of combining transcription with engineering conclusions");
+assert(peerReviewSource.includes("format: PEER_EVIDENCE_LEDGER_SCHEMA, numCtx: 12288, maxTokens: 3600"), "The fact-only path should use the compact evidence schema and context budget");
+assert(peerReviewSource.includes("useFactOnlyPass") && peerReviewSource.includes("engineering conclusions will be evaluated separately"), "The zero-result enlarged-region branch should bypass the combined detail-review prompt");
+assert(peerReviewSource.includes("renderPeerEvidenceTiles(focusPage)") && peerReviewSource.includes("four high-resolution quadrants"), "A zero-fact pass should receive readable high-resolution quadrant crops in one request");
+assert(peerReviewSource.includes("factOnlyImageBatchSize") && peerReviewSource.includes("? 4 : 2"), "Four observation quadrants should remain one model request rather than two batches");
+assert(peerReviewSource.includes("stats.lowConfidence") && peerReviewSource.includes("stats.incomplete") && peerReviewSource.includes("stats.invalidImage") && peerReviewSource.includes("stats.duplicate"), "Fact diagnostics should distinguish raw, accepted, and rejected observation responses");
+assert(peerReviewSource.includes("singleSheetNativeFallback"), "A native equipment table in a single-sheet DWG should receive page 1 when page classification is unavailable");
 assert(peerReviewSource.includes("peerReview.findings = (peerReview.findings || []).filter(item => !isPeerFindingSelfNegating(item))"));
 assert(peerReviewHtml.includes("Recheck CAD Table") && peerReviewSource.includes("refreshPeerCadTableFindings"));
 assert(peerReviewHtml.includes("Engineering DWG or PDF") && peerReviewHtml.includes(".dwg"));

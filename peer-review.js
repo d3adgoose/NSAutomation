@@ -12,8 +12,8 @@ const PEER_DATABASE_KNOWLEDGE_ENABLED_KEY = "ns-peer-review-database-knowledge-e
 const PEER_PARTS_STORAGE_KEY = "nsPartsDatabaseV1";
 const PEER_DATABASE_TABLES = Object.freeze({ master: "parts_master", aliases: "part_number_aliases", usage: "drawing_usage", documents: "documents" });
 const PEER_DATABASE_DOCUMENTS_BUCKET = "document-library";
-const PEER_AI_ANALYSIS_CACHE_VERSION = "20260806-visual-relationship-validation-v1";
-const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-native-dwg-ledger-v3";
+const PEER_AI_ANALYSIS_CACHE_VERSION = "20260806-quality-model-routing-v8";
+const PEER_EVIDENCE_LEDGER_CACHE_VERSION = "20260806-quality-model-ledger-v4";
 const COMPANY_AI_GENERAL_GUIDANCE_KEY = "ns-company-ai-general-guidance-v1";
 const COMPANY_AI_ACCEPTED_TERMS_KEY = "ns-company-ai-accepted-terms-v1";
 const PEER_BUILT_IN_KNOWLEDGE = `BUILT-IN PEER REVIEW REFERENCE
@@ -195,6 +195,14 @@ const PEER_EVIDENCE_LEDGER_SCHEMA = {
   },
   required: ["facts"]
 };
+const PEER_DETAIL_OBSERVATION_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    findings: PEER_ENGINEER_PATTERN_SCHEMA.properties.findings,
+    facts: PEER_EVIDENCE_LEDGER_SCHEMA.properties.facts
+  },
+  required: ["findings", "facts"]
+};
 let peerReview = null;
 let peerPdfDocument = null;
 let peerActiveCommentFinding = "";
@@ -224,6 +232,7 @@ const peerDatabasePdfTextCache = new Map();
 const peerDatabaseRequirementCache = new Map();
 const peerDatabasePdfReadPromises = new Map();
 let peerAiStatus = { ready: false, loaded: false, authenticated: false, model: "Qwen3-VL", error: "Checking the Local AI service." };
+const peerAiModelUsage = new Set();
 
 function getPeerLocalAiClient() {
   if (!window.NSLocalAIClient) throw new Error("The shared Local AI connector did not load. Refresh this page and try again.");
@@ -236,6 +245,16 @@ async function getPeerLocalAiSession(loginMessage = "Sign in with the Database l
 
 async function fetchPeerLocalAi(token, options = {}) {
   return getPeerLocalAiClient().fetch("/api/local-ai", { ...options, token });
+}
+
+function recordPeerAiModelUsage(payload, phase) {
+  const model = String(payload?.model || "").trim();
+  if (!model || !peerAnalysisStartedAt) return;
+  const tier = payload.modelTier === "quality" ? "quality" : "fast";
+  const key = `${phase}|${model}`;
+  if (peerAiModelUsage.has(key)) return;
+  peerAiModelUsage.add(key);
+  recordPeerAnalysisMessage(`${phase} used ${model} (${tier}${payload.usedModelFallback ? ", fallback" : ""}).`);
 }
 
 const PEER_INITIAL_CHECKLIST = ["Drawing information appears complete.", "Title blocks are complete.", "Drawing numbers appear correct.", "Pages are readable.", "General comments."];
@@ -268,7 +287,10 @@ async function updatePeerAiIndicator() {
     const response = await fetchPeerLocalAi(session.access_token);
     const status = await response.json().catch(() => ({}));
     if (!response.ok || !status.ready) throw new Error(status.error || "The Local AI service is unavailable.");
-    peerAiStatus = { ready: true, loaded: Boolean(status.loaded), authenticated: true, model: status.model || "Qwen3-VL", error: "" };
+    const model = status.qualityModel
+      ? `${status.model || "Qwen3-VL"} fast / ${status.qualityModel} quality`
+      : status.model || "Qwen3-VL";
+    peerAiStatus = { ready: true, loaded: Boolean(status.loaded), authenticated: true, model, error: "" };
     setPeerAiIndicatorState("ready");
     return true;
   } catch (error) {
@@ -1444,14 +1466,15 @@ function extractPeerEquipmentRows() {
   if (!peerIncludesEquipmentReview()) return;
   const equipmentPages = peerReview.pages.filter(page => getPeerDeterministicPageRole(page) === "Equipment");
   const equipmentPageNumbers = new Set(equipmentPages.map(page => Number(page.number)));
-  const fallbackPage = equipmentPages.find(page => (page.tableTypes || []).includes("Main Equipment List"))?.number || equipmentPages[0]?.number || 0;
+  const nativeEquipmentTableCount = (peerReview.cadData?.tables || []).map(structurePeerCadTable).filter(isPeerCadEquipmentTable).length;
+  const singleSheetNativeFallback = nativeEquipmentTableCount && peerReview.pages.length === 1 ? Number(peerReview.pages[0]?.number || 1) : 0;
+  const fallbackPage = equipmentPages.find(page => (page.tableTypes || []).includes("Main Equipment List"))?.number || equipmentPages[0]?.number || singleSheetNativeFallback || 0;
   const deletedNativeRows = new Set(peerReview.deletedEquipmentRowKeys || []);
   const existingNativeRows = new Map(peerReview.equipmentRows.filter(row => row.source === "native-cad" && row.nativeRowKey).map(row => [row.nativeRowKey, row]));
-  const nativeEquipmentTableCount = (peerReview.cadData?.tables || []).map(structurePeerCadTable).filter(isPeerCadEquipmentTable).length;
   const nativeRows = extractPeerCadEquipmentRows(peerReview.cadData?.tables || [], fallbackPage)
     .map(row => ({ ...row, page: equipmentPageNumbers.has(Number(row.page)) ? Number(row.page) : Number(fallbackPage || row.page || 0) }))
     .map(row => ({ ...row, id: existingNativeRows.get(row.nativeRowKey)?.id || peerId("equip") }))
-    .filter(row => !deletedNativeRows.has(row.nativeRowKey) && (!row.page || equipmentPageNumbers.has(Number(row.page))))
+    .filter(row => !deletedNativeRows.has(row.nativeRowKey) && (!row.page || equipmentPageNumbers.has(Number(row.page)) || (singleSheetNativeFallback && Number(row.page) === Number(singleSheetNativeFallback))))
     .map(row => {
       const existing = existingNativeRows.get(row.nativeRowKey);
       if (!existing?.userEdited) return row;
@@ -1889,6 +1912,36 @@ function selectPeerDetailExpansionImages(images = [], currentFindings = [], miss
   }).sort((left, right) => right.score - left.score || Number(left.page) - Number(right.page)).slice(0, Math.max(1, limit));
 }
 
+function buildPeerNativeVisualReviewIndex(pageNumbers = []) {
+  const includedPages = new Set(pageNumbers.map(Number).filter(Boolean));
+  const compact = value => String(value || "").replace(/\s+/g, " ").trim().slice(0, 180);
+  const equipmentRows = (peerReview?.equipmentRows || [])
+    .filter(row => row.source === "native-cad" && (!includedPages.size || includedPages.has(Number(row.page))))
+    .slice(0, 36)
+    .map(row => [
+      `TAG ${compact(row.tag) || "none"}`,
+      `DESCRIPTION ${compact(row.description) || "unnamed"}`,
+      row.quantity ? `QTY ${compact(row.quantity)}` : "",
+      row.details ? `DETAILS ${compact(row.details)}` : "",
+      row.purpose ? `PURPOSE ${compact(row.purpose)}` : "",
+      row.voltage ? `VOLTAGE ${compact(row.voltage)}` : ""
+    ].filter(Boolean).join(" | "));
+  const equipmentPages = (peerReview?.pages || []).filter(page => getPeerDeterministicPageRole(page) === "Equipment").map(page => Number(page.number));
+  const callouts = extractPeerCadMainEquipmentCallouts(peerReview?.cadData || {}, peerReview?.equipmentRows || [], equipmentPages)
+    .filter(callout => !includedPages.size || includedPages.has(Number(callout.page)))
+    .slice(0, 30)
+    .map(callout => `PAGE ${callout.page} | TAG ${compact(callout.tag)} | CALLOUT ${compact(callout.name)}`);
+  const dimensions = (peerReview?.cadData?.dimensions || [])
+    .filter(item => !includedPages.size || includedPages.has(Number(item.page)))
+    .slice(0, 30)
+    .map(item => `PAGE ${Number(item.page || 0)} | DIMENSION ${compact(item.text || item.measurement)} | LAYER ${compact(item.layer) || "unknown"}`);
+  return [
+    equipmentRows.length ? `NATIVE EQUIPMENT ROWS:\n${equipmentRows.join("\n")}` : "",
+    callouts.length ? `MATCHED MAIN-EQUIPMENT CALLOUTS:\n${callouts.join("\n")}` : "",
+    dimensions.length ? `NATIVE DIMENSION INDEX:\n${dimensions.join("\n")}` : ""
+  ].filter(Boolean).join("\n\n").slice(0, 14000) || "No additional native review index is available.";
+}
+
 async function runPeerVisualReview() {
   const findings = [], engineerPatternImages = [], peerVerificationImages = [];
   if (peerReview.aiAnalysisCacheVersion !== PEER_AI_ANALYSIS_CACHE_VERSION) {
@@ -2127,7 +2180,7 @@ async function runPeerVisualReview() {
   }
   if (engineerPatternImages.length) {
     try {
-      let patternCandidates = [];
+      let patternCandidates = [], detailObservationFacts = [];
       if (peerReview.cadData && nativeEvidenceFacts.length) {
         const nativeSweepCacheKey = "Native CAD coordination";
         const cachedNativeSweep = peerReview.disciplineSweepCache[nativeSweepCacheKey];
@@ -2220,16 +2273,42 @@ async function runPeerVisualReview() {
       if (missingReviewSlots.length) {
         try {
           let detailExpansionCircuitOpen = false;
-          const detailExpansionImages = selectPeerDetailExpansionImages(engineerPatternImages, [...findings, ...proposedFindings], missingReviewSlots, 2);
-          setPeerAnalysisProgress("running", `Expanding review detail on the ${detailExpansionImages.length} most relevant page${detailExpansionImages.length === 1 ? "" : "s"} for ${missingReviewSlots.map(item => item.category).join(", ")}.`);
-          recordPeerAnalysisMessage(`Detail expansion targeted page${detailExpansionImages.length === 1 ? "" : "s"} ${detailExpansionImages.map(item => item.page).join(", ")} instead of rescanning all ${engineerPatternImages.length} pages.`);
+          let detailExpansionImages = selectPeerDetailExpansionImages(engineerPatternImages, [...findings, ...proposedFindings], missingReviewSlots, 2);
+          if (peerReview.maximumSweep !== false && peerReview.cadData && proposedFindings.length === 0 && detailExpansionImages.length) {
+            const focusPage = Number(detailExpansionImages[0].page);
+            const enlargedRegions = await renderPeerEvidenceTiles(focusPage);
+            if (enlargedRegions.length) {
+              detailExpansionImages = enlargedRegions.slice(0, 4).map(tile => ({ page: focusPage, image: tile.image, region: `quadrant ${tile.tile} (row ${tile.row}, column ${tile.column})`, observationTile: true }));
+              peerVerificationImages.push(...detailExpansionImages);
+              recordPeerAnalysisMessage(`The overview and first specialist pass returned no candidates, so the existing detail call will inspect four high-resolution quadrants of page ${focusPage} without adding another model request.`);
+            }
+          }
+          const detailPageNumbers = Array.from(new Set(detailExpansionImages.map(item => Number(item.page))));
+          const detailScope = detailPageNumbers.length === 1 && detailExpansionImages.length > 1
+            ? `${detailExpansionImages.length} enlarged regions of page ${detailPageNumbers[0]}`
+            : `page${detailPageNumbers.length === 1 ? "" : "s"} ${detailPageNumbers.join(", ")}`;
+          setPeerAnalysisProgress("running", `Expanding review detail across ${detailScope} for ${missingReviewSlots.map(item => item.category).join(", ")}.`);
+          recordPeerAnalysisMessage(`Detail expansion targeted ${detailScope} instead of rescanning all ${engineerPatternImages.length} pages.`);
           const detailCandidates = [];
-          for (let imageOffset = 0; imageOffset < detailExpansionImages.length; imageOffset += 2) {
-            const imageBatch = detailExpansionImages.slice(imageOffset, imageOffset + 2);
+          const factOnlyImageBatchSize = proposedFindings.length === 0 && detailExpansionImages.every(entry => entry.observationTile) ? 4 : 2;
+          for (let imageOffset = 0; imageOffset < detailExpansionImages.length; imageOffset += factOnlyImageBatchSize) {
+            const imageBatch = detailExpansionImages.slice(imageOffset, imageOffset + factOnlyImageBatchSize);
             try {
-              const batchCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(imageBatch, proposedFindings, missingReviewSlots));
+              const useFactOnlyPass = proposedFindings.length === 0 && imageBatch.every(entry => entry.observationTile);
+              if (useFactOnlyPass) setPeerAnalysisProgress("running", `Transcribing visible facts from high-resolution quadrant batch ${Math.floor(imageOffset / factOnlyImageBatchSize) + 1}; engineering conclusions will be evaluated separately.`);
+              const observationResult = useFactOnlyPass ? await requestPeerEnlargedObservationFacts(imageBatch) : null;
+              const detailResult = useFactOnlyPass
+                ? { findings: [], facts: observationResult.facts, factStats: observationResult.stats }
+                : await requestPeerEngineerDetailExpansion(imageBatch, proposedFindings, missingReviewSlots);
+              detailObservationFacts.push(...detailResult.facts);
+              const batchCandidates = retainPeerGroundedReviewPrompts(detailResult.findings);
               detailCandidates.push(...batchCandidates);
-              recordPeerAnalysisMessage(`Detail expansion batch ${Math.floor(imageOffset / 2) + 1} found ${batchCandidates.length} candidate${batchCandidates.length === 1 ? "" : "s"}.`);
+              const stats = detailResult.factStats;
+              const rejected = stats ? stats.raw - stats.accepted : 0;
+              const rejectionSummary = stats && rejected
+                ? `; rejected ${rejected} (${stats.lowConfidence} below confidence, ${stats.incomplete} incomplete, ${stats.invalidImage} invalid image reference, ${stats.duplicate} duplicate)`
+                : "";
+              recordPeerAnalysisMessage(`Detail expansion batch ${Math.floor(imageOffset / factOnlyImageBatchSize) + 1} received ${stats?.raw ?? detailResult.facts.length} raw visual fact${(stats?.raw ?? detailResult.facts.length) === 1 ? "" : "s"}, accepted ${detailResult.facts.length}${rejectionSummary}, and found ${batchCandidates.length} direct candidate${batchCandidates.length === 1 ? "" : "s"}.`);
             } catch (batchError) {
               const firstBatchFailed = imageOffset === 0;
               if (firstBatchFailed) detailExpansionCircuitOpen = true;
@@ -2242,7 +2321,7 @@ async function runPeerVisualReview() {
           patternCandidates = [...patternCandidates, ...mergedDetailCandidates];
           peerReview.coverageReport.candidatesGenerated += mergedDetailCandidates.length;
           proposedFindings = selectPeerVerificationCandidates(patternCandidates, peerReview.maximumSweep === false ? 8 : 12);
-          recordPeerAnalysisMessage(`Detail expansion added ${mergedDetailCandidates.length} candidate${mergedDetailCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} distinct items will be source-verified.`);
+          recordPeerAnalysisMessage(`Detail expansion added ${mergedDetailCandidates.length} direct candidate${mergedDetailCandidates.length === 1 ? "" : "s"}; ${proposedFindings.length} direct item${proposedFindings.length === 1 ? "" : "s"} remain before observation-ledger comparison.`);
 
           const remainingTargetSlots = getPeerMissingEngineerReviewSlots(proposedFindings).filter(item => item.category === "Service clearance" || item.category === "Dimension or label");
           if (remainingTargetSlots.length && !detailExpansionCircuitOpen && mergedDetailCandidates.length) {
@@ -2250,7 +2329,9 @@ async function runPeerVisualReview() {
             const recoveryCandidates = [];
             for (let imageOffset = 0; imageOffset < detailExpansionImages.length; imageOffset += 2) {
               try {
-                const batchCandidates = filterPeerVisualFindings(await requestPeerEngineerDetailExpansion(detailExpansionImages.slice(imageOffset, imageOffset + 2), proposedFindings, remainingTargetSlots));
+                const detailResult = await requestPeerEngineerDetailExpansion(detailExpansionImages.slice(imageOffset, imageOffset + 2), proposedFindings, remainingTargetSlots);
+                detailObservationFacts.push(...detailResult.facts);
+                const batchCandidates = retainPeerGroundedReviewPrompts(detailResult.findings);
                 recoveryCandidates.push(...batchCandidates);
                 recordPeerAnalysisMessage(`Missing-target batch ${Math.floor(imageOffset / 2) + 1} found ${batchCandidates.length} candidate${batchCandidates.length === 1 ? "" : "s"}.`);
               }
@@ -2276,6 +2357,21 @@ async function runPeerVisualReview() {
           recordPeerIncompleteCheck("Extra-detail sweep incomplete", detailError.message);
           recordPeerAnalysisMessage(`The extra-detail sweep could not finish, so the completed coordination findings were retained. ${detailError.message}`, true);
         }
+      }
+      if (detailObservationFacts.length) {
+        const knownFactKeys = new Set((peerReview.evidenceLedger || []).map(fact => `${Number(fact.page || 0)}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.objectIdentifier || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}|${normalizePeerLedgerLocation(fact.location)}`));
+        detailObservationFacts.forEach(fact => {
+          const key = `${Number(fact.page || 0)}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.objectIdentifier || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}|${normalizePeerLedgerLocation(fact.location)}`;
+          if (knownFactKeys.has(key)) return;
+          knownFactKeys.add(key); peerReview.evidenceLedger.push(fact);
+        });
+        const observationLedgerFindings = runPeerEvidenceLedgerRules(peerReview.evidenceLedger)
+          .filter(item => !ledgerFindings.some(existing => arePeerFindingsSameCorrection(existing, item)));
+        patternCandidates.push(...observationLedgerFindings);
+        proposedFindings = selectPeerVerificationCandidates(patternCandidates, peerReview.maximumSweep === false ? 8 : 12);
+        peerReview.coverageReport.evidenceFacts = peerReview.evidenceLedger.length;
+        peerReview.coverageReport.candidatesGenerated += observationLedgerFindings.length;
+        recordPeerAnalysisMessage(`Observation-ledger comparison produced ${observationLedgerFindings.length} new exact conflict candidate${observationLedgerFindings.length === 1 ? "" : "s"} from ${detailObservationFacts.length} enlarged-region fact${detailObservationFacts.length === 1 ? "" : "s"}; candidates will use normal source verification.`);
       }
       let patternFindings = proposedFindings;
       if (proposedFindings.length) {
@@ -2436,7 +2532,7 @@ async function requestPeerEvidenceLedgerExtraction(pageNumber, tiles = []) {
 
 async function requestPeerEvidenceLedgerBatch(pageNumber, tiles = []) {
   const session = await getPeerLocalAiSession("Sign in with the Database login to build the drawing evidence ledger.");
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 75000);
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
   const tileMap = tiles.map((tile, index) => `Image ${index + 1} = page ${pageNumber}, tile ${tile.tile}, row ${tile.row}, column ${tile.column}`).join("; ");
   const pageInfo = peerReview.pages.find(page => Number(page.number) === Number(pageNumber)) || {};
   const pageRole = getPeerDeterministicPageRole(pageInfo);
@@ -2474,15 +2570,16 @@ Do not combine facts from different rows, infer hidden text, create findings, or
       method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are an exact engineering drawing transcription specialist. Build a source-located fact ledger, preserve tags and attribute types, and never perform design inference." }, { role: "user", content: prompt, images: tiles.map(tile => tile.image) }],
-        format: PEER_EVIDENCE_LEDGER_SCHEMA, numCtx: 12288, maxTokens: 3500, retryAttempt: 2
+        format: PEER_EVIDENCE_LEDGER_SCHEMA, numCtx: 12288, maxTokens: 3500, retryAttempt: 2, modelTier: "quality"
       })
     });
   } catch (requestError) {
-    if (requestError.name === "AbortError") throw new Error(`Page ${pageNumber} evidence extraction batch exceeded 75 seconds.`);
+    if (requestError.name === "AbortError") throw new Error(`Page ${pageNumber} evidence extraction batch exceeded 120 seconds.`);
     throw requestError;
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Evidence extraction returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, "High-resolution evidence transcription");
   const parsed = parsePeerJsonObject(payload.content);
   const extractedFacts = Array.isArray(parsed) ? parsed : parsed?.facts || parsed?.items || parsed?.evidence || [];
   if (!Array.isArray(extractedFacts)) throw new Error("Evidence extraction returned incomplete information.");
@@ -2521,7 +2618,7 @@ async function renderPeerEquipmentTableCrop(pageNumber) {
 function isPeerUnsupportedMissingDesignFeature(item = {}) {
   const requirement = String(item.requirement || "").trim();
   const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
-  return /^(?:Engineer confirmation required|Engineer standard - confirm)$/i.test(requirement)
+  return /^(?:Engineer confirmation required|Engineer standard - confirm)[.!?]?$/i.test(requirement)
     && /\b(?:NO|NOT|MISSING|ABSENT|WITHOUT|LACKS?)\b/i.test(combined)
     && /\b(?:FLOW PATH|PRESSURE CONTROL|CONTROL DEVICE|PRESSURE REGULATOR|REGULATOR|VALVE|UNION|CLEARANCE|ACCESS SPACE|DRAIN PATH|OVERFLOW|CONNECTION)\b/i.test(combined);
 }
@@ -2539,7 +2636,7 @@ function filterPeerVisualFindings(items) {
     if (!allowedTypes.has(item.evidenceType)) item.evidenceType = "Objective visible mismatch";
     const combined = `${item.issue || ""} ${item.evidence || ""} ${item.location || ""}`;
     if (item.evidenceType === "Unresolved placeholder" && !/\b(?:TBD|TBC|UNKNOWN|VERIFY|PLACEHOLDER)|\?{2,}/i.test(combined)) return false;
-    const genericRequirement = /^(?:Engineer confirmation required|Engineer standard - confirm)$/i.test(String(item.requirement || "").trim());
+    const genericRequirement = /^(?:Engineer confirmation required|Engineer standard - confirm)[.!?]?$/i.test(String(item.requirement || "").trim());
     if (item.evidenceType === "Required reference missing" && genericRequirement) return false;
     if (item.evidenceType === "Objective visible mismatch" && genericRequirement && /\b(?:NO|NOT|MISSING|ABSENT|WITHOUT)\b/i.test(item.evidence || "") && !/["']\s*(?:VERSUS|VS\.?|BUT|WHILE|AND)\s*["']/i.test(item.evidence || "")) return false;
     // A regional image can locate an object, but it cannot prove that a design
@@ -2626,7 +2723,7 @@ async function requestPeerVisualAnalysis(pageNumber, imageInput, retryAttempt = 
       : selectedRole === "Electrical"
         ? "Review only power, circuit, feeder, conductor, voltage, phase, amperage, breaker, control-panel, one-line, wiring-note, and electrical-schedule coordination on this page. Do not perform plumbing-flow or equipment-list completeness checks here."
       : "Review general drawing coordination, title blocks, dimensions, labels, leaders, linework, notes, and references on this page. Do not assume an Equipment, Plumbing, or Electrical discipline that the reviewer did not assign.";
-  const findingArrayRule = `FINDING ARRAY RULE: Never use a finding object to describe a check that passed, matching values, no visible conflict, no defect, or a merely hypothetical concern; omit that object entirely. When two exact readable values for the same named object and same attribute differ, return a neutral COORDINATE finding even if either value could be intentional. Quote both values and both precise locations, set requirement to "Coordinate repeated drawing information," and lower confidence when the intended correction is unknown. A note saying geometry, bulkhead locations, or a schematic is for depiction/reference only or does not represent actual locations is a drawing disclaimer, not a conflict with the nearby equipment label. Treat equipment and component instances in different buildings or wash bays as different physical objects; a repeated local component tag alone does not establish a project-wide conflict.`;
+  const findingArrayRule = `FINDING ARRAY RULE: Never use a finding object to describe a check that passed, matching values, no visible conflict, no defect, or a merely hypothetical concern; omit that object entirely. When two exact readable values for the same named object and same attribute differ, return a neutral COORDINATE finding even if either value could be intentional. Quote both values and both precise locations, set requirement to "Coordinate repeated drawing information," and lower confidence when the intended correction is unknown. A note saying geometry, bulkhead locations, or a schematic is for depiction/reference only or does not represent actual locations is a drawing disclaimer, not a conflict with the nearby equipment label. Treat equipment and component instances in different buildings or wash bays as different physical objects; a repeated local component tag alone does not establish a project-wide conflict. Matching equipment type, description, label, or capacity also does not establish that two separately scoped drawings show the same physical object. Never claim that a flow path, valve, union, or control device is missing when the evidence you quote contains a connected route or component chain such as FROM PUMP → BV → UN → SV → ARCH.`;
   const compactPrompt = `Review the supplied ${selectedRole} region from page ${pageNumber} of a clean N/S Corporation engineering drawing.
 
 AUTHORITATIVE REVIEW CATEGORY: ${selectedRole}
@@ -2829,7 +2926,7 @@ Use approved examples and excerpts only as a checklist and source of company req
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are an engineering peer reviewer performing a focused cross-page coordination check. Use only visible evidence, produce concise redline-ready findings, and never invent missing component callouts." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
-        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 16384, maxTokens: 3200, retryAttempt: 2
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 12288, maxTokens: 3200, retryAttempt: 2, modelTier: "quality"
       })
     });
   } catch (requestError) {
@@ -2838,6 +2935,7 @@ Use approved examples and excerpts only as a checklist and source of company req
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Document-level engineer coordination returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, "Document-level specialist review");
   const parsed = parsePeerJsonObject(payload.content);
   if (!parsed || !Array.isArray(parsed.findings)) throw new Error("Document-level engineer coordination returned incomplete information.");
   return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
@@ -2926,7 +3024,7 @@ Return JSON only.`;
       method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: `You are a meticulous ${discipline.toLowerCase()} drawing reviewer. Complete every checklist comparison, quote exact visible evidence, and never invent a requirement or choose a correction that the drawing does not establish.` }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
-        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 16384, maxTokens: 1800, retryAttempt: 2
+        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 12288, maxTokens: 1800, retryAttempt: 2, modelTier: "quality"
       })
     });
   } catch (requestError) {
@@ -2935,20 +3033,90 @@ Return JSON only.`;
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `${discipline} sweep returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, `${discipline} specialist sweep`);
   const parsed = parsePeerJsonObject(payload.content);
   if (!parsed || !Array.isArray(parsed.findings)) throw new Error(`${discipline} sweep returned incomplete information.`);
   return parsed.findings.map(item => ({ ...item, existingCommentVisible: false }));
 }
 
+function normalizePeerEnlargedObservationFacts(rawFacts = [], pageImages = []) {
+  const allowedPages = new Set(pageImages.map(entry => Number(entry.page)));
+  const seenFacts = new Set();
+  const facts = [], stats = { raw: rawFacts.length, accepted: 0, lowConfidence: 0, incomplete: 0, invalidImage: 0, duplicate: 0 };
+  rawFacts.forEach(fact => {
+    fact.page = allowedPages.has(Number(fact.page)) ? Number(fact.page) : Number(pageImages[0]?.page || 0);
+    fact.tile = Number(fact.tile || 0);
+    fact.confidence = Math.max(0, Math.min(1, Number(fact.confidence) || 0));
+    const key = `${fact.page}|${normalizePeerValue(fact.sourceType)}|${normalizePeerValue(fact.tag || "", "tag")}|${normalizePeerValue(fact.objectIdentifier || "", "tag")}|${normalizePeerValue(fact.object)}|${fact.attribute}|${normalizePeerValue(fact.value)}|${normalizePeerValue(fact.location)}`;
+    if (fact.tile < 1 || fact.tile > pageImages.length) { stats.invalidImage += 1; return; }
+    if (fact.confidence < .72) { stats.lowConfidence += 1; return; }
+    if (!String(fact.object || fact.tag || "").trim() || !String(fact.value || "").trim() || !String(fact.location || "").trim() || /^(?:drawing area|page|unknown|not specified)$/i.test(String(fact.location).trim())) { stats.incomplete += 1; return; }
+    if (seenFacts.has(key)) { stats.duplicate += 1; return; }
+    seenFacts.add(key);
+    fact.source = "visual-ai-observation";
+    fact.location = `${String(fact.location).trim()} (enlarged region ${fact.tile})`;
+    facts.push(fact);
+  });
+  stats.accepted = facts.length;
+  return { facts, stats };
+}
+
+async function requestPeerEnlargedObservationFacts(pageImages = []) {
+  const session = await getPeerLocalAiSession("Sign in with the Database login to transcribe enlarged drawing regions.");
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page}, ${entry.region || (index ? "right" : "left")} enlarged region`).join("; ");
+  const prompt = `Transcribe visible engineering drawing facts from the supplied enlarged regions. This is transcription only. Do not identify defects, propose corrections, apply standards, compare values, or perform peer-review judgment.
+
+IMAGE MAP: ${imageMap}
+
+Return up to 24 of the clearest complete facts that are independently readable in the images. Inspect every image systematically. Prioritize facts useful for later same-object coordination:
+- explicit equipment, component, connection, circuit, or item tags;
+- complete equipment and service descriptions, preserving freshwater/reclaim, entrance/exit, left/right, front/rear, and other identity qualifiers;
+- quantities, capacities, dimensions, elevations, voltages, phases, amperages, horsepower, circuits, feeders, breakers, and conductors;
+- pipe size, material, schedule, connection size, and flow rate.
+
+For each fact:
+- page is the page shown in IMAGE MAP and tile is the image number from 1 through ${pageImages.length};
+- discipline and sourceType identify the visible view or table;
+- tag and objectIdentifier copy only explicit visible identifiers; otherwise use empty strings;
+- object is the shortest specific visible name;
+- attribute states exactly what the value means;
+- value is a literal, complete transcription;
+- location names the exact plan, elevation, detail, diagram, schedule row, or nearby label;
+- confidence is 0.72 or higher only when the identifier/object, value, attribute, and location are all readable.
+
+Return consistent observations too. A fact does not need to look wrong. Do not combine different rows or views, infer hidden text, manufacture identifiers, or return generic page-wide observations. If readable coordination facts are visible, transcribe them even when everything appears correct. Return one JSON object containing facts only.`;
+  let response;
+  try {
+    response = await fetchPeerLocalAi(session.access_token, {
+      method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: "You are an exact engineering drawing transcription engine. Copy source-located facts from images without analysis, conclusions, examples, external knowledge, or design assumptions." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
+        format: PEER_EVIDENCE_LEDGER_SCHEMA, numCtx: 12288, maxTokens: 3600, retryAttempt: 2, modelTier: "quality"
+      })
+    });
+  } catch (requestError) {
+    if (requestError.name === "AbortError") throw new Error("Enlarged-region fact transcription exceeded 120 seconds.");
+    throw requestError;
+  } finally { clearTimeout(timeout); }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Enlarged-region fact transcription returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, "Enlarged-region fact transcription");
+  const parsed = parsePeerJsonObject(payload.content);
+  if (!parsed || !Array.isArray(parsed.facts)) throw new Error("Enlarged-region fact transcription returned incomplete information.");
+  return normalizePeerEnlargedObservationFacts(parsed.facts, pageImages);
+}
+
 async function requestPeerEngineerDetailExpansion(pageImages = [], existingFindings = [], missingSlots = []) {
   const session = await getPeerLocalAiSession("Sign in with the Database login to expand review detail.");
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 60000);
-  const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${index % 2 ? "right" : "left"} region`).join("; ");
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 120000);
+  const imageMap = pageImages.map((entry, index) => `Image ${index + 1} = page ${entry.page} ${entry.region || (index % 2 ? "right" : "left")} region`).join("; ");
   const requestedSlots = missingSlots.map(item => `${item.category}: up to ${item.remaining}${item.targets?.length ? `; required target types: ${item.targets.join(", ")}` : ""}`).join("; ");
   const existing = existingFindings.map(item => `${item.category} | ${item.affectedObject} | ${item.issue} | ${item.location}`).join("\n") || "None";
   const sourceKnowledge = await buildPeerDocumentKnowledgeContext(Array.from(new Set(pageImages.map(entry => entry.page))));
   const approvedExamples = getPeerKnowledgePrompt();
-  const prompt = `Perform a second, more detailed engineering review sweep of the supplied clean drawing regions.
+  const nativeReviewIndex = buildPeerNativeVisualReviewIndex(Array.from(new Set(pageImages.map(entry => entry.page))));
+  const prompt = `Perform a transcription-first engineering review of the supplied enlarged clean drawing regions.
 
 IMAGE MAP: ${imageMap}
 
@@ -2956,6 +3124,25 @@ The first pass already found these items. Treat wording variations, nearby views
 ${existing}
 
 Inspect only these missing review slots: ${requestedSlots}.
+
+NATIVE DRAWING NAVIGATION INDEX:
+${nativeReviewIndex}
+
+Use this index only to locate named equipment, tags, callouts, and dimensions in the supplied images. It is not proof of a defect. Confirm every returned observation visually, and never report an item as missing merely because an indexed row lacks a callout.
+
+VISUAL FACT LEDGER - REQUIRED EVEN WHEN FINDINGS IS EMPTY:
+Transcribe up to 20 of the clearest coordination-critical facts that are actually readable in the supplied images. A fact is neutral evidence, not a conclusion. Prioritize plan/elevation/detail labels and callouts that can be matched to the native index: explicit equipment tags or identifiers, complete equipment descriptions, quantities, capacities, dimensions, elevations, pipe sizes/materials/schedules, connection sizes, voltages, phases, amperages, horsepower, circuits, feeders, breakers, conductors, and directional labels.
+
+For every fact:
+- page must be the visible page number and tile must be the supplied image number from IMAGE MAP;
+- sourceType must identify the visible Plan, Elevation, Detail, Flow Diagram, Electrical One-Line, schedule, note, or Equipment List;
+- tag and objectIdentifier must copy explicit visible identifiers only; leave them empty when none is visible;
+- object must be the shortest specific visible name, preserving freshwater/reclaim, entrance/exit, left/right, and other identity qualifiers;
+- attribute must describe exactly what value means; never treat pipe size, connection size, and nozzle size as the same attribute;
+- value must be a complete literal transcription and location must name the exact view/table and nearby label;
+- confidence must be at least 0.72 only when the complete identifier, object, attribute, value, and location are readable.
+
+Do not copy facts out of the navigation index. Use it only to focus visual inspection, and return a fact only when the value is independently visible in an image. Do not combine separate rows or views. Return consistent facts too; the application will compare them deterministically after transcription. Do not leave facts empty merely because no defect is apparent.
 
 For Service clearance, inspect separately named control panels and consoles one by one; a second panel is a distinct review prompt. For Linework, zoom attention to equipment outlines, leaders, dimension extensions, and process lines and identify the exact nearby label or dimension. For Dimension or label, deliberately inspect each requested slot as a different visible object: (1) the RO water tank outline in the equipment layout for a missing or generic label, (2) the reclaim water tank outline in the equipment layout for a missing or generic label, and (3) an overall, chained, or reference dimension that visibly needs correction. A generic tank label may conflict with a specific formal equipment-list description even when the tank object is shown. The two tank-label corrections are distinct from the broader Tank coordination correction to show two tanks. Do not use an already correctly labeled flow schematic as the target when the missing label is in a plan or equipment-layout view. For Piping specification, trace the same service across adjacent segments before comparing its size, material, or schedule. For Equipment arrangement, require a visible obstruction, excessive separation, or applicable placement note. For Electrical coordination, compare exact circuit groupings or load values across the one-line and schedule. For Schedule or table, quote the exact row and conflicting drawing or schedule entry. For valve, drain, or tank coordination, identify the exact affected connection or equipment rather than citing only a table heading.
 
@@ -2972,27 +3159,33 @@ ${approvedExamples}
 APPROVED DOCUMENT EXCERPTS:
 ${sourceKnowledge}
 
-Approved documents provide review patterns and requirements only. Never copy project-specific facts unless the current drawing visibly confirms them. Return JSON only.`;
+Approved documents provide review patterns and requirements only. Never copy project-specific facts unless the current drawing visibly confirms them. Return one JSON object containing both findings and facts. Findings may be empty; facts should contain the clearest readable observations. Return JSON only.`;
   let response;
   try {
     response = await fetchPeerLocalAi(session.access_token, {
       method: "POST", signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        messages: [{ role: "system", content: "You are an engineering review detail specialist. Find additional specific review locations missed by the first pass, retain uncertainty as low confidence, and never duplicate or invent evidence." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
-        format: PEER_ENGINEER_PATTERN_SCHEMA, numCtx: 20480, maxTokens: 3200, retryAttempt: 2
+        messages: [{ role: "system", content: "You are an exact visual evidence transcription specialist first and an engineering review assistant second. Transcribe readable source-located facts even when no defect is apparent; never copy unseen values from the navigation index or invent evidence." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
+        format: PEER_DETAIL_OBSERVATION_SCHEMA, numCtx: 12288, maxTokens: 4600, retryAttempt: 2, modelTier: "quality"
       })
     });
   } catch (requestError) {
-    if (requestError.name === "AbortError") throw new Error("Extra-detail review exceeded 60 seconds.");
+    if (requestError.name === "AbortError") throw new Error("Extra-detail review exceeded 120 seconds.");
     throw requestError;
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Extra-detail review returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, "Extra-detail visual review");
   const parsed = parsePeerJsonObject(payload.content);
-  if (!parsed || !Array.isArray(parsed.findings)) throw new Error("Extra-detail review returned incomplete information.");
+  if (!parsed || !Array.isArray(parsed.findings) || !Array.isArray(parsed.facts)) throw new Error("Extra-detail review returned incomplete observation information.");
   const allowedCategories = new Set(missingSlots.map(item => item.category));
-  return parsed.findings.filter(item => allowedCategories.has(item.category)).map(item => ({ ...item, existingCommentVisible: false }));
+  const normalizedFacts = normalizePeerEnlargedObservationFacts(parsed.facts, pageImages);
+  return {
+    findings: parsed.findings.filter(item => allowedCategories.has(item.category)).map(item => ({ ...item, existingCommentVisible: false })),
+    facts: normalizedFacts.facts,
+    factStats: normalizedFacts.stats
+  };
 }
 
 async function requestPeerEngineerFindingVerification(pageImages = [], candidates = []) {
@@ -3048,7 +3241,7 @@ Confidence rules: source-confirmed findings with a plainly visible same-attribut
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are the strict source-verification reviewer. Reject unsupported evidence instead of filling gaps from engineering expectations." }, { role: "user", content: prompt, images: pageImages.map(entry => entry.image) }],
-        format: PEER_ENGINEER_VERIFICATION_SCHEMA, numCtx: 24576, maxTokens: 5000, retryAttempt: 2
+        format: PEER_ENGINEER_VERIFICATION_SCHEMA, numCtx: 12288, maxTokens: 5000, retryAttempt: 2, modelTier: "quality"
       })
     });
   } catch (requestError) {
@@ -3057,6 +3250,7 @@ Confidence rules: source-confirmed findings with a plainly visible same-attribut
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Finding source verification returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, "Finding source verification");
   const parsed = parsePeerJsonObject(payload.content);
   if (!parsed || !Array.isArray(parsed.verifications)) throw new Error("Finding source verification returned incomplete information.");
   return parsed.verifications;
@@ -3083,7 +3277,7 @@ Include rows such as system packages, pumps, consoles, anti-scalant equipment, t
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "system", content: "You are a careful engineering table transcription assistant. Read the entire requested table top-to-bottom and return all legible rows without analysis." }, { role: "user", content: prompt, images }],
-        format: PEER_EQUIPMENT_EXTRACTION_SCHEMA, numCtx: 12288, maxTokens: 3000
+        format: PEER_EQUIPMENT_EXTRACTION_SCHEMA, numCtx: 12288, maxTokens: 3000, modelTier: "quality"
       })
     });
   } catch (requestError) {
@@ -3092,6 +3286,7 @@ Include rows such as system packages, pumps, consoles, anti-scalant equipment, t
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Equipment-table reading returned ${response.status}.`);
+  recordPeerAiModelUsage(payload, "Equipment-table transcription");
   const parsed = parsePeerJsonObject(payload.content);
   if (!parsed || !Array.isArray(parsed.equipmentRows)) throw new Error("Equipment-table reading returned incomplete information.");
   return parsed.equipmentRows;
@@ -3211,6 +3406,7 @@ function updatePeerAnalysisElapsed() {
 
 function startPeerAnalysisTimer(message, mode = "review") {
   peerAnalysisStartedAt = performance.now(); peerAnalysisLastMessage = ""; peerAnalysisMessageCount = 0;
+  peerAiModelUsage.clear();
   peerAnalysisMode = mode;
   setPeerAiIndicatorState(mode === "file-read" ? "preparing" : "working");
   document.getElementById("peerAnalysisMessageHistory")?.replaceChildren();
